@@ -23,8 +23,10 @@ class CasewareCloudIntegrationLog(Base):
     __tablename__ = "caseware_cloud_integration_logs"
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    caseware_cloud_entity_engagement_mapping_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("caseware_cloud_entity_engagement_mapping.id"), nullable=False
+    caseware_cloud_entity_engagement_mapping_id: Mapped[uuid.UUID | None] = (
+        mapped_column(
+            ForeignKey("caseware_cloud_entity_engagement_mapping.id"), nullable=True
+        )
     )
     instance: Mapped[str] = mapped_column(Text, nullable=False)
     base_url: Mapped[str] = mapped_column(Text, nullable=False)
@@ -41,6 +43,6 @@ class CasewareCloudIntegrationLog(Base):
         DateTime(timezone=True), server_default=func.now()
     )
 
-    entity_engagement_mapping: Mapped[CasewareCloudEntityEngagementMapping] = (
+    entity_engagement_mapping: Mapped[CasewareCloudEntityEngagementMapping | None] = (
         relationship(back_populates="integration_logs")
     )

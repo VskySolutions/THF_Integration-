@@ -25,3 +25,12 @@ async def get_mapping(
     session: AsyncSession, mapping_id: uuid.UUID
 ) -> CasewareCloudEntityEngagementMapping | None:
     return await session.get(CasewareCloudEntityEngagementMapping, mapping_id)
+
+
+async def get_mapping_by_job_number(
+    session: AsyncSession, job_number: str
+) -> CasewareCloudEntityEngagementMapping | None:
+    statement = select(CasewareCloudEntityEngagementMapping).where(
+        CasewareCloudEntityEngagementMapping.mapitonomy_job_number == job_number
+    )
+    return await session.scalar(statement)

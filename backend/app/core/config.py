@@ -34,6 +34,13 @@ class Settings(BaseSettings):
     maconomy_username: str = "admin"
     maconomy_password: SecretStr = SecretStr("admin")
 
+    caseware_cloud_base_url: AnyHttpUrl = AnyHttpUrl("https://api.casewarecloud.com")
+    caseware_cloud_client_id: str = "replace-with-your-client-id"
+    caseware_cloud_client_secret: SecretStr = SecretStr(
+        "replace-with-your-client-secret"
+    )
+    caseware_cloud_language: str = "en"
+
     @field_validator("api_v1_prefix")
     @classmethod
     def validate_api_prefix(cls, value: str) -> str:
@@ -58,6 +65,11 @@ class Settings(BaseSettings):
     @property
     def maconomy_url(self) -> str:
         return str(self.maconomy_base_url).rstrip("/")
+
+    @computed_field
+    @property
+    def caseware_cloud_url(self) -> str:
+        return str(self.caseware_cloud_base_url).rstrip("/")
 
     @property
     def accepted_api_keys(self) -> tuple[str, ...]:
