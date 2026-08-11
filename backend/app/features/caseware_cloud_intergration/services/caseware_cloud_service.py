@@ -3,6 +3,9 @@ from typing import Any
 import httpx
 
 from app.core.config import Settings, get_settings
+from app.features.caseware_cloud_intergration.mappers import (
+    map_maconomy_job_to_caseware_entity,
+)
 
 
 class CasewareCloudServiceError(Exception):
@@ -14,7 +17,12 @@ class CasewareCloudService:
         self.settings = settings or get_settings()
         self.timeout = 60.0
 
-    async def create_entity(self, entity_data: dict[str, Any]) -> dict[str, Any]:
+    async def create_entity(self, maconomy_job_data: dict[str, Any]) -> dict[str, Any]:
+        try:
+            entity_data = map_maconomy_job_to_caseware_entity(maconomy_job_data)
+        except ValueError as exc:
+            raise CasewareCloudServiceError(str(exc)) from exc
+
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 token = await self._get_token(client)
@@ -56,7 +64,7 @@ class CasewareCloudService:
         response.raise_for_status()
 
         try:
-            token = response.json()["token"]
+            token = response.json()["Token"]
         except (KeyError, TypeError, ValueError) as exc:
             raise CasewareCloudServiceError(
                 "Invalid Caseware Cloud authentication response"

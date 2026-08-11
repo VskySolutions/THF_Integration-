@@ -1,3 +1,4 @@
+import base64
 import uuid
 from typing import Any
 from urllib.parse import quote
@@ -67,20 +68,26 @@ class MaconomyService:
     async def _get_reconnect_token(self, client: httpx.AsyncClient) -> str:
         shortname = quote(self.settings.maconomy_shortname, safe="")
         url = f"{self.settings.maconomy_url}/maconomy-api/auth/{shortname}/login"
+        credentials = (
+            f"{self.settings.maconomy_username}:"
+            f"{self.settings.maconomy_password.get_secret_value()}"
+        )
+        encoded_credentials = base64.b64encode(credentials.encode("utf-8")).decode(
+            "ascii"
+        )
+
         response = await client.get(
             url,
             headers={
                 "Accept": AUTH_CONTENT_TYPE,
                 "Maconomy-Authentication": "X-Reconnect",
+                "Authorization": f"Basic {encoded_credentials}",
             },
-            auth=httpx.BasicAuth(
-                self.settings.maconomy_username,
-                self.settings.maconomy_password.get_secret_value(),
-            ),
         )
         response.raise_for_status()
 
         token = response.headers.get("Maconomy-Reconnect", "").strip()
+
         if response.status_code != 204 or not token:
             raise MaconomyServiceError("Maconomy authentication failed")
         return token
@@ -106,8 +113,8 @@ class MaconomyService:
             headers=self._container_headers(reconnect_token),
             json=payload,
         )
-        response.raise_for_status()
 
+        response.raise_for_status()
         concurrency_token = response.headers.get("Maconomy-Concurrency-Control", "")
         try:
             instance_id = response.json()["meta"]["containerInstanceId"]
@@ -217,7 +224,7 @@ class MaconomyService:
     def _jobs_url(self) -> str:
         shortname = quote(self.settings.maconomy_shortname, safe="")
         return (
-            f"{self.settings.maconomy_url}/maconomy-api/containers/{shortname}/dpl:jobs"
+            f"{self.settings.maconomy_url}/maconomy-api/containers/{shortname}/jobs"
         )
 
     def _clients_url(self) -> str:

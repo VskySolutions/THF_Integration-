@@ -8,6 +8,21 @@ from app.features.caseware_cloud_intergration.models import (
 )
 
 
+async def create_mapping(
+    session: AsyncSession,
+    caseware_cwid: str,
+    job_number: str,
+) -> CasewareCloudEntityEngagementMapping:
+    mapping = CasewareCloudEntityEngagementMapping(
+        caseware_cloud_entity_cwid=caseware_cwid,
+        mapitonomy_job_number=job_number,
+    )
+    session.add(mapping)
+    await session.commit()
+    await session.refresh(mapping)
+    return mapping
+
+
 async def list_mappings(
     session: AsyncSession, *, offset: int, limit: int
 ) -> list[CasewareCloudEntityEngagementMapping]:

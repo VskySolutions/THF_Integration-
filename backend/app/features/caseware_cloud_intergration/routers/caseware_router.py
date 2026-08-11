@@ -18,6 +18,10 @@ from app.features.caseware_cloud_intergration.services import (
     entity_engagement_mapping_service,
     integration_log_service,
 )
+from app.features.caseware_cloud_intergration.services.caseware_cloud_service import (
+    CasewareCloudService,
+    CasewareCloudServiceError,
+)
 
 router = APIRouter(
     prefix="/caseware-cloud",
@@ -31,41 +35,24 @@ DatabaseSession = Annotated[AsyncSession, Depends(get_db)]
 async def on_create_new(
     payload: CreateCasewareJobRequest, session: DatabaseSession
 ) -> dict[str, Any]:
-    return await _get_job_detail(payload.jobnumber, IntegrationAction.CREATE, session)
+    return await _create_engagement(payload.jobnumber, session)
 
 
 @router.post("/on-update-engagement-post", response_model=dict[str, Any])
 async def on_update_post(
     payload: CreateCasewareJobRequest, session: DatabaseSession
 ) -> dict[str, Any]:
-    return await _get_job_detail(payload.jobnumber, IntegrationAction.UPDATE, session)
+    return await _get_job_detail(payload.jobnumber, session)
 
 
-async def _get_job_detail(
-    job_number: str,
-    action: IntegrationAction,
-    session: AsyncSession,
-) -> dict[str, Any]:
-    maconomy_service = MaconomyService()
+async def _create_engagement(job_number: str, session: AsyncSession) -> dict[str, Any]:
     try:
-        job_detail = await maconomy_service.get_job_detail_by_job_number(job_number)
-
-        if job_detail is not None:
-            customer_number = job_detail.get("customernumber")
-            customer_detail = {}
-            if customer_number:
-                customer_detail = (
-                    await maconomy_service.get_client_detail_by_customer_number(
-                        str(customer_number)
-                    )
-                    or {}
-                )
-            job_detail["customer"] = customer_detail
+        job_detail = await _fetch_maconomy_job(job_number)
     except MaconomyServiceError as exc:
         await _save_integration_log(
             session,
             job_number,
-            action,
+            IntegrationAction.CREATE,
             IntegrationStatus.FAILED,
             str(exc),
         )
@@ -78,7 +65,67 @@ async def _get_job_detail(
         await _save_integration_log(
             session,
             job_number,
-            action,
+            IntegrationAction.CREATE,
+            IntegrationStatus.FAILED,
+            "Job not found",
+        )
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    try:
+        caseware_result = await CasewareCloudService().create_entity(job_detail)
+    except CasewareCloudServiceError as exc:
+        await _save_integration_log(
+            session,
+            job_number,
+            IntegrationAction.CREATE,
+            IntegrationStatus.FAILED,
+            str(exc),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Unable to create entity in Caseware Cloud",
+        ) from exc
+
+    mapping = await entity_engagement_mapping_service.create_mapping(
+        session,
+        str(caseware_result["CWGuid"]),
+        job_number,
+    )
+    await integration_log_service.create_log(
+        session,
+        mapping_id=mapping.id,
+        job_number=job_number,
+        status=IntegrationStatus.SUCCESS,
+        action=IntegrationAction.CREATE,
+        message="Caseware Cloud entity created successfully",
+    )
+    return caseware_result
+
+
+async def _get_job_detail(
+    job_number: str,
+    session: AsyncSession,
+) -> dict[str, Any]:
+    try:
+        job_detail = await _fetch_maconomy_job(job_number)
+    except MaconomyServiceError as exc:
+        await _save_integration_log(
+            session,
+            job_number,
+            IntegrationAction.UPDATE,
+            IntegrationStatus.FAILED,
+            str(exc),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Unable to retrieve job details from Maconomy",
+        ) from exc
+
+    if job_detail is None:
+        await _save_integration_log(
+            session,
+            job_number,
+            IntegrationAction.UPDATE,
             IntegrationStatus.FAILED,
             "Job not found",
         )
@@ -90,10 +137,27 @@ async def _get_job_detail(
     await _save_integration_log(
         session,
         job_number,
-        action,
+        IntegrationAction.UPDATE,
         IntegrationStatus.SUCCESS,
         "Job and customer details retrieved successfully",
     )
+    return job_detail
+
+
+async def _fetch_maconomy_job(job_number: str) -> dict[str, Any] | None:
+    maconomy_service = MaconomyService()
+    job_detail = await maconomy_service.get_job_detail_by_job_number(job_number)
+    if job_detail is not None:
+        customer_number = job_detail.get("customernumber")
+        customer_detail = {}
+        if customer_number:
+            customer_detail = (
+                await maconomy_service.get_client_detail_by_customer_number(
+                    str(customer_number)
+                )
+                or {}
+            )
+        job_detail["customer"] = customer_detail
     return job_detail
 
 
