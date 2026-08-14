@@ -104,6 +104,7 @@ class MaconomyService:
                         "jobname",
                         "name1",
                         "customernumber",
+                        "template"
                     ]
                 }
             }
