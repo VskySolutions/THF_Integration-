@@ -44,23 +44,21 @@ flowchart TD
     N -- Yes --> O[Add customer dictionary to job data]
     M --> O
 
-    O --> P[Return Maconomy job and customer dictionary]
-
-    P -. Currently disabled code .-> Q[Map Maconomy job to Caseware entity payload]
-    Q -.-> R[Authenticate with Caseware Cloud]
-    R -.-> S[Create Caseware entity]
-    S -. Caseware error .-> S1[Write CREATE / FAILED integration log]
-    S1 -.-> S2[Raise HTTP 502: Unable to create entity in Caseware Cloud]
-    S -. Success .-> T[Save CWGuid and job number mapping]
-    T -.-> U[Write linked CREATE / SUCCESS integration log]
-    U -.-> V[Return CWGuid and Id]
+    O --> P[Map Maconomy job to Caseware entity payload]
+    P --> Q[Authenticate with Caseware Cloud]
+    Q --> R[Create Caseware entity]
+    R -- Caseware error --> R1[Write CREATE / FAILED integration log]
+    R1 --> R2[Raise HTTP 502: Unable to create entity in Caseware Cloud]
+    R -- Success --> S[Save CWGuid and job number mapping with cw_addresses NULL]
+    S --> T[Map Maconomy customer to Caseware address payload]
+    T --> U[Authenticate and create Caseware entity address]
+    U -- Address error --> U1[Keep mapping with cw_addresses NULL]
+    U1 --> U2[Write linked CREATE / FAILED integration log]
+    U2 --> U3[Raise HTTP 502: Entity created but address was not created]
+    U -- Success --> V[Save address Id in mapping cw_addresses]
+    V --> W[Write linked CREATE / SUCCESS integration log]
+    W --> X[Return entity CWGuid and Id]
 ```
-
-## Current behavior
-
-The function currently returns the Maconomy job/customer dictionary after the
-template validation. The Caseware entity creation, mapping insert, and success
-log block below that return are commented out and therefore do not execute.
 
 ## Exception summary
 
@@ -73,8 +71,9 @@ log block below that return are commented out and therefore do not execute.
 | Maconomy request fails | `CREATE / FAILED` | 502 |
 | Job is not found | `CREATE / FAILED` | 404 |
 | Job is a template | `CREATE / FAILED` | 400 |
-| Caseware request fails | Disabled currently | 502 |
-| Caseware entity is created | Disabled currently | 200 |
+| Caseware entity request fails | `CREATE / FAILED` | 502 |
+| Entity succeeds but address fails | Linked `CREATE / FAILED` | 502 |
+| Entity and address are created | Linked `CREATE / SUCCESS` | 200 |
 
 Unexpected database or application errors are handled by the global exception
 handler, written to `exception_logs` when possible, and returned as HTTP 500.

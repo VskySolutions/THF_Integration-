@@ -120,10 +120,10 @@ async def _create_engagement(job_number: str, session: AsyncSession) -> dict[str
             detail="Unable to retrieve customer details from Maconomy",
         ) from exc
 
-
     # Create the Entity in Caseware Cloud
+    caseware_service = CasewareCloudService()
     try:
-        caseware_result = await CasewareCloudService().create_entity(job_detail)
+        caseware_result = await caseware_service.create_entity(job_detail)
     except CasewareCloudServiceError as exc:
         await _save_integration_log(
             session,
@@ -142,13 +142,43 @@ async def _create_engagement(job_number: str, session: AsyncSession) -> dict[str
         str(caseware_result["CWGuid"]),
         job_number,
     )
+
+
+    # Caseware Cloud Entity Address Creation
+    customer_detail = job_detail.get("customer", {})
+    try:
+        address_result = await caseware_service.create_entity_address(
+            customer_detail,
+            str(caseware_result["CWGuid"]),
+            int(caseware_result["Id"]),
+        )
+    except (CasewareCloudServiceError, TypeError, ValueError) as exc:
+        message = "Caseware Cloud entity created but address was not created"
+        await integration_log_service.create_log(
+            session,
+            mapping_id=mapping.id,
+            job_number=job_number,
+            status=IntegrationStatus.FAILED,
+            action=IntegrationAction.CREATE,
+            message=message,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=message,
+        ) from exc
+
+    await entity_engagement_mapping_service.set_mapping_addresses(
+        session,
+        mapping,
+        [address_result["Id"]],
+    )
     await integration_log_service.create_log(
         session,
         mapping_id=mapping.id,
         job_number=job_number,
         status=IntegrationStatus.SUCCESS,
         action=IntegrationAction.CREATE,
-        message="Caseware Cloud entity created successfully",
+        message="Caseware Cloud entity and address created successfully",
     )
     return caseware_result
 
