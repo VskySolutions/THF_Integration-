@@ -120,37 +120,36 @@ async def _create_engagement(job_number: str, session: AsyncSession) -> dict[str
             detail="Unable to retrieve customer details from Maconomy",
         ) from exc
 
-    return job_detail
 
-    # # Create the Entity in Caseware Cloud
-    # try:
-    #     caseware_result = await CasewareCloudService().create_entity(job_detail)
-    # except CasewareCloudServiceError as exc:
-    #     await _save_integration_log(
-    #         session,
-    #         job_number,
-    #         IntegrationAction.CREATE,
-    #         IntegrationStatus.FAILED,
-    #         str(exc),
-    #     )
-    #     raise HTTPException(
-    #         status_code=status.HTTP_502_BAD_GATEWAY,
-    #         detail="Unable to create entity in Caseware Cloud",
-    #     ) from exc
+    # Create the Entity in Caseware Cloud
+    try:
+        caseware_result = await CasewareCloudService().create_entity(job_detail)
+    except CasewareCloudServiceError as exc:
+        await _save_integration_log(
+            session,
+            job_number,
+            IntegrationAction.CREATE,
+            IntegrationStatus.FAILED,
+            str(exc),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Unable to create entity in Caseware Cloud",
+        ) from exc
 
-    # mapping = await entity_engagement_mapping_service.create_mapping(
-    #     session,
-    #     str(caseware_result["CWGuid"]),
-    #     job_number,
-    # )
-    # await integration_log_service.create_log(
-    #     session,
-    #     mapping_id=mapping.id,
-    #     job_number=job_number,
-    #     status=IntegrationStatus.SUCCESS,
-    #     action=IntegrationAction.CREATE,
-    #     message="Caseware Cloud entity created successfully",
-    # )
+    mapping = await entity_engagement_mapping_service.create_mapping(
+        session,
+        str(caseware_result["CWGuid"]),
+        job_number,
+    )
+    await integration_log_service.create_log(
+        session,
+        mapping_id=mapping.id,
+        job_number=job_number,
+        status=IntegrationStatus.SUCCESS,
+        action=IntegrationAction.CREATE,
+        message="Caseware Cloud entity created successfully",
+    )
     return caseware_result
 
 

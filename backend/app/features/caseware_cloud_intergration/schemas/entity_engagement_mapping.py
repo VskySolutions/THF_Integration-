@@ -10,5 +10,6 @@ class EntityEngagementMappingRead(BaseModel):
     id: uuid.UUID
     caseware_cloud_entity_cwid: str
     mapitonomy_job_number: str
+    cw_addresses: list[int] | None
     created_on_utc: datetime
     updated_on_utc: datetime | None

@@ -104,7 +104,7 @@ class MaconomyService:
                         "jobname",
                         "name1",
                         "customernumber",
-                        "template"
+                        "template",
                     ]
                 }
             }
@@ -224,9 +224,7 @@ class MaconomyService:
 
     def _jobs_url(self) -> str:
         shortname = quote(self.settings.maconomy_shortname, safe="")
-        return (
-            f"{self.settings.maconomy_url}/maconomy-api/containers/{shortname}/jobs"
-        )
+        return f"{self.settings.maconomy_url}/maconomy-api/containers/{shortname}/jobs"
 
     def _clients_url(self) -> str:
         shortname = quote(self.settings.maconomy_shortname, safe="")
