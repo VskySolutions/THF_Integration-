@@ -1,79 +1,46 @@
-# Create Engagement Logic Flow
+# Create New Job Functional Workflow
 
-This diagram documents the current flow for
-`_create_engagement(job_number, session)` used by:
-
-```http
-POST /api/v1/caseware-cloud/on-create-engagement-post
-```
+This diagram shows the functional workflow for creating a new Caseware
+engagement from a Maconomy job.
 
 ```mermaid
+%%{init: {"flowchart": {"curve": "basis"}}}%%
 flowchart TD
-    A[Request received] --> B{Valid X-API-KEY?}
-    B -- No --> B1[Log exception]
-    B1 --> B2[Raise HTTP 401 or 403]
-    B -- Yes --> C{Valid body with jobnumber?}
-    C -- No --> C1[Log validation exception]
-    C1 --> C2[Raise HTTP 422]
-    C -- Yes --> D[Look up mapping by job number]
-
-    D --> E{Mapping already exists?}
-    E -- Yes --> E1[Write CREATE / FAILED integration log]
-    E1 --> E2[Raise HTTP 409: CaseWare Entity record is already created for this Maconomy Job number]
-    E -- No --> F[Authenticate with Maconomy]
-
-    F --> G[Fetch job by job number]
-    G --> H{Maconomy service error?}
-    H -- Yes --> H1[Write CREATE / FAILED integration log]
-    H1 --> H2[Raise HTTP 502: Unable to retrieve job details from Maconomy]
-    H -- No --> I{Job found?}
-
-    I -- No --> I1[Write CREATE / FAILED integration log]
-    I1 --> I2[Raise HTTP 404: Job not found]
-    I -- Yes --> J{Job is a template?}
-
-    J -- Yes --> J1[Write CREATE / FAILED integration log]
-    J1 --> J2[Raise HTTP 400: Job is a template and cannot be created in Caseware Cloud]
-    J -- No --> K{Customer number available?}
-
-    K -- Yes --> L[Authenticate with Maconomy and fetch customer]
-    K -- No --> M[Set customer to empty dictionary]
-    L --> N{Customer request succeeds?}
-    N -- No --> N1[Write CREATE / FAILED integration log]
-    N1 --> N2[Raise HTTP 502: Unable to retrieve customer details from Maconomy]
-    N -- Yes --> O[Add customer dictionary to job data]
-    M --> O
-
-    O --> P[Map Maconomy job to Caseware entity payload]
-    P --> Q[Authenticate with Caseware Cloud]
-    Q --> R[Create Caseware entity]
-    R -- Caseware error --> R1[Write CREATE / FAILED integration log]
-    R1 --> R2[Raise HTTP 502: Unable to create entity in Caseware Cloud]
-    R -- Success --> S[Save CWGuid and job number mapping with cw_addresses NULL]
-    S --> T[Map Maconomy customer to Caseware address payload]
-    T --> U[Authenticate and create Caseware entity address]
-    U -- Address error --> U1[Keep mapping with cw_addresses NULL]
-    U1 --> U2[Write linked CREATE / FAILED integration log]
-    U2 --> U3[Raise HTTP 502: Entity created but address was not created]
-    U -- Success --> V[Save address Id in mapping cw_addresses]
-    V --> W[Write linked CREATE / SUCCESS integration log]
-    W --> X[Return entity CWGuid and Id]
+    A[New job creation request received] --> B[Check entity-engagement mapping table by job number]
+    B --> C{Mapping already exists?}
+    C -- Yes --> D[Write linked failure log and reject duplicate creation]
+    C -- No --> E[Retrieve job from Maconomy]
+    E --> F{Job found?}
+    F -- No --> G[Write failure log and report job not found]
+    F -- Yes --> H{Is the job a template?}
+    H -- Yes --> I[Write failure log and reject template job]
+    H -- No --> J[Retrieve customer information when available]
+    J --> K[Create entity in Caseware Cloud]
+    K --> L{Entity created?}
+    L -- No --> M[Write failure log and report creation failure]
+    L -- Yes --> N[Save job-to-entity mapping]
+    N --> O[Create entity address]
+    O --> P{Address created?}
+    P -- No --> Q[Keep mapping, write linked failure log, and report partial failure]
+    P -- Yes --> R[Store address link, write linked success log, and confirm creation]
 ```
 
-## Exception summary
+## Functional rules
 
-| Condition | Integration log | HTTP status |
-|---|---|---:|
-| Missing API key | Generic exception log | 401 |
-| Invalid API key | Generic exception log | 403 |
-| Invalid request body | Generic exception log | 422 |
-| Mapping already exists | `CREATE / FAILED` | 409 |
-| Maconomy request fails | `CREATE / FAILED` | 502 |
-| Job is not found | `CREATE / FAILED` | 404 |
-| Job is a template | `CREATE / FAILED` | 400 |
-| Caseware entity request fails | `CREATE / FAILED` | 502 |
-| Entity succeeds but address fails | Linked `CREATE / FAILED` | 502 |
-| Entity and address are created | Linked `CREATE / SUCCESS` | 200 |
+- The duplicate check reads the entity-engagement mapping table by job number.
+  The integration-log table is not used to decide whether a job already exists.
+- A job already linked to a Caseware entity cannot be created again, and the
+  rejected attempt is recorded as a linked failure.
+- The Maconomy job must exist. The template flag is then checked explicitly;
+  jobs with `template = true` are rejected and recorded as failures.
+- Customer information is used when available. Missing customer information
+  does not prevent creation; unavailable address values remain empty.
+- The job-to-entity link is saved immediately after the Caseware entity is
+  created.
+- If address creation fails, the entity and its job link remain in place, but
+  the workflow records and reports a partial failure.
+- Successful creation records a linked success and returns the Caseware entity
+  identifiers.
 
-Unexpected database or application errors are handled by the global exception
-handler, written to `exception_logs` when possible, and returned as HTTP 500.
+Endpoint:
+`POST /api/v1/caseware-cloud/on-create-engagement-post`

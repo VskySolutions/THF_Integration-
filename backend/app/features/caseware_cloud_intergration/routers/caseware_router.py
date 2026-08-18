@@ -170,7 +170,11 @@ async def _create_engagement(job_number: str, session: AsyncSession) -> dict[str
     await entity_engagement_mapping_service.set_mapping_addresses(
         session,
         mapping,
-        [address_result["Id"]],
+        #[address_result["Id"]],
+        [{
+            "customer_number": customer_detail.get("customernumber", ""),
+            "cw_address_id": str(address_result["Id"])
+        }]
     )
     await integration_log_service.create_log(
         session,
