@@ -172,8 +172,9 @@ async def _create_engagement(job_number: str, session: AsyncSession) -> dict[str
         mapping,
         #[address_result["Id"]],
         [{
-            "customer_number": customer_detail.get("customernumber", ""),
-            "cw_address_id": str(address_result["Id"])
+            "maconomy_customer_number": customer_detail.get("customernumber", ""),
+            "cw_address_id": str(address_result["Id"]),
+            "maconomy_customer_version_number": str(customer_detail.get("versionnumber", 1)),
         }]
     )
     await integration_log_service.create_log(

@@ -169,6 +169,7 @@ class MaconomyService:
                         "postaldistrict",  # City
                         "zipcode",  # Postal Code
                         "country",  # Country
+                        "versionnumber",  # Version Number
                     ]
                 }
             }
