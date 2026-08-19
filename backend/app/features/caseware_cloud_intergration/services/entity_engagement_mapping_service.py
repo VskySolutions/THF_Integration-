@@ -16,7 +16,7 @@ async def create_mapping(
 ) -> CasewareCloudEntityEngagementMapping:
     mapping = CasewareCloudEntityEngagementMapping(
         caseware_cloud_entity_cwid=caseware_cwid,
-        mapitonomy_job_number=job_number,
+        maconomy_job_number=job_number,
         maconomy_job_version_number=maconomy_job_version_number,
     )
     session.add(mapping)
@@ -59,6 +59,6 @@ async def get_mapping_by_job_number(
     session: AsyncSession, job_number: str
 ) -> CasewareCloudEntityEngagementMapping | None:
     statement = select(CasewareCloudEntityEngagementMapping).where(
-        CasewareCloudEntityEngagementMapping.mapitonomy_job_number == job_number
+        CasewareCloudEntityEngagementMapping.maconomy_job_number == job_number
     )
     return await session.scalar(statement)
