@@ -138,11 +138,11 @@ async def _create_engagement(job_number: str, session: AsyncSession) -> dict[str
         ) from exc
 
     mapping = await entity_engagement_mapping_service.create_mapping(
-        session,
-        str(caseware_result["CWGuid"]),
-        job_number,
+        session = session,
+        caseware_cwid = str(caseware_result["CWGuid"]),
+        job_number = job_number,
+        maconomy_job_version_number = str(job_detail.get("versionnumber", 1))
     )
-
 
     # Caseware Cloud Entity Address Creation
     customer_detail = job_detail.get("customer", {})

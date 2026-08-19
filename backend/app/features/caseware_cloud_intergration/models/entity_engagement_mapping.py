@@ -21,10 +21,8 @@ class CasewareCloudEntityEngagementMapping(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     caseware_cloud_entity_cwid: Mapped[str] = mapped_column(Text, nullable=False)
-    mapitonomy_job_number: Mapped[str] = mapped_column(Text, nullable=False)
-    # cw_addresses: Mapped[list[int] | None] = mapped_column(
-    #     ARRAY(Integer), nullable=True
-    # )
+    maconomy_job_number: Mapped[str] = mapped_column(Text, nullable=False)
+    maconomy_job_version_number: Mapped[str] = mapped_column(Text, nullable=True)
     cw_addresses: Mapped[list[dict[str, str]] | None] = mapped_column(
         JSONB,
         nullable=True,

@@ -105,6 +105,7 @@ class MaconomyService:
                         "name1",
                         "customernumber",
                         "template",
+                        "versionnumber"
                     ]
                 }
             }

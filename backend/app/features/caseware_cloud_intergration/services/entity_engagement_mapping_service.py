@@ -12,10 +12,12 @@ async def create_mapping(
     session: AsyncSession,
     caseware_cwid: str,
     job_number: str,
+    maconomy_job_version_number: str,
 ) -> CasewareCloudEntityEngagementMapping:
     mapping = CasewareCloudEntityEngagementMapping(
         caseware_cloud_entity_cwid=caseware_cwid,
         mapitonomy_job_number=job_number,
+        maconomy_job_version_number=maconomy_job_version_number,
     )
     session.add(mapping)
     await session.commit()
