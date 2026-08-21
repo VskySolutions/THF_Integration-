@@ -24,8 +24,8 @@ from app.features.caseware_cloud_intergration.services.caseware_cloud_service im
 )
 
 router = APIRouter(
-    prefix="/caseware-cloud",
-    tags=["caseware-cloud-integration"],
+    prefix="/cch",
+    tags=["cch-integration"],
     dependencies=[Depends(require_api_key)],
 )
 DatabaseSession = Annotated[AsyncSession, Depends(get_db)]
