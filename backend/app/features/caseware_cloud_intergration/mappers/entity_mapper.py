@@ -12,11 +12,11 @@ def map_maconomy_job_to_caseware_entity(
 
     return {
         "Id": 0,
-        "EntityNo": "[VskyTesting]-" + str(job_number),
-        "Name": "[VskyTesting]-" + str(job_name),
+        "EntityNo": str(job_number),
+        "Name": str(job_name),
         "OwnerType": "Client",
-        "CountryCode": "US",
-        "OperatingName": "[VskyTesting]-" + str(job_name),
+        "CountryCode": job_data.get("customer",{}).get("country", "US"),#"US",
+        "OperatingName": str(job_name),
         "OrganizationType": "Corporation",
         "Type": "A",
     }
