@@ -1,3 +1,5 @@
+"""CaseWare Cloud engagement creation routes."""
+
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -87,16 +89,6 @@ async def sync_todays_created_maconomy_engagements_with_caseware(
             })
 
     return results
-
-
-@router.post(
-    "/on-update-engagement-post", 
-    response_model=dict[str, Any]
-)
-async def on_update_post(
-    payload: CreateCasewareJobRequest, session: DatabaseSession
-) -> dict[str, Any]:
-    return await _get_job_detail(payload.jobnumber, session)
 
 
 async def _create_engagement(job_number: str, session: AsyncSession, action_from:str = "CREATEAPI") -> dict[str, Any]:
@@ -242,50 +234,6 @@ async def _create_engagement(job_number: str, session: AsyncSession, action_from
         message="Caseware Cloud entity and address created successfully",
     )
     return caseware_result
-
-
-async def _get_job_detail(
-    job_number: str,
-    session: AsyncSession,
-) -> dict[str, Any]:
-    try:
-        job_detail = await _fetch_maconomy_job(job_number)
-        if job_detail is not None:
-            job_detail = await _add_customer_detail(job_detail)
-    except MaconomyServiceError as exc:
-        await _save_integration_log(
-            session,
-            job_number,
-            IntegrationAction.UPDATE,
-            IntegrationStatus.FAILED,
-            str(exc),
-        )
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Unable to retrieve job details from Maconomy",
-        ) from exc
-
-    if job_detail is None:
-        await _save_integration_log(
-            session,
-            job_number,
-            IntegrationAction.UPDATE,
-            IntegrationStatus.FAILED,
-            "Job not found",
-        )
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Job not found",
-        )
-
-    await _save_integration_log(
-        session,
-        job_number,
-        IntegrationAction.UPDATE,
-        IntegrationStatus.SUCCESS,
-        "Job and customer details retrieved successfully",
-    )
-    return job_detail
 
 
 async def _fetch_maconomy_job(job_number: str) -> dict[str, Any] | None:
