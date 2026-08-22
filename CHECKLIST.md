@@ -65,6 +65,19 @@
 - [x] Update the create and address-update plans with the new mapping invariant.
 - [x] Review implementation without creating or running tests.
 
+## Automatic Incomplete-Create Resume
+
+- [x] Use the shared create workflow for normal creation and recovery.
+- [x] Treat only mappings with complete address metadata as already synchronized.
+- [x] Persist the integer address ID before attempting CWGuid lookup.
+- [x] Resume CWGuid lookup without posting another address when the ID is known.
+- [x] Inspect existing CaseWare addresses before POST when the address ID is unknown.
+- [x] Adopt the single existing address or create one only when none exists.
+- [x] Reject ambiguous multiple-address recovery for manual resolution.
+- [x] Keep both existing create endpoints on the same resumable workflow.
+- [x] Do not add a separate resume endpoint.
+- [x] Review implementation without creating or running tests.
+
 ## Testing Constraint
 
 Testing is manual. No automated tests, test scripts, fixtures, mocks, or test data will be created or run as part of this work.

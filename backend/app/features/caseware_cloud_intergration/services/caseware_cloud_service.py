@@ -119,7 +119,7 @@ class CasewareCloudService:
         maconomy_customer_data: dict[str, Any],
         entity_cw_guid: str,
         entity_cw_owner_id: int,
-    ) -> dict[str, int | str]:
+    ) -> dict[str, int]:
         try:
             address_data = map_maconomy_customer_to_caseware_address(
                 maconomy_customer_data,
@@ -154,8 +154,54 @@ class CasewareCloudService:
                     raise CasewareCloudServiceError(
                         "Invalid Caseware Cloud address response"
                     )
+        except httpx.HTTPError as exc:
+            raise CasewareCloudServiceError(
+                "Caseware Cloud address request failed"
+            ) from exc
 
-                addresses_response = await client.get(
+        return {"Id": address_id}
+
+    async def get_entity_detail(self, entity_cw_guid: str) -> dict[str, Any]:
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                token = await self._get_token(client)
+                response = await client.get(
+                    f"{self.settings.caseware_cloud_url}/api/v2/entities/"
+                    f"{entity_cw_guid}",
+                    headers={
+                        "Authorization": f"Bearer {token}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise CasewareCloudServiceError(
+                "Unable to retrieve entity from CaseWare Cloud"
+            ) from exc
+
+        entity_data = self._parse_entity_response(response)
+        returned_cw_guid = str(entity_data["CWGuid"])
+        if self._normalize_guid(returned_cw_guid) != self._normalize_guid(
+            entity_cw_guid
+        ):
+            raise CasewareCloudServiceError(
+                "Invalid CaseWare Cloud entity response"
+            )
+        entity_id = entity_data.get("Id")
+        if not isinstance(entity_id, int) or isinstance(entity_id, bool):
+            raise CasewareCloudServiceError(
+                "Invalid CaseWare Cloud entity response"
+            )
+        return entity_data
+
+    async def get_entity_addresses(
+        self,
+        entity_cw_guid: str,
+    ) -> list[dict[str, Any]]:
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                token = await self._get_token(client)
+                response = await client.get(
                     f"{self.settings.caseware_cloud_url}/api/v2/entities/"
                     f"{entity_cw_guid}/addresses",
                     headers={
@@ -164,13 +210,33 @@ class CasewareCloudService:
                     },
                     params={"page": 1, "pageSize": 50},
                 )
-                addresses_response.raise_for_status()
+                response.raise_for_status()
         except httpx.HTTPError as exc:
             raise CasewareCloudServiceError(
-                "Caseware Cloud address request failed"
+                "Unable to retrieve addresses from CaseWare Cloud"
             ) from exc
 
-        return self._find_created_address(addresses_response, address_id)
+        try:
+            addresses = response.json()
+        except (TypeError, ValueError) as exc:
+            raise CasewareCloudServiceError(
+                "Invalid Caseware Cloud addresses response"
+            ) from exc
+        if not isinstance(addresses, list) or any(
+            not isinstance(address, dict) for address in addresses
+        ):
+            raise CasewareCloudServiceError(
+                "Invalid Caseware Cloud addresses response"
+            )
+        return addresses
+
+    async def get_entity_address_by_id(
+        self,
+        entity_cw_guid: str,
+        address_id: int,
+    ) -> dict[str, int | str]:
+        addresses = await self.get_entity_addresses(entity_cw_guid)
+        return self._find_created_address(addresses, address_id)
 
     async def _get_token(self, client: httpx.AsyncClient) -> str:
         response = await client.post(
@@ -223,21 +289,9 @@ class CasewareCloudService:
 
     @staticmethod
     def _find_created_address(
-        addresses_response: httpx.Response,
+        addresses: list[dict[str, Any]],
         address_id: int,
     ) -> dict[str, int | str]:
-        try:
-            addresses = addresses_response.json()
-        except (TypeError, ValueError) as exc:
-            raise CasewareCloudServiceError(
-                "Invalid Caseware Cloud addresses response"
-            ) from exc
-
-        if not isinstance(addresses, list):
-            raise CasewareCloudServiceError(
-                "Invalid Caseware Cloud addresses response"
-            )
-
         matching_address = next(
             (
                 address
