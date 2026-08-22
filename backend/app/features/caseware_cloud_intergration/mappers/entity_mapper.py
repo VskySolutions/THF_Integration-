@@ -15,7 +15,7 @@ def map_maconomy_job_to_caseware_entity(
         "EntityNo": str(job_number),
         "Name": str(job_name),
         "OwnerType": "Client",
-        "CountryCode": job_data.get("customer",{}).get("country", "US"),#"US",
+        "CountryCode": job_data.get("country", "US"),
         "OperatingName": str(job_name),
         "OrganizationType": "Corporation",
         "Type": "A",

@@ -43,6 +43,17 @@
 - [x] Align the mapping service address annotation with the model and response schema.
 - [x] Review the response contracts without creating or running tests.
 
+## Create Flow: Job-Level Customer Snapshot
+
+- [x] Review the approved customer-snapshot plan and shared create workflow.
+- [x] Add customer snapshot fields to the Maconomy job-detail request.
+- [x] Remove the separate customer-card lookup from the shared create workflow.
+- [x] Use flat job data for CaseWare entity and address mapping.
+- [x] Keep `cw_addresses` and populate it from job data and the CaseWare address result.
+- [x] Remove unused customer-card service methods from `caseware_cloud_intergration` only.
+- [x] Confirm both create endpoints use the revised shared workflow.
+- [x] Review implementation without creating or running tests.
+
 ## Testing Constraint
 
 Testing is manual. No automated tests, test scripts, fixtures, mocks, or test data will be created or run as part of this work.

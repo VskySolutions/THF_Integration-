@@ -153,21 +153,6 @@ async def _create_engagement(job_number: str, session: AsyncSession, action_from
             detail="Job is a template and cannot be created in Caseware Cloud",
         )
 
-    try:
-        job_detail = await _add_customer_detail(job_detail)
-    except MaconomyServiceError as exc:
-        await _save_integration_log(
-            session,
-            job_number,
-            IntegrationAction.CREATE,
-            IntegrationStatus.FAILED,
-            str(exc),
-        )
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Unable to retrieve customer details from Maconomy",
-        ) from exc
-
     # Create the Entity in Caseware Cloud
     caseware_service = CasewareCloudService()
     try:
@@ -193,10 +178,9 @@ async def _create_engagement(job_number: str, session: AsyncSession, action_from
     )
 
     # Caseware Cloud Entity Address Creation
-    customer_detail = job_detail.get("customer", {})
     try:
         address_result = await caseware_service.create_entity_address(
-            customer_detail,
+            job_detail,
             str(caseware_result["CWGuid"]),
             int(caseware_result["Id"]),
         )
@@ -220,9 +204,9 @@ async def _create_engagement(job_number: str, session: AsyncSession, action_from
         mapping,
         #[address_result["Id"]],
         [{
-            "maconomy_customer_number": customer_detail.get("customernumber", ""),
+            "maconomy_customer_number": str(job_detail.get("customernumber", "")),
             "cw_address_id": str(address_result["Id"]),
-            "maconomy_customer_version_number": str(customer_detail.get("versionnumber", 1)),
+            "maconomy_customer_version_number": str(job_detail.get("versionnumber", 1)),
         }]
     )
     await integration_log_service.create_log(
@@ -238,20 +222,6 @@ async def _create_engagement(job_number: str, session: AsyncSession, action_from
 
 async def _fetch_maconomy_job(job_number: str) -> dict[str, Any] | None:
     return await MaconomyService().get_job_detail_by_job_number(job_number)
-
-
-async def _add_customer_detail(job_detail: dict[str, Any]) -> dict[str, Any]:
-    customer_number = job_detail.get("customernumber")
-    customer_detail = {}
-    if customer_number:
-        customer_detail = (
-            await MaconomyService().get_client_detail_by_customer_number(
-                str(customer_number)
-            )
-            or {}
-        )
-    job_detail["customer"] = customer_detail
-    return job_detail
 
 
 async def _save_integration_log(
