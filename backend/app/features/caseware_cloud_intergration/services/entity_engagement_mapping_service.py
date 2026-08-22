@@ -28,7 +28,7 @@ async def create_mapping(
 async def set_mapping_addresses(
     session: AsyncSession,
     mapping: CasewareCloudEntityEngagementMapping,
-    address_ids: list[int],
+    address_ids: list[dict[str, str]],
 ) -> CasewareCloudEntityEngagementMapping:
     mapping.cw_addresses = address_ids
     await session.commit()

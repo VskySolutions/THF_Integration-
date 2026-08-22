@@ -13,7 +13,7 @@ class IntegrationLogRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
-    caseware_cloud_entity_engagement_mapping_id: uuid.UUID
+    caseware_cloud_entity_engagement_mapping_id: uuid.UUID | None
     instance: str
     base_url: str
     username: str

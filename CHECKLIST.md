@@ -36,6 +36,13 @@
 - [x] Confirm address synchronization and create workflow behavior remain unchanged.
 - [x] Review Part 2 implementation without creating or running tests.
 
+## Read Router Response Fixes
+
+- [x] Allow integration-log responses to contain a null engagement mapping ID.
+- [x] Align mapping response `cw_addresses` with the stored JSON object structure.
+- [x] Align the mapping service address annotation with the model and response schema.
+- [x] Review the response contracts without creating or running tests.
+
 ## Testing Constraint
 
 Testing is manual. No automated tests, test scripts, fixtures, mocks, or test data will be created or run as part of this work.
