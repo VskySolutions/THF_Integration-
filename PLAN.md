@@ -1,4 +1,6 @@
-# Engagement Update Detection Plan
+# Part 1 Plan: Engagement Update Detection
+
+Part 2 is planned separately in `PLAN_PART_2.md`.
 
 ## Objective
 

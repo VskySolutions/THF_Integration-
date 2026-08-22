@@ -25,6 +25,17 @@
 - [x] Update router exports and application registration to use the create-specific name.
 - [x] Review references without creating or running tests.
 
+## Part 2: CaseWare Entity Update
+
+- [x] Review `PATCH_ENTITY.md` and the approved Part 2 plan.
+- [x] Add a dedicated PATCH payload mapper without changing the creation mapper.
+- [x] Add the CaseWare entity GET-and-PATCH service operation.
+- [x] Add post-PATCH mapping-version persistence.
+- [x] Connect only `UPDATE_REQUIRED` to the CaseWare update operation.
+- [x] Add final update success/failure logging and the `UPDATED` response.
+- [x] Confirm address synchronization and create workflow behavior remain unchanged.
+- [x] Review Part 2 implementation without creating or running tests.
+
 ## Testing Constraint
 
 Testing is manual. No automated tests, test scripts, fixtures, mocks, or test data will be created or run as part of this work.

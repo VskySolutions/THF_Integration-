@@ -6,6 +6,7 @@ from app.core.config import Settings, get_settings
 from app.features.caseware_cloud_intergration.mappers import (
     map_maconomy_customer_to_caseware_address,
     map_maconomy_job_to_caseware_entity,
+    map_maconomy_job_to_caseware_entity_update,
 )
 
 
@@ -49,6 +50,68 @@ class CasewareCloudService:
             raise CasewareCloudServiceError(
                 "Invalid Caseware Cloud entity response"
             ) from exc
+
+    async def update_entity(
+        self,
+        maconomy_job_data: dict[str, Any],
+        entity_cw_guid: str,
+    ) -> dict[str, str]:
+        # Validate the CaseWare Cloud entity GUID
+        if not entity_cw_guid.strip():
+            raise CasewareCloudServiceError("Invalid CaseWare Cloud entity GUID")
+
+        entity_url = (
+            f"{self.settings.caseware_cloud_url}/api/v2/entities/{entity_cw_guid}"
+        )
+
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            try:
+                token = await self._get_token(client)
+                headers = {
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                }
+                response = await client.get(entity_url, headers=headers)
+                response.raise_for_status()
+            except httpx.HTTPError as exc:
+                raise CasewareCloudServiceError(
+                    "Unable to retrieve entity from CaseWare Cloud"
+                ) from exc
+
+            current_entity = self._parse_entity_response(response)
+            current_guid = str(current_entity["CWGuid"])
+
+            # Validate that the retrieved entity's GUID matches the provided GUID
+            if self._normalize_guid(current_guid) != self._normalize_guid(
+                entity_cw_guid
+            ):
+                raise CasewareCloudServiceError(
+                    "Invalid CaseWare Cloud entity response"
+                )
+
+            # Map the Maconomy job data to the CaseWare Cloud entity update format
+            try:
+                update_data = map_maconomy_job_to_caseware_entity_update(
+                    maconomy_job_data,
+                    current_entity,
+                )
+            except ValueError as exc:
+                raise CasewareCloudServiceError(str(exc)) from exc
+
+            try:
+                response = await client.patch(
+                    entity_url,
+                    headers=headers,
+                    json=update_data,
+                )
+                print(response.json())
+                response.raise_for_status()
+            except httpx.HTTPError as exc:
+                raise CasewareCloudServiceError(
+                    "Unable to update entity in CaseWare Cloud"
+                ) from exc
+
+        return {"CWGuid": current_guid}
 
     async def create_entity_address(
         self,
@@ -120,3 +183,25 @@ class CasewareCloudService:
                 "Invalid Caseware Cloud authentication response"
             )
         return token
+
+    @staticmethod
+    def _parse_entity_response(response: httpx.Response) -> dict[str, Any]:
+        try:
+            entity_data = response.json()
+        except (TypeError, ValueError) as exc:
+            raise CasewareCloudServiceError(
+                "Invalid CaseWare Cloud entity response"
+            ) from exc
+
+        required_fields = ("CWGuid", "EntityNo", "Name", "OwnerType", "Type")
+        if not isinstance(entity_data, dict) or any(
+            not entity_data.get(field) for field in required_fields
+        ):
+            raise CasewareCloudServiceError(
+                "Invalid CaseWare Cloud entity response"
+            )
+        return entity_data
+
+    @staticmethod
+    def _normalize_guid(value: str) -> str:
+        return value.strip().strip("{}").casefold()
