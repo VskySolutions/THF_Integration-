@@ -14,6 +14,12 @@ class CasewareCloudServiceError(Exception):
     pass
 
 
+class CasewareCloudEntityCreationError(CasewareCloudServiceError):
+    def __init__(self, message: str, *, reconciliation_allowed: bool) -> None:
+        super().__init__(message)
+        self.reconciliation_allowed = reconciliation_allowed
+
+
 class CasewareCloudService:
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or get_settings()
@@ -36,10 +42,18 @@ class CasewareCloudService:
                     },
                     json=entity_data,
                 )
-                print(response.json())
                 response.raise_for_status()
-        except httpx.HTTPError as exc:
-            raise CasewareCloudServiceError("Caseware Cloud request failed") from exc
+        except httpx.HTTPStatusError as exc:
+            reconciliation_allowed = exc.response.status_code not in (401, 403)
+            raise CasewareCloudEntityCreationError(
+                "Caseware Cloud entity request failed",
+                reconciliation_allowed=reconciliation_allowed,
+            ) from exc
+        except httpx.RequestError as exc:
+            raise CasewareCloudEntityCreationError(
+                "Caseware Cloud entity request result is uncertain",
+                reconciliation_allowed=True,
+            ) from exc
 
         try:
             response_data = response.json()
@@ -48,9 +62,78 @@ class CasewareCloudService:
                 "Id": response_data["Id"],
             }
         except (KeyError, TypeError, ValueError) as exc:
-            raise CasewareCloudServiceError(
-                "Invalid Caseware Cloud entity response"
+            raise CasewareCloudEntityCreationError(
+                "Invalid Caseware Cloud entity response",
+                reconciliation_allowed=True,
             ) from exc
+
+    async def get_entity_by_entity_number(
+        self,
+        entity_number: str,
+    ) -> dict[str, Any] | None:
+        if not entity_number.strip():
+            raise CasewareCloudServiceError("Invalid CaseWare Cloud entity number")
+
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                token = await self._get_token(client)
+                response = await client.get(
+                    f"{self.settings.caseware_cloud_url}/api/v2/entities",
+                    headers={
+                        "Authorization": f"Bearer {token}",
+                        "Content-Type": "application/json",
+                    },
+                    params={
+                        "search": f"EntityNo='{entity_number}'",
+                        "page": 1,
+                        "pageSize": 50,
+                    },
+                )
+                response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise CasewareCloudServiceError(
+                "Unable to reconcile entity in CaseWare Cloud"
+            ) from exc
+
+        try:
+            entities = response.json()
+        except (TypeError, ValueError) as exc:
+            raise CasewareCloudServiceError(
+                "Invalid CaseWare Cloud entity search response"
+            ) from exc
+        if not isinstance(entities, list) or any(
+            not isinstance(entity, dict) for entity in entities
+        ):
+            raise CasewareCloudServiceError(
+                "Invalid CaseWare Cloud entity search response"
+            )
+
+        matching_entities = [
+            entity
+            for entity in entities
+            if entity.get("EntityNo") == entity_number
+        ]
+        if not matching_entities:
+            return None
+        if len(matching_entities) > 1:
+            raise CasewareCloudServiceError(
+                "CaseWare Cloud entity reconciliation is ambiguous and requires "
+                "manual resolution"
+            )
+
+        entity = matching_entities[0]
+        entity_id = entity.get("Id")
+        entity_cw_guid = entity.get("CWGuid")
+        if (
+            not isinstance(entity_id, int)
+            or isinstance(entity_id, bool)
+            or not isinstance(entity_cw_guid, str)
+            or not entity_cw_guid.strip()
+        ):
+            raise CasewareCloudServiceError(
+                "Invalid CaseWare Cloud entity search response"
+            )
+        return entity
 
     async def update_entity(
         self,

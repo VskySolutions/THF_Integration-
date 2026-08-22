@@ -1,6 +1,6 @@
 import base64
-from datetime import datetime
 import uuid
+from datetime import datetime, timedelta
 from typing import Any
 from urllib.parse import quote
 
@@ -47,32 +47,37 @@ class MaconomyService:
         except httpx.HTTPError as exc:
             raise MaconomyServiceError("Maconomy request failed") from exc
 
-    async def get_todays_new_from_maconomy(
-            self
-        ) -> dict[str, Any] | None:
-            try:
-                async with httpx.AsyncClient(timeout=self.timeout) as client:
-                    reconnect_token = await self._get_reconnect_token(client)
-                    return await self._get_new_job_records(
-                        client,
-                        reconnect_token,
-                    )
-            except httpx.HTTPError as exc:
-                raise MaconomyServiceError("Maconomy request failed") from exc
-
-
+    async def get_yesterday_and_todays_new_from_maconomy(
+        self,
+    ) -> list[dict[str, Any]]:
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                reconnect_token = await self._get_reconnect_token(client)
+                return await self._get_new_job_records(
+                    client,
+                    reconnect_token,
+                )
+        except httpx.HTTPError as exc:
+            raise MaconomyServiceError("Maconomy request failed") from exc
     async def _get_new_job_records(
         self,
         client: httpx.AsyncClient,
         reconnect_token: str,
-    ) -> dict[str, Any] | None:
+    ) -> list[dict[str, Any]]:
         """
-        This function will fetch the job number created today in maconomy and  returns the list of jobnumber.
+        Fetch jobs created yesterday or today from Maconomy.
         """
+        today = datetime.now().date()
+        yesterday = today - timedelta(days=1)
         url = f"{self._jobs_url()}/filter"
         headers = self._container_headers(reconnect_token)
         payload = {
-            "restriction": f"template=false and createddate>=date({datetime.now().year},{datetime.now().month},{datetime.now().day})",
+            "restriction": (
+                "template=false "
+                "and createddate>="
+                f"date({yesterday.year},{yesterday.month},{yesterday.day}) "
+                f"and createddate<=date({today.year},{today.month},{today.day})"
+            ),
             "fields": [ 
                 "jobnumber",
                 "jobname",

@@ -24,6 +24,7 @@ from app.features.caseware_cloud_intergration.services import (
     integration_log_service,
 )
 from app.features.caseware_cloud_intergration.services.caseware_cloud_service import (
+    CasewareCloudEntityCreationError,
     CasewareCloudService,
     CasewareCloudServiceError,
 )
@@ -54,7 +55,9 @@ async def sync_todays_created_maconomy_engagements_with_caseware(
     session: DatabaseSession,
 ) -> list[dict[str, Any]]:
 
-    new_engagements = await MaconomyService().get_todays_new_from_maconomy()
+    new_engagements = (
+        await MaconomyService().get_yesterday_and_todays_new_from_maconomy()
+    )
 
     results: list[dict[str, Any]] = []
 
@@ -73,7 +76,7 @@ async def sync_todays_created_maconomy_engagements_with_caseware(
 
             results.append({
                 "job_number": job_number,
-                "status": "SUCCESS" if cw_result else "FAILED",
+                "status": "SUCCESS" if cw_result else "SKIPPED",
                 "result": cw_result,
             })
 
@@ -94,7 +97,17 @@ async def sync_todays_created_maconomy_engagements_with_caseware(
     return results
 
 
-async def _create_engagement(job_number: str, session: AsyncSession, action_from:str = "CREATEAPI") -> dict[str, Any]:
+async def _create_engagement(
+    job_number: str, 
+    session: AsyncSession, 
+    action_from:str = "CREATEAPI"
+) -> dict[str, Any]:
+    """
+    This function handles the creation of a CaseWare Cloud engagement based on a Maconomy job number.
+    It checks for existing mappings, retrieves job details from Maconomy, and interacts with the CaseWare Cloud service to create or reconcile the engagement and its address.
+    """
+
+    # Check if mapping exists for the given Maconomy job number
     existing_mapping = (
         await entity_engagement_mapping_service.get_mapping_by_job_number(
             session, job_number
@@ -114,13 +127,19 @@ async def _create_engagement(job_number: str, session: AsyncSession, action_from
 
         if mapping_is_complete:
             message = (
-                "CaseWare Entity record is already created for this Maconomy Job number"
+                "CaseWare Entity record is already created for this Maconomy Job "
+                "number"
+            )
+            integration_status = (
+                IntegrationStatus.FAILED
+                if action_from == "CREATEAPI"
+                else IntegrationStatus.SKIPPED
             )
             await integration_log_service.create_log(
                 session,
                 mapping_id=existing_mapping.id,
                 job_number=job_number,
-                status=IntegrationStatus.FAILED,
+                status=integration_status,
                 action=IntegrationAction.CREATE,
                 message=message,
             )
@@ -131,6 +150,7 @@ async def _create_engagement(job_number: str, session: AsyncSession, action_from
                 )
             return None
 
+    # Retrieve job details from Maconomy
     try:
         job_detail = await _fetch_maconomy_job(job_number)
     except MaconomyServiceError as exc:
@@ -171,22 +191,36 @@ async def _create_engagement(job_number: str, session: AsyncSession, action_from
     caseware_service = CasewareCloudService()
     mapping = existing_mapping
     is_new_entity = mapping is None
+    entity_was_reconciled = False
 
     if is_new_entity:
         try:
             caseware_result = await caseware_service.create_entity(job_detail)
+        except CasewareCloudEntityCreationError as exc:
+            if not exc.reconciliation_allowed:
+                await _raise_entity_creation_error(session, job_number, exc)
+
+            try:
+                reconciled_entity = (
+                    await caseware_service.get_entity_by_entity_number(job_number)
+                )
+            except CasewareCloudServiceError as reconciliation_exc:
+                await _raise_entity_creation_error(
+                    session,
+                    job_number,
+                    reconciliation_exc,
+                )
+
+            if reconciled_entity is None:
+                await _raise_entity_creation_error(session, job_number, exc)
+
+            caseware_result = {
+                "CWGuid": str(reconciled_entity["CWGuid"]),
+                "Id": int(reconciled_entity["Id"]),
+            }
+            entity_was_reconciled = True
         except CasewareCloudServiceError as exc:
-            await _save_integration_log(
-                session,
-                job_number,
-                IntegrationAction.CREATE,
-                IntegrationStatus.FAILED,
-                str(exc),
-            )
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="Unable to create entity in Caseware Cloud",
-            ) from exc
+            await _raise_entity_creation_error(session, job_number, exc)
 
         mapping = await entity_engagement_mapping_service.create_mapping(
             session=session,
@@ -224,7 +258,7 @@ async def _create_engagement(job_number: str, session: AsyncSession, action_from
             caseware_service=caseware_service,
             entity_cw_guid=str(caseware_result["CWGuid"]),
             entity_owner_id=int(caseware_result["Id"]),
-            is_new_entity=is_new_entity,
+            is_new_entity=is_new_entity and not entity_was_reconciled,
         )
     except (CasewareCloudServiceError, TypeError, ValueError) as exc:
         message = str(exc)
@@ -248,7 +282,9 @@ async def _create_engagement(job_number: str, session: AsyncSession, action_from
         status=IntegrationStatus.SUCCESS,
         action=IntegrationAction.CREATE,
         message=(
-            "Caseware Cloud entity and address created successfully"
+            "Caseware Cloud entity reconciled and address synchronized successfully"
+            if entity_was_reconciled
+            else "Caseware Cloud entity and address created successfully"
             if is_new_entity
             else "Incomplete Caseware Cloud create workflow resumed successfully"
         ),
@@ -477,3 +513,21 @@ async def _save_integration_log(
         action=action,
         message=message,
     )
+
+
+async def _raise_entity_creation_error(
+    session: AsyncSession,
+    job_number: str,
+    exc: CasewareCloudServiceError,
+) -> None:
+    await _save_integration_log(
+        session,
+        job_number,
+        IntegrationAction.CREATE,
+        IntegrationStatus.FAILED,
+        str(exc),
+    )
+    raise HTTPException(
+        status_code=status.HTTP_502_BAD_GATEWAY,
+        detail="Unable to create or reconcile entity in CaseWare Cloud",
+    ) from exc
