@@ -31,7 +31,10 @@ router = APIRouter(
 DatabaseSession = Annotated[AsyncSession, Depends(get_db)]
 
 
-@router.post("/on-create-engagement-post", response_model=dict[str, Any])
+@router.post(
+    "/on-create-engagement-post", 
+    response_model=dict[str, Any]
+)
 async def on_create_new(
     payload: CreateCasewareJobRequest, session: DatabaseSession
 ) -> dict[str, Any]:
@@ -86,7 +89,10 @@ async def sync_todays_created_maconomy_engagements_with_caseware(
     return results
 
 
-@router.post("/on-update-engagement-post", response_model=dict[str, Any])
+@router.post(
+    "/on-update-engagement-post", 
+    response_model=dict[str, Any]
+)
 async def on_update_post(
     payload: CreateCasewareJobRequest, session: DatabaseSession
 ) -> dict[str, Any]:

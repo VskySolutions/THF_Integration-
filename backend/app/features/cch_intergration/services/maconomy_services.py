@@ -28,6 +28,7 @@ class MaconomyService:
         self.settings = settings or get_settings()
         self.timeout = 60.0
 
+
     async def get_job_detail_by_job_number(
         self, job_number: str
     ) -> dict[str, Any] | None:
@@ -46,6 +47,7 @@ class MaconomyService:
                 )
         except httpx.HTTPError as exc:
             raise MaconomyServiceError("Maconomy request failed") from exc
+
 
     async def get_todays_new_from_maconomy(
             self
