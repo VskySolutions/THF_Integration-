@@ -12,10 +12,10 @@ def map_maconomy_job_to_caseware_entity(
 
     return {
         "Id": 0,
-        "EntityNo": str(job_number),
+        "EntityNo": f"Vsky-{str(job_number)}",
         "Name": str(job_name),
         "OwnerType": "Client",
-        "CountryCode": job_data.get("country", "US"),
+        "CountryCode": "US",#job_data.get("country", "US"),
         "OperatingName": str(job_name),
         "OrganizationType": "Corporation",
         "Type": "A",
@@ -30,7 +30,7 @@ def map_maconomy_job_to_caseware_entity_update(
     job_name = job_data.get("jobname")
     print(job_data)
     return {
-        "EntityNo": f"[Vsky-{job_number}]",
+        "EntityNo": f"Vsky-{str(job_number)}",
         "Name": str(job_name),
         "OwnerType": "Client",
         "Type": "A",

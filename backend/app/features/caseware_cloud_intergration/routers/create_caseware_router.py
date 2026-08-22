@@ -202,10 +202,10 @@ async def _create_engagement(job_number: str, session: AsyncSession, action_from
     await entity_engagement_mapping_service.set_mapping_addresses(
         session,
         mapping,
-        #[address_result["Id"]],
         [{
             "maconomy_customer_number": str(job_detail.get("customernumber", "")),
             "cw_address_id": str(address_result["Id"]),
+            "caseware_cw_guid": str(address_result["CWGuid"]),
             "maconomy_customer_version_number": str(job_detail.get("versionnumber", 1)),
         }]
     )

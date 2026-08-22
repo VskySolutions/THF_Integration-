@@ -54,6 +54,17 @@
 - [x] Confirm both create endpoints use the revised shared workflow.
 - [x] Review implementation without creating or running tests.
 
+## Created Address CWGuid Mapping
+
+- [x] Parse the address POST response body as the integer address ID.
+- [x] Reuse the authenticated address-creation session to GET the entity address list.
+- [x] Request page `1` with page size `50` and parse the returned array.
+- [x] Match the created address in that array using the integer ID.
+- [x] Validate and return the matching address `CWGuid`.
+- [x] Save the address CWGuid as `caseware_cw_guid` in `cw_addresses`.
+- [x] Update the create and address-update plans with the new mapping invariant.
+- [x] Review implementation without creating or running tests.
+
 ## Testing Constraint
 
 Testing is manual. No automated tests, test scripts, fixtures, mocks, or test data will be created or run as part of this work.

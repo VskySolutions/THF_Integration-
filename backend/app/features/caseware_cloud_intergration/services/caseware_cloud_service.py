@@ -36,6 +36,7 @@ class CasewareCloudService:
                     },
                     json=entity_data,
                 )
+                print(response.json())
                 response.raise_for_status()
         except httpx.HTTPError as exc:
             raise CasewareCloudServiceError("Caseware Cloud request failed") from exc
@@ -118,7 +119,7 @@ class CasewareCloudService:
         maconomy_customer_data: dict[str, Any],
         entity_cw_guid: str,
         entity_cw_owner_id: int,
-    ) -> dict[str, int]:
+    ) -> dict[str, int | str]:
         try:
             address_data = map_maconomy_customer_to_caseware_address(
                 maconomy_customer_data,
@@ -141,21 +142,35 @@ class CasewareCloudService:
                     json=address_data,
                 )
                 response.raise_for_status()
+
+                try:
+                    address_id = response.json()
+                except (TypeError, ValueError) as exc:
+                    raise CasewareCloudServiceError(
+                        "Invalid Caseware Cloud address response"
+                    ) from exc
+
+                if not isinstance(address_id, int) or isinstance(address_id, bool):
+                    raise CasewareCloudServiceError(
+                        "Invalid Caseware Cloud address response"
+                    )
+
+                addresses_response = await client.get(
+                    f"{self.settings.caseware_cloud_url}/api/v2/entities/"
+                    f"{entity_cw_guid}/addresses",
+                    headers={
+                        "Authorization": f"Bearer {token}",
+                        "Content-Type": "application/json",
+                    },
+                    params={"page": 1, "pageSize": 50},
+                )
+                addresses_response.raise_for_status()
         except httpx.HTTPError as exc:
             raise CasewareCloudServiceError(
                 "Caseware Cloud address request failed"
             ) from exc
 
-        try:
-            address_id = response.json()["Id"]
-        except (KeyError, TypeError, ValueError) as exc:
-            raise CasewareCloudServiceError(
-                "Invalid Caseware Cloud address response"
-            ) from exc
-
-        if not isinstance(address_id, int) or isinstance(address_id, bool):
-            raise CasewareCloudServiceError("Invalid Caseware Cloud address response")
-        return {"Id": address_id}
+        return self._find_created_address(addresses_response, address_id)
 
     async def _get_token(self, client: httpx.AsyncClient) -> str:
         response = await client.post(
@@ -205,3 +220,50 @@ class CasewareCloudService:
     @staticmethod
     def _normalize_guid(value: str) -> str:
         return value.strip().strip("{}").casefold()
+
+    @staticmethod
+    def _find_created_address(
+        addresses_response: httpx.Response,
+        address_id: int,
+    ) -> dict[str, int | str]:
+        try:
+            addresses = addresses_response.json()
+        except (TypeError, ValueError) as exc:
+            raise CasewareCloudServiceError(
+                "Invalid Caseware Cloud addresses response"
+            ) from exc
+
+        if not isinstance(addresses, list):
+            raise CasewareCloudServiceError(
+                "Invalid Caseware Cloud addresses response"
+            )
+
+        matching_address = next(
+            (
+                address
+                for address in addresses
+                if isinstance(address, dict) and address.get("Id") == address_id
+            ),
+            None,
+        )
+        if matching_address is None:
+            raise CasewareCloudServiceError(
+                "Created Caseware Cloud address not found on entity"
+            )
+
+        address_cw_guid = matching_address.get("CWGuid")
+        if not isinstance(address_cw_guid, str) or not address_cw_guid.strip():
+            raise CasewareCloudServiceError(
+                "Invalid Caseware Cloud address CWGuid"
+            )
+        matched_address_id = matching_address.get("Id")
+        if not isinstance(matched_address_id, int) or isinstance(
+            matched_address_id, bool
+        ):
+            raise CasewareCloudServiceError(
+                "Invalid Caseware Cloud address ID"
+            )
+        return {
+            "Id": matched_address_id,
+            "CWGuid": address_cw_guid,
+        }

@@ -13,7 +13,7 @@ This change applies to both create entry points:
 
 Both endpoints already use the shared `_create_engagement(...)` workflow. The refactor will be made in that shared workflow so direct API creation and daily synchronization behave consistently and neither path performs a separate customer-card lookup.
 
-The existing `cw_addresses` column and JSON structure will remain unchanged. Its values will be populated from the job snapshot instead of the separate customer-card response.
+The existing `cw_addresses` column will remain unchanged. Its address entry will be populated from the job snapshot and enriched with the created CaseWare address CWGuid.
 
 ## Maconomy Job Fields
 
@@ -64,13 +64,18 @@ The daily-created-job filter does not need to return all address fields because 
     - `name2`
     - `postaldistrict`
     - `country`
-13. Preserve the existing behavior when CaseWare entity or address creation fails.
-14. Persist `cw_addresses` through the existing `set_mapping_addresses(...)` call.
-15. Build the existing `cw_addresses` entry from the job snapshot and CaseWare address result:
+13. Parse the address POST response body as the created integer address ID.
+14. GET `/api/v2/entities/{entity_cw_guid}/addresses?page=1&pageSize=50` using the same authenticated client.
+15. Parse the returned top-level address array and find the object whose `Id` equals the integer address ID returned by POST.
+16. Require that matching address object to contain a non-empty `CWGuid`.
+17. Preserve the existing behavior when CaseWare entity or address creation fails.
+18. Persist `cw_addresses` through the existing `set_mapping_addresses(...)` call.
+19. Build the `cw_addresses` entry from the job snapshot and CaseWare address result:
     - `maconomy_customer_number`: `job_detail["customernumber"]`.
     - `cw_address_id`: the CaseWare address ID returned after address creation.
+    - `caseware_cw_guid`: the matching address object's `CWGuid` from the entity GET response.
     - `maconomy_customer_version_number`: `job_detail["versionnumber"]`, representing the version of the job-level customer snapshot.
-16. Preserve the existing successful create response and success log indicating that the entity and address were created.
+20. Preserve the existing successful create response and success log indicating that the entity and address were created.
 
 ## Planned Code Changes
 
@@ -108,6 +113,16 @@ The `cch_intergration` package is not part of this change and will not be modifi
 
 - No field-mapping change is expected because it already reads `name1`, `name2`, `postaldistrict`, and `country` from the dictionary it receives.
 - Its caller will now pass the flat Maconomy job detail instead of nested customer detail.
+
+### `services/caseware_cloud_service.py`
+
+- Keep the existing address POST request.
+- Parse and validate its response body as the numeric address ID.
+- Reuse the same authenticated client/token to GET the entity's paginated address collection.
+- Validate that the response is a top-level array.
+- Find the address object whose `Id` equals the POST response integer.
+- Require and return that address object's `CWGuid` together with its `Id`.
+- Treat a missing address object or missing/invalid CWGuid as a failed address-creation workflow.
 
 ### `models/entity_engagement_mapping.py`
 
@@ -165,9 +180,12 @@ No test script will be generated or run. After implementation, manually verify:
 8. `maconomy_customer_number` comes from the job's `customernumber`.
 9. `maconomy_customer_version_number` comes from the job's `versionnumber`.
 10. `cw_address_id` comes from the CaseWare address-creation response.
-11. Mapping list/detail responses continue to contain `cw_addresses`.
-12. Duplicate, missing-job, template, entity-failure, and address-failure behavior remains unchanged.
-13. The update workflow remains unchanged.
+11. The entity address-list GET occurs after address POST using page `1` and page size `50`.
+12. `caseware_cw_guid` comes from the matching object in the returned address array.
+13. A missing matching address or CWGuid is treated as failure and is not saved as a successful mapping state.
+14. Mapping list/detail responses continue to contain `cw_addresses`.
+15. Duplicate, missing-job, template, entity-failure, and address-failure behavior remains unchanged.
+16. The update workflow remains unchanged.
 
 ## Implementation Order After Approval
 
@@ -175,5 +193,6 @@ No test script will be generated or run. After implementation, manually verify:
 2. Update the create entity country mapping to use the flat job data.
 3. Refactor the create router to reuse the flat job detail for entity and address creation.
 4. Remove the unused customer-card lookup code.
-5. Populate the existing `cw_addresses` entry from the job snapshot.
-6. Review all affected references without creating or running tests.
+5. Retrieve and validate the created address CWGuid from the parent entity.
+6. Populate the `cw_addresses` entry from the job snapshot and both CaseWare address identifiers.
+7. Review all affected references without creating or running tests.
