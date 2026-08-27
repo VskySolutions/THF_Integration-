@@ -11,7 +11,7 @@ from app.features.caseware_cloud_intergration.routers import (
     update_caseware_router,
 )
 from app.features.exception_logs import install_exception_logging
-
+from app.features.cch_axcess_integration.routers.create_cch_axcess_router import router as cch_axcess_router
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
@@ -43,3 +43,4 @@ app.include_router(create_caseware_router, prefix=settings.api_v1_prefix)
 app.include_router(update_caseware_router, prefix=settings.api_v1_prefix)
 app.include_router(entity_engagement_mapping_router, prefix=settings.api_v1_prefix)
 app.include_router(integration_log_router, prefix=settings.api_v1_prefix)
+app.include_router(cch_axcess_router, prefix=settings.api_v1_prefix)
