@@ -5,6 +5,7 @@ import httpx
 from app.core.config import Settings, get_settings
 from app.features.caseware_cloud_intergration.mappers import (
     map_maconomy_customer_to_caseware_address,
+    map_maconomy_job_to_caseware_address_update,
     map_maconomy_job_to_caseware_entity,
     map_maconomy_job_to_caseware_entity_update,
 )
@@ -188,7 +189,6 @@ class CasewareCloudService:
                     headers=headers,
                     json=update_data,
                 )
-                print(response.json())
                 response.raise_for_status()
             except httpx.HTTPError as exc:
                 raise CasewareCloudServiceError(
@@ -196,6 +196,40 @@ class CasewareCloudService:
                 ) from exc
 
         return {"CWGuid": current_guid}
+
+    async def update_entity_address(
+        self,
+        maconomy_job_data: dict[str, Any],
+        address_cw_guid: str,
+    ) -> dict[str, str]:
+        if not isinstance(address_cw_guid, str) or not address_cw_guid.strip():
+            raise CasewareCloudServiceError(
+                "Invalid CaseWare Cloud address CWGuid"
+            )
+
+        address_data = map_maconomy_job_to_caseware_address_update(
+            maconomy_job_data
+        )
+
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                token = await self._get_token(client)
+                response = await client.patch(
+                    f"{self.settings.caseware_cloud_url}/api/v2/entities/"
+                    f"addresses/{address_cw_guid}",
+                    headers={
+                        "Authorization": f"Bearer {token}",
+                        "Content-Type": "application/json",
+                    },
+                    json=address_data,
+                )
+                response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise CasewareCloudServiceError(
+                "Unable to update address in CaseWare Cloud"
+            ) from exc
+
+        return {"CWGuid": address_cw_guid}
 
     async def create_entity_address(
         self,

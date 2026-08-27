@@ -28,10 +28,9 @@ def map_maconomy_job_to_caseware_entity_update(
 ) -> dict[str, Any]:
     job_number = job_data.get("jobnumber")
     job_name = job_data.get("jobname")
-    print(job_data)
     return {
-        "EntityNo": f"Vsky-{str(job_number)}",
         "Name": str(job_name),
+        "OperatingName": str(job_name),
         "OwnerType": "Client",
         "Type": "A",
     }
