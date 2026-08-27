@@ -10,6 +10,7 @@ from app.features.caseware_cloud_intergration.routers import (
     integration_log_router,
     update_caseware_router,
 )
+from app.features.sap_concur_integration.routers.create_concur_expense_router import router as sap_concur_router    
 from app.features.exception_logs import install_exception_logging
 
 
@@ -43,3 +44,4 @@ app.include_router(create_caseware_router, prefix=settings.api_v1_prefix)
 app.include_router(update_caseware_router, prefix=settings.api_v1_prefix)
 app.include_router(entity_engagement_mapping_router, prefix=settings.api_v1_prefix)
 app.include_router(integration_log_router, prefix=settings.api_v1_prefix)
+app.include_router(sap_concur_router, prefix=settings.api_v1_prefix)
