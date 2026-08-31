@@ -11,7 +11,9 @@ from app.features.caseware_cloud_intergration.routers import (
     update_caseware_router,
 )
 from app.features.exception_logs import install_exception_logging
-
+#paycor imports 
+#from app.features.paycor_integration.routers import get_new_employees_router
+from app.features.paycor_integration.routers import paycor_router
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
@@ -43,3 +45,5 @@ app.include_router(create_caseware_router, prefix=settings.api_v1_prefix)
 app.include_router(update_caseware_router, prefix=settings.api_v1_prefix)
 app.include_router(entity_engagement_mapping_router, prefix=settings.api_v1_prefix)
 app.include_router(integration_log_router, prefix=settings.api_v1_prefix)
+#paycor router
+app.include_router(paycor_router, prefix=settings.api_v1_prefix)
