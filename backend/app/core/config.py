@@ -67,9 +67,7 @@ class Settings(BaseSettings):
     paycor_base_url: AnyHttpUrl = AnyHttpUrl(
         "https://apis-sandbox.paycor.com"
     )
-    paycor_client_id: str = (
-        "replace-with-your-client-id"
-    )
+    paycor_client_id: str = "replace-with-your-client-id"
     paycor_client_secret: SecretStr = SecretStr(
         "replace-with-your-client-secret"
     )
@@ -120,6 +118,12 @@ class Settings(BaseSettings):
     @property
     def caseware_cloud_url(self) -> str:
         return str(self.caseware_cloud_base_url).rstrip("/")
+
+    
+    @computed_field
+    @property
+    def paycor_url(self) -> str:
+        return str(self.paycor_base_url).rstrip("/")
 
     @property
     def scheduler_api_url(self) -> str:
