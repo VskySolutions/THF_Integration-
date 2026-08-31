@@ -4,6 +4,9 @@ from typing import Any
 def map_paycor_employee(
     employee_data: dict[str, Any],
 ) -> dict[str, Any]:
+    onboarding_employee_id = employee_data.get(
+        "onboardingEmployeeId"
+    )
     employee_number = employee_data.get(
         "employeeNumber"
     )
@@ -11,6 +14,13 @@ def map_paycor_employee(
         "legalEntityId"
     )
 
+    if (
+        not isinstance(onboarding_employee_id, str)
+        or not onboarding_employee_id.strip()
+    ):
+        raise ValueError(
+            "Paycor onboarding employee ID is required"
+        )
     if employee_number is None:
         raise ValueError(
             "Paycor employee number is required"
@@ -34,6 +44,7 @@ def map_paycor_employee(
         )
 
     return {
+        "onboardingEmployeeId": onboarding_employee_id,
         "employeeNumber": employee_number,
         "legalEntityId": legal_entity_id,
         "firstName": employee_data.get(
