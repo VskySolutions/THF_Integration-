@@ -10,6 +10,7 @@ from app.features.caseware_cloud_intergration.models import (  # noqa: F401
 from app.core.config import get_settings
 from app.db.base import Base
 from app.features.exception_logs.models import ExceptionLog  # noqa: F401
+from app.features.integration_services.models import IntegrationService  # noqa: F401
 
 config = context.config
 if config.config_file_name is not None:

@@ -25,6 +25,10 @@ from app.features.caseware_cloud_intergration.services.caseware_cloud_service im
     CasewareCloudService,
     CasewareCloudServiceError,
 )
+from app.features.integration_services import (
+    IntegrationServiceIdentifier,
+    require_active_integration_service,
+)
 
 router = APIRouter(
     prefix="/caseware-cloud",
@@ -37,6 +41,13 @@ DatabaseSession = Annotated[AsyncSession, Depends(get_db)]
 @router.post(
     "/on-update-engagement-post",
     response_model=dict[str, Any],
+    dependencies=[
+        Depends(
+            require_active_integration_service(
+                IntegrationServiceIdentifier.CASEWARE_UPDATE_ENGAGEMENT
+            )
+        )
+    ],
 )
 async def on_update_post(
     payload: CreateCasewareJobRequest, session: DatabaseSession
@@ -47,6 +58,13 @@ async def on_update_post(
 @router.post(
     "/sync-recently-updated-maconomy-engagements-with-caseware",
     response_model=list[dict[str, Any]],
+    dependencies=[
+        Depends(
+            require_active_integration_service(
+                IntegrationServiceIdentifier.CASEWARE_SYNC_UPDATED_ENGAGEMENTS
+            )
+        )
+    ],
 )
 async def sync_recently_updated_maconomy_engagements_with_caseware(
     session: DatabaseSession,
