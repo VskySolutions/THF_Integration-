@@ -28,6 +28,10 @@ from app.features.caseware_cloud_intergration.services.caseware_cloud_service im
     CasewareCloudService,
     CasewareCloudServiceError,
 )
+from app.features.integration_services import (
+    IntegrationServiceIdentifier,
+    require_active_integration_service,
+)
 
 router = APIRouter(
     prefix="/caseware-cloud",
@@ -38,8 +42,15 @@ DatabaseSession = Annotated[AsyncSession, Depends(get_db)]
 
 
 @router.post(
-    "/on-create-engagement-post", 
-    response_model=dict[str, Any]
+    "/on-create-engagement-post",
+    response_model=dict[str, Any],
+    dependencies=[
+        Depends(
+            require_active_integration_service(
+                IntegrationServiceIdentifier.CASEWARE_CREATE_ENGAGEMENT
+            )
+        )
+    ],
 )
 async def on_create_new(
     payload: CreateCasewareJobRequest, session: DatabaseSession
@@ -50,6 +61,13 @@ async def on_create_new(
 @router.post(
     "/sync-todays-created-maconomy-engagements-with-caseware",
     response_model=list[dict[str, Any]],
+    dependencies=[
+        Depends(
+            require_active_integration_service(
+                IntegrationServiceIdentifier.CASEWARE_SYNC_CREATED_ENGAGEMENTS
+            )
+        )
+    ],
 )
 async def sync_todays_created_maconomy_engagements_with_caseware(
     session: DatabaseSession,
@@ -81,6 +99,7 @@ async def sync_todays_created_maconomy_engagements_with_caseware(
             })
 
         except HTTPException as exc:
+            await session.rollback()
             results.append({
                 "job_number": job_number,
                 "status": "FAILED",
@@ -88,6 +107,7 @@ async def sync_todays_created_maconomy_engagements_with_caseware(
             })
 
         except Exception as exc:
+            await session.rollback()
             results.append({
                 "job_number": job_number,
                 "status": "FAILED",

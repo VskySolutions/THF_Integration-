@@ -25,6 +25,10 @@ from app.features.caseware_cloud_intergration.services.caseware_cloud_service im
     CasewareCloudService,
     CasewareCloudServiceError,
 )
+from app.features.integration_services import (
+    IntegrationServiceIdentifier,
+    require_active_integration_service,
+)
 
 router = APIRouter(
     prefix="/caseware-cloud",
@@ -37,11 +41,80 @@ DatabaseSession = Annotated[AsyncSession, Depends(get_db)]
 @router.post(
     "/on-update-engagement-post",
     response_model=dict[str, Any],
+    dependencies=[
+        Depends(
+            require_active_integration_service(
+                IntegrationServiceIdentifier.CASEWARE_UPDATE_ENGAGEMENT
+            )
+        )
+    ],
 )
 async def on_update_post(
     payload: CreateCasewareJobRequest, session: DatabaseSession
 ) -> dict[str, Any]:
     return await _detect_engagement_update(payload.jobnumber, session)
+
+
+@router.post(
+    "/sync-recently-updated-maconomy-engagements-with-caseware",
+    response_model=list[dict[str, Any]],
+    dependencies=[
+        Depends(
+            require_active_integration_service(
+                IntegrationServiceIdentifier.CASEWARE_SYNC_UPDATED_ENGAGEMENTS
+            )
+        )
+    ],
+)
+async def sync_recently_updated_maconomy_engagements_with_caseware(
+    session: DatabaseSession,
+) -> list[dict[str, Any]]:
+    updated_engagements = (
+        await MaconomyService().get_yesterday_and_todays_updated_from_maconomy()
+    )
+    results: list[dict[str, Any]] = []
+
+    for engagement in updated_engagements or []:
+        job_number = engagement.get("jobnumber")
+        if not job_number:
+            results.append(
+                {
+                    "job_number": None,
+                    "status": "FAILED",
+                    "message": "Maconomy update candidate has no jobnumber",
+                }
+            )
+            continue
+
+        try:
+            update_result = await _detect_engagement_update(job_number, session)
+            results.append(
+                {
+                    "job_number": job_number,
+                    "status": update_result["status"],
+                    "result": update_result,
+                }
+            )
+        except HTTPException as exc:
+            await session.rollback()
+            results.append(
+                {
+                    "job_number": job_number,
+                    "status": "FAILED",
+                    "message": exc.detail,
+                }
+            )
+        except Exception as exc:
+            await session.rollback()
+            results.append(
+                {
+                    "job_number": job_number,
+                    "status": "FAILED",
+                    "message": str(exc),
+                }
+            )
+
+    return results
 
 
 async def _detect_engagement_update(
@@ -157,7 +230,7 @@ async def _detect_engagement_update(
     elif maconomy_version < stored_version:
         update_status = "STALE_SOURCE_VERSION"
     else:
-        return await _update_caseware_entity(
+        return await _update_caseware_entity_and_address(
             session=session,
             mapping=mapping,
             job_detail=job_detail,
@@ -186,7 +259,7 @@ async def _detect_engagement_update(
     }
 
 
-async def _update_caseware_entity(
+async def _update_caseware_entity_and_address(
     *,
     session: AsyncSession,
     mapping: CasewareCloudEntityEngagementMapping,
@@ -212,9 +285,33 @@ async def _update_caseware_entity(
             detail=message,
         )
 
-    # Update the CaseWare Cloud entity with the new job details
     try:
-        await CasewareCloudService().update_entity(job_detail, entity_cw_guid)
+        address_mapping = _get_address_mapping_for_update(mapping)
+    except ValueError as exc:
+        message = str(exc)
+        await integration_log_service.create_log(
+            session,
+            mapping_id=mapping.id,
+            job_number=job_number,
+            status=IntegrationStatus.FAILED,
+            action=IntegrationAction.UPDATE,
+            message=message,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=message,
+        ) from exc
+
+    address_cw_guid = address_mapping["caseware_cw_guid"]
+    caseware_service = CasewareCloudService()
+
+    # Update the CaseWare Cloud entity and its mapped address.
+    try:
+        await caseware_service.update_entity(job_detail, entity_cw_guid)
+        await caseware_service.update_entity_address(
+            job_detail,
+            address_cw_guid,
+        )
     except CasewareCloudServiceError as exc:
         message = str(exc)
         await integration_log_service.create_log(
@@ -230,10 +327,18 @@ async def _update_caseware_entity(
             detail=message,
         ) from exc
 
-    await entity_engagement_mapping_service.update_job_version_number(
+    updated_address_mapping = dict(address_mapping)
+    updated_address_mapping["maconomy_customer_number"] = str(
+        job_detail.get("customernumber", "")
+    )
+    updated_address_mapping["maconomy_customer_version_number"] = str(
+        maconomy_version
+    )
+    await entity_engagement_mapping_service.update_engagement_sync_snapshot(
         session,
         mapping,
         maconomy_version,
+        updated_address_mapping,
     )
 
     await integration_log_service.create_log(
@@ -243,10 +348,11 @@ async def _update_caseware_entity(
         status=IntegrationStatus.SUCCESS,
         action=IntegrationAction.UPDATE,
         message=(
-            "CaseWare Cloud entity updated successfully; "
+            "CaseWare Cloud entity and address updated successfully; "
             f"previous versionnumber={stored_version}; "
             f"new versionnumber={maconomy_version}; "
-            f"CaseWare entity CWGuid={entity_cw_guid}"
+            f"CaseWare entity CWGuid={entity_cw_guid}; "
+            f"CaseWare address CWGuid={address_cw_guid}"
         ),
     )
     return {
@@ -255,7 +361,31 @@ async def _update_caseware_entity(
         "previous_versionnumber": stored_version,
         "maconomy_versionnumber": maconomy_version,
         "caseware_entity_cwid": entity_cw_guid,
+        "caseware_address_cw_guid": address_cw_guid,
     }
+
+
+def _get_address_mapping_for_update(
+    mapping: CasewareCloudEntityEngagementMapping,
+) -> dict[str, str]:
+    addresses = mapping.cw_addresses
+    if not isinstance(addresses, list) or len(addresses) != 1:
+        raise ValueError(
+            "Invalid CaseWare Cloud address mapping for engagement update"
+        )
+
+    address_mapping = addresses[0]
+    if not isinstance(address_mapping, dict):
+        raise ValueError(
+            "Invalid CaseWare Cloud address mapping for engagement update"
+        )
+
+    address_cw_guid = address_mapping.get("caseware_cw_guid")
+    if not isinstance(address_cw_guid, str) or not address_cw_guid.strip():
+        raise ValueError(
+            "CaseWare Cloud address CWGuid not found in engagement mapping"
+        )
+    return address_mapping
 
 
 def _parse_version_number(value: Any) -> int:

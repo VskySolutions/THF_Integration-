@@ -59,6 +59,20 @@ class MaconomyService:
                 )
         except httpx.HTTPError as exc:
             raise MaconomyServiceError("Maconomy request failed") from exc
+
+    async def get_yesterday_and_todays_updated_from_maconomy(
+        self,
+    ) -> list[dict[str, Any]]:
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                reconnect_token = await self._get_reconnect_token(client)
+                return await self._get_updated_job_records(
+                    client,
+                    reconnect_token,
+                )
+        except httpx.HTTPError as exc:
+            raise MaconomyServiceError("Maconomy request failed") from exc
+
     async def _get_new_job_records(
         self,
         client: httpx.AsyncClient,
@@ -95,6 +109,46 @@ class MaconomyService:
             filter = response.json()["panes"]["filter"]
             records = filter["records"]
             if filter["meta"]["rowCount"] == 0 :
+                return []
+            job_data = [record["data"] for record in records]
+        except (KeyError, TypeError, ValueError) as exc:
+            raise MaconomyServiceError("Invalid Maconomy job response") from exc
+
+        if not isinstance(job_data, list):
+            raise MaconomyServiceError("Invalid Maconomy job response")
+        return job_data
+
+    async def _get_updated_job_records(
+        self,
+        client: httpx.AsyncClient,
+        reconnect_token: str,
+    ) -> list[dict[str, Any]]:
+        """Fetch candidate jobs changed yesterday or today from Maconomy."""
+        today = datetime.now().date()
+        yesterday = today - timedelta(days=1)
+        url = f"{self._jobs_url()}/filter"
+        headers = self._container_headers(reconnect_token)
+        payload = {
+            "restriction": (
+                "template=false "
+                "and changeddate>="
+                f"date({yesterday.year},{yesterday.month},{yesterday.day}) "
+                f"and changeddate<=date({today.year},{today.month},{today.day})"
+            ),
+            "fields": [
+                "jobnumber",
+                "template",
+                "versionnumber",
+            ],
+            "limit": 2000,
+        }
+        response = await client.post(url, headers=headers, json=payload)
+        response.raise_for_status()
+
+        try:
+            filter_pane = response.json()["panes"]["filter"]
+            records = filter_pane["records"]
+            if filter_pane["meta"]["rowCount"] == 0:
                 return []
             job_data = [record["data"] for record in records]
         except (KeyError, TypeError, ValueError) as exc:

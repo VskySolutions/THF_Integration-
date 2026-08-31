@@ -47,6 +47,19 @@ async def update_job_version_number(
     return mapping
 
 
+async def update_engagement_sync_snapshot(
+    session: AsyncSession,
+    mapping: CasewareCloudEntityEngagementMapping,
+    version_number: int,
+    address_mapping: dict[str, str],
+) -> CasewareCloudEntityEngagementMapping:
+    mapping.maconomy_job_version_number = str(version_number)
+    mapping.cw_addresses = [address_mapping]
+    await session.commit()
+    await session.refresh(mapping)
+    return mapping
+
+
 async def list_mappings(
     session: AsyncSession, *, offset: int, limit: int
 ) -> list[CasewareCloudEntityEngagementMapping]:
