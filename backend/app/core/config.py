@@ -41,6 +41,13 @@ class Settings(BaseSettings):
     )
     caseware_cloud_language: str = "en"
 
+    cch_axcess_url: AnyHttpUrl = AnyHttpUrl("https://sandboxworkflow.cchaxcess.com")
+    cch_axcess_client_id: str = "replace-with-your-client-id"
+    cch_axcess_client_secret: SecretStr = SecretStr(
+        "replace-with-your-client-secret"    
+    )
+
+
     @field_validator("api_v1_prefix")
     @classmethod
     def validate_api_prefix(cls, value: str) -> str:
