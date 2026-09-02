@@ -21,3 +21,15 @@ def map_maconomy_customer_to_caseware_address(
         "OwnerCWGuid": entity_cw_guid,
         "OwnerId": entity_cw_owner_id,
     }
+
+
+def map_maconomy_job_to_caseware_address_update(
+    job_data: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "Address1": job_data.get("name2", ""),
+        "AddressCategory": "Business",
+        "City": job_data.get("postaldistrict", ""),
+        "Country": job_data.get("country", ""),
+        "Name": job_data.get("name1", ""),
+    }

@@ -81,6 +81,7 @@ async def sync_todays_created_maconomy_engagements_with_caseware(
             })
 
         except HTTPException as exc:
+            await session.rollback()
             results.append({
                 "job_number": job_number,
                 "status": "FAILED",
@@ -88,6 +89,7 @@ async def sync_todays_created_maconomy_engagements_with_caseware(
             })
 
         except Exception as exc:
+            await session.rollback()
             results.append({
                 "job_number": job_number,
                 "status": "FAILED",
