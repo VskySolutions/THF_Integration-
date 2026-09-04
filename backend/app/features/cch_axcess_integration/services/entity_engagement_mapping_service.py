@@ -10,27 +10,16 @@ from app.features.cch_axcess_integration.models import (
 
 async def create_mapping(
     session: AsyncSession,
-    caseware_cwid: str,
+    cch_client_id: str,
     job_number: str,
     maconomy_job_version_number: str,
 ) -> CCHAxcessEntityEngagementMapping:
     mapping = CCHAxcessEntityEngagementMapping(
-        caseware_cloud_entity_cwid=caseware_cwid,
+        cch_axcess_entity_cchid=cch_client_id,
         maconomy_job_number=job_number,
         maconomy_job_version_number=maconomy_job_version_number,
     )
     session.add(mapping)
-    await session.commit()
-    await session.refresh(mapping)
-    return mapping
-
-
-async def set_mapping_addresses(
-    session: AsyncSession,
-    mapping: CCHAxcessEntityEngagementMapping,
-    address_ids: list[dict[str, str]],
-) -> CCHAxcessEntityEngagementMapping:
-    mapping.cw_addresses = address_ids
     await session.commit()
     await session.refresh(mapping)
     return mapping
@@ -42,19 +31,6 @@ async def update_job_version_number(
     version_number: int,
 ) -> CCHAxcessEntityEngagementMapping:
     mapping.maconomy_job_version_number = str(version_number)
-    await session.commit()
-    await session.refresh(mapping)
-    return mapping
-
-
-async def update_engagement_sync_snapshot(
-    session: AsyncSession,
-    mapping: CCHAxcessEntityEngagementMapping,
-    version_number: int,
-    address_mapping: dict[str, str],
-) -> CCHAxcessEntityEngagementMapping:
-    mapping.maconomy_job_version_number = str(version_number)
-    mapping.cw_addresses = [address_mapping]
     await session.commit()
     await session.refresh(mapping)
     return mapping

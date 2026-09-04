@@ -53,12 +53,10 @@ class MaconomyService:
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 reconnect_token = await self._get_reconnect_token(client)
-                print("Reconnect Token:", reconnect_token)  # Debugging line
                 return await self._get_new_job_records(
                     client,
                     reconnect_token,
                 )
-            print("Updated job records fetched successfully.")  # Debugging line
         except httpx.HTTPError as exc:
             raise MaconomyServiceError("Maconomy request failed") from exc
 
@@ -89,7 +87,6 @@ class MaconomyService:
         yesterday = today - timedelta(days=1)
         url = f"{self._jobs_url()}/filter"
         headers = self._container_headers(reconnect_token)
-        print("Fetching new job records from Maconomy...")  # Debugging line
         payload = {
             "restriction": (
                 "template=false "
@@ -116,8 +113,6 @@ class MaconomyService:
             "limit": 2000
         }
         response = await client.post(url, headers=headers, json=payload)
-        print("Response status code:", response.status_code)  # Debugging line
-        # print("Response content:", response.text)  # Debugging line
         response.raise_for_status()
 
         try:

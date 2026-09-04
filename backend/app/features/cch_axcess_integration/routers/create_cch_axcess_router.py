@@ -26,15 +26,7 @@ from app.features.cch_axcess_integration.services import (
     entity_engagement_mapping_service,
     integration_log_service,
 )
-from app.features.cch_axcess_integration.services.cch_axcess_service import CCHAxcessService
-
-# from app.features.caseware_cloud_intergration.services import (
-#     # CasewareService,
-#     MaconomyService,
-#     MaconomyServiceError,
-#     entity_engagement_mapping_service,
-#     integration_log_service,    
-# )
+from app.features.cch_axcess_integration.services.cch_axcess_service import CCHAxcessService, CCHAxcessServiceError
 
 
 # Router
@@ -124,21 +116,28 @@ async def _create_engagement(
         )
     )
     if existing_mapping is not None:
+        # Mapping already exists — verify the CCH client is accessible
+        cch_service = CCHAxcessService()
         try:
-            address_mapping = _get_single_address_mapping(existing_mapping)
-            mapping_is_complete = _is_address_mapping_complete(address_mapping)
-        except ValueError as exc:
-            await _raise_invalid_mapping_error(
-                session,
-                existing_mapping,
-                job_number,
-                str(exc),
+            client_detail = await cch_service.get_client_by_id(
+                existing_mapping.cch_axcess_entity_cchid
             )
+        except Exception as exc:
+            await _save_integration_log(
+                session,
+                job_number,
+                IntegrationAction.CREATE,
+                IntegrationStatus.FAILED,
+                f"Failed to verify existing CCH client: {str(exc)}",
+            )
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Failed to verify existing CCH client",
+            ) from exc
 
-        if mapping_is_complete:
+        if client_detail is not None:
             message = (
-                "CaseWare Entity record is already created for this Maconomy Job "
-                "number"
+                "CCH Axcess Client already exists for this Maconomy Job number"
             )
             integration_status = (
                 IntegrationStatus.FAILED
@@ -208,18 +207,8 @@ async def _create_engagement(
     if is_new_client:
         try:
             cch_result = await cch_service.create_client(job_detail)
-        except Exception as exc:
-            await _save_integration_log(
-                session,
-                job_number,
-                IntegrationAction.CREATE,
-                IntegrationStatus.FAILED,
-                f"Failed to create client in CCH Axcess: {str(exc)}",
-            )
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="Failed to create client in CCH Axcess",
-            ) from exc
+        except CCHAxcessServiceError as exc:
+            await _raise_client_creation_error(session, job_number, exc)
 
         # Create mapping after successful creation
         mapping = await entity_engagement_mapping_service.create_mapping(
@@ -230,19 +219,9 @@ async def _create_engagement(
     else:
         # If mapping exists, check if reconciliation is needed
         try:
-            client_detail = await cch_service.get_client_by_id(mapping.cch_client_id)
-        except Exception as exc:
-            await _save_integration_log(
-                session,
-                job_number,
-                IntegrationAction.CREATE,
-                IntegrationStatus.FAILED,
-                f"Failed to retrieve client from CCH Axcess: {str(exc)}",
-            )
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="Failed to retrieve client from CCH Axcess",
-            ) from exc
+            client_detail = await cch_service.get_client_by_id(mapping.cch_axcess_entity_cchid)
+        except CCHAxcessServiceError as exc:
+            await _raise_client_creation_error(session, job_number, exc)
         cch_result = {
             "client_id": client_detail["client_id"],
             # "Id": client_detail["Id"],
@@ -256,9 +235,9 @@ async def _create_engagement(
             status=IntegrationStatus.SUCCESS,
             action=IntegrationAction.CREATE,
             message=(
-                "CCH Axcess Client reconciled and address synchronized successfully"
+                "CCH Axcess Client reconciled successfully"
                 if client_was_reconciled
-                else "CCH Axcess Client and address created successfully"
+                else "CCH Axcess Client created successfully"
                 if is_new_client
                 else "Incomplete CCH Axcess create workflow resumed successfully"
             ),
@@ -288,5 +267,23 @@ async def _save_integration_log(
         action=action,
         message=message,
     )
+
+
+async def _raise_client_creation_error(
+    session: AsyncSession,
+    job_number: str,
+    exc: CCHAxcessServiceError,
+) -> None:
+    await _save_integration_log(
+        session,
+        job_number,
+        IntegrationAction.CREATE,
+        IntegrationStatus.FAILED,
+        str(exc),
+    )
+    raise HTTPException(
+        status_code=status.HTTP_502_BAD_GATEWAY,
+        detail="Unable to create or retrieve client in CCH Axcess",
+    ) from exc
 
 

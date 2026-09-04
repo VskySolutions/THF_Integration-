@@ -3,7 +3,6 @@ from typing import Any
 import httpx
 
 from app.core.config import Settings, get_settings
-from app.features.caseware_cloud_intergration.services.caseware_cloud_service import CasewareCloudEntityCreationError
 from app.features.cch_axcess_integration.mappers.client_mapper import map_maconomy_job_to_cch_client
 
 class CCHAxcessServiceError(Exception):
@@ -24,14 +23,13 @@ class CCHAxcessService:
     # Get Access Token from CCH Axcess
     async def _get_token(self, client: httpx.AsyncClient) -> str:
         response = await client.post(
-            f"{self.settings.cch_axcess_url}/api/v2/auth/token",
+            f"{self.settings.cch_axcess_url}/api/v2/Authenticate/user",
             headers={"Content-Type": "application/json"},
             json={
-                "ClientId": self.settings.cch_axcess_client_id,
-                "ClientSecret": (
+                "userName": self.settings.cch_axcess_client_id,
+                "password": (
                     self.settings.cch_axcess_client_secret.get_secret_value()
                 ),
-                # "Language": self.settings.cch_axcess_language,
             },
         )
         response.raise_for_status()
@@ -86,12 +84,48 @@ class CCHAxcessService:
             response_data = response.json()
             # Confirm required response fields are present and valid
             return {
-                "client_id": response_data["clientId"],
-                # "Id": response_data["Id"],
+                "client_id": response_data["clientId"]
             }
         except (KeyError, TypeError, ValueError) as exc:
             raise CCHAxcessClientCreationError(
                 "Invalid CCH Axcess client response",
                 reconciliation_allowed=True,
+            ) from exc
+
+    # Get Client by ID from CCH Axcess
+    async def get_client_by_id(self, client_id: str) -> dict[str, Any] | None:
+        """Retrieve a CCH Axcess client by its client ID.
+
+        Returns the response JSON dict if found, or None if the client does not exist (404).
+        Raises CCHAxcessServiceError for other errors.
+        """
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                token = await self._get_token(client)
+                response = await client.get(
+                    f"{self.settings.cch_axcess_url}/api/v2.1/client/{client_id}",
+                    headers={
+                        "Authorization": f"Bearer {token}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                if response.status_code == 404:
+                    return None
+                response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise CCHAxcessServiceError(
+                f"CCH Axcess client retrieval failed with status {exc.response.status_code}"
+            ) from exc
+        except httpx.RequestError as exc:
+            raise CCHAxcessServiceError(
+                "CCH Axcess client retrieval request failed"
+            ) from exc
+
+        try:
+            response_data = response.json()
+            return {"client_id": response_data["clientId"]}
+        except (KeyError, TypeError, ValueError) as exc:
+            raise CCHAxcessServiceError(
+                "Invalid CCH Axcess client retrieval response"
             ) from exc
 
