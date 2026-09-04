@@ -41,6 +41,13 @@ class Settings(BaseSettings):
     )
     caseware_cloud_language: str = "en"
 
+    sap_concur_url: AnyHttpUrl = AnyHttpUrl("https://us2concursolutions.com")
+    sap_concur_client_id: str = "cddce98b-2b01-403d-84c6-685afe69c3c5"
+    sap_concur_client_secret: SecretStr = SecretStr(
+        "5acfaf42-41e9-473c-bf83-d2198d872262"
+    )
+    sap_concur_refresh_token: str = "replace-with-your-refresh-token"
+
     @field_validator("api_v1_prefix")
     @classmethod
     def validate_api_prefix(cls, value: str) -> str:
