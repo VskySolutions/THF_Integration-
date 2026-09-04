@@ -1,6 +1,6 @@
 """Service for retrieving onboarding employees from Paycor."""
 
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 from urllib.parse import urljoin
 
@@ -28,6 +28,47 @@ class PaycorService:
     async def get_hired_employees_today(
         self,
     ) -> list[dict[str, Any]]:
+        """Return onboarding employees invited today."""
+
+        employees, work_locations = (
+            await self._retrieve_onboarding_data()
+        )
+
+        return self._filter_employees_by_invited_dates(
+            employees=employees,
+            work_locations=work_locations,
+            valid_dates={date.today()},
+        )
+
+    async def get_recent_hires(
+        self,
+    ) -> list[dict[str, Any]]:
+        """Return onboarding employees invited today or yesterday."""
+
+        employees, work_locations = (
+            await self._retrieve_onboarding_data()
+        )
+
+        today = date.today()
+        yesterday = today - timedelta(days=1)
+
+        return self._filter_employees_by_invited_dates(
+            employees=employees,
+            work_locations=work_locations,
+            valid_dates={
+                today,
+                yesterday,
+            },
+        )
+
+    async def _retrieve_onboarding_data(
+        self,
+    ) -> tuple[
+        list[dict[str, Any]],
+        list[dict[str, Any]],
+    ]:
+        """Retrieve onboarding employees and work locations."""
+
         try:
             async with httpx.AsyncClient(
                 timeout=self.timeout
@@ -43,26 +84,20 @@ class PaycorService:
                     )
                 )
 
+                work_locations = (
+                    await self._get_all_work_locations(
+                        client,
+                        access_token,
+                    )
+                )
+
+                return employees, work_locations
+
         except httpx.HTTPError as exc:
             raise PaycorServiceError(
-                "Unable to retrieve employees from Paycor"
+                "Unable to retrieve onboarding data "
+                "from Paycor"
             ) from exc
-
-        today = date.today()
-
-        try:
-            return [
-                map_paycor_employee(employee)
-                for employee in employees
-                if (
-                    self._is_hired_on(employee, today)
-                    and employee.get("employeeNumber")
-                    is not None
-                )
-            ]
-
-        except ValueError as exc:
-            raise PaycorServiceError(str(exc)) from exc
 
     async def _get_access_token(
         self,
@@ -127,7 +162,7 @@ class PaycorService:
                 "Invalid Paycor authentication response"
             )
 
-        return access_token
+        return access_token.strip()
 
     async def _get_all_onboarding_employees(
         self,
@@ -141,20 +176,48 @@ class PaycorService:
             "/onboardingemployees"
         )
 
+        return await self._get_all_paginated_records(
+            client=client,
+            access_token=access_token,
+            initial_url=initial_url,
+            resource_name="employee",
+        )
+
+    async def _get_all_work_locations(
+        self,
+        client: httpx.AsyncClient,
+        access_token: str,
+    ) -> list[dict[str, Any]]:
+        initial_url = (
+            f"{self.settings.paycor_url}"
+            "/v1/legalentities/"
+            f"{self.settings.paycor_legal_entity_id}"
+            "/worklocations"
+        )
+
+        return await self._get_all_paginated_records(
+            client=client,
+            access_token=access_token,
+            initial_url=initial_url,
+            resource_name="work-location",
+        )
+
+    async def _get_all_paginated_records(
+        self,
+        *,
+        client: httpx.AsyncClient,
+        access_token: str,
+        initial_url: str,
+        resource_name: str,
+    ) -> list[dict[str, Any]]:
         url = initial_url
         params: dict[str, str] | None = None
-        employees: list[dict[str, Any]] = []
+        records: list[dict[str, Any]] = []
         seen_cursors: set[str] = set()
 
-        headers = {
-            "Accept": "application/json",
-            "Authorization": f"Bearer {access_token}",
-            "Ocp-Apim-Subscription-Key": (
-                self.settings
-                .paycor_subscription_key
-                .get_secret_value()
-            ),
-        }
+        headers = self._get_api_headers(
+            access_token
+        )
 
         for _ in range(self.max_pages):
             response = await client.get(
@@ -169,114 +232,195 @@ class PaycorService:
 
             except (TypeError, ValueError) as exc:
                 raise PaycorServiceError(
-                    "Invalid Paycor employee response"
+                    f"Invalid Paycor {resource_name} "
+                    "response"
                 ) from exc
 
             if not isinstance(response_data, dict):
                 raise PaycorServiceError(
-                    "Invalid Paycor employee response"
+                    f"Invalid Paycor {resource_name} "
+                    "response"
                 )
 
-            records = response_data.get("records")
+            page_records = response_data.get(
+                "records"
+            )
 
-            if not isinstance(records, list) or any(
+            if not isinstance(page_records, list) or any(
                 not isinstance(record, dict)
-                for record in records
+                for record in page_records
             ):
                 raise PaycorServiceError(
-                    "Invalid Paycor employee response"
+                    f"Invalid Paycor {resource_name} "
+                    "response"
                 )
 
-            employees.extend(records)
+            records.extend(page_records)
 
-            if not self._as_bool(
-                response_data.get("hasMoreResults")
+            if not self._has_more_results(
+                response_data
             ):
-                return employees
+                return records
 
-            additional_results_url = str(
-                response_data.get(
-                    "additionalResultsUrl"
+            url, params, cursor = (
+                self._get_next_page_request(
+                    response_data=response_data,
+                    initial_url=initial_url,
                 )
-                or ""
-            ).strip()
-
-            continuation_token = str(
-                response_data.get(
-                    "continuationToken"
-                )
-                or ""
-            ).strip()
-
-            if additional_results_url:
-                cursor = (
-                    f"url:{additional_results_url}"
-                )
-
-                url = urljoin(
-                    f"{self.settings.paycor_url}/",
-                    additional_results_url,
-                )
-
-                params = None
-
-            elif continuation_token:
-                cursor = (
-                    f"token:{continuation_token}"
-                )
-
-                url = initial_url
-
-                params = {
-                    "continuationToken": (
-                        continuation_token
-                    )
-                }
-
-            else:
-                raise PaycorServiceError(
-                    "Paycor returned hasMoreResults=true "
-                    "without a pagination cursor"
-                )
+            )
 
             if cursor in seen_cursors:
                 raise PaycorServiceError(
-                    "Paycor returned a repeated "
-                    "pagination cursor"
+                    f"Paycor {resource_name} pagination "
+                    "returned a repeated cursor"
                 )
 
             seen_cursors.add(cursor)
 
         raise PaycorServiceError(
-            "Paycor pagination limit exceeded"
+            f"Paycor {resource_name} pagination "
+            "exceeded the maximum page limit"
         )
 
-    @staticmethod
-    def _is_hired_on(
-        employee: dict[str, Any],
-        expected_date: date,
-    ) -> bool:
-        hire_date = employee.get("hireDate")
+    def _get_next_page_request(
+        self,
+        *,
+        response_data: dict[str, Any],
+        initial_url: str,
+    ) -> tuple[
+        str,
+        dict[str, str] | None,
+        str,
+    ]:
+        additional_results_url = response_data.get(
+            "additionalResultsUrl"
+        )
+        continuation_token = response_data.get(
+            "continuationToken"
+        )
 
-        if not hire_date:
-            return False
+        if (
+            isinstance(additional_results_url, str)
+            and additional_results_url.strip()
+        ):
+            normalized_url = (
+                additional_results_url.strip()
+            )
+
+            next_url = urljoin(
+                f"{self.settings.paycor_url.rstrip('/')}/",
+                normalized_url,
+            )
+
+            return (
+                next_url,
+                None,
+                f"url:{normalized_url}",
+            )
+
+        if (
+            isinstance(continuation_token, str)
+            and continuation_token.strip()
+        ):
+            normalized_token = (
+                continuation_token.strip()
+            )
+
+            return (
+                initial_url,
+                {
+                    "continuationToken": (
+                        normalized_token
+                    )
+                },
+                f"token:{normalized_token}",
+            )
+
+        raise PaycorServiceError(
+            "Paycor response indicates more results, "
+            "but no continuation information was provided"
+        )
+
+    def _get_api_headers(
+        self,
+        access_token: str,
+    ) -> dict[str, str]:
+        return {
+            "Accept": "application/json",
+            "Authorization": (
+                f"Bearer {access_token}"
+            ),
+            "Ocp-Apim-Subscription-Key": (
+                self.settings
+                .paycor_subscription_key
+                .get_secret_value()
+            ),
+        }
+
+    def _filter_employees_by_invited_dates(
+        self,
+        *,
+        employees: list[dict[str, Any]],
+        work_locations: list[dict[str, Any]],
+        valid_dates: set[date],
+    ) -> list[dict[str, Any]]:
+        filtered_employees: list[dict[str, Any]] = []
+
+        for employee in employees:
+            invited_date = self._normalize_date(
+                employee.get("invitedDate")
+            )
+
+            if invited_date not in valid_dates:
+                continue
+
+            try:
+                filtered_employees.append(
+                    map_paycor_employee(
+                        employee,
+                        work_locations=work_locations,
+                    )
+                )
+
+            except ValueError as exc:
+                raise PaycorServiceError(
+                    "Unable to map Paycor employee"
+                ) from exc
+
+        return filtered_employees
+
+    @staticmethod
+    def _normalize_date(
+        value: Any,
+    ) -> date | None:
+        if not isinstance(value, str):
+            return None
+
+        normalized_value = value.strip()
+
+        if not normalized_value:
+            return None
 
         try:
-            parsed_date = date.fromisoformat(
-                str(hire_date)[:10]
+            return date.fromisoformat(
+                normalized_value[:10]
             )
 
         except ValueError:
-            return False
-
-        return parsed_date == expected_date
+            return None
 
     @staticmethod
-    def _as_bool(value: Any) -> bool:
+    def _has_more_results(
+        response_data: dict[str, Any],
+    ) -> bool:
+        value = response_data.get(
+            "hasMoreResults"
+        )
+
         if isinstance(value, bool):
             return value
 
         if isinstance(value, str):
             return value.strip().lower() == "true"
 
-        return bool(value)
+        return False

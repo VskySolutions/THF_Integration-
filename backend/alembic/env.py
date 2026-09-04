@@ -7,6 +7,11 @@ from app.features.caseware_cloud_intergration.models import (  # noqa: F401
     CasewareCloudEntityEngagementMapping,
     CasewareCloudIntegrationLog,
 )
+#paycor model imort
+from app.features.paycor_integration.models import (  # noqa: F401
+    PaycorEmployeeMappingLog,
+    PaycorIntegrationLog,
+)
 from app.core.config import get_settings
 from app.db.base import Base
 from app.features.exception_logs.models import ExceptionLog  # noqa: F401
