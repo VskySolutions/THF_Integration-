@@ -7,6 +7,11 @@ from app.features.caseware_cloud_intergration.models import (  # noqa: F401
     CasewareCloudEntityEngagementMapping,
     CasewareCloudIntegrationLog,
 )
+from app.features.sap_concur_integration.models import (  #noqa: F401
+        SAPConcurIntegrationLog,
+        SAPConcurExpensesheetExpenseReportMapping,
+    )
+
 from app.features.cch_axcess_integration.models import (  # noqa: F401
     CCHAxcessEntityEngagementMapping,
     CCHAxcessIntegrationLog,
