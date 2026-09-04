@@ -72,3 +72,11 @@ The `app/features/caseware_cloud_intergration` feature owns the Caseware Cloud
 entity-engagement mapping and integration-log models and schemas. Integration
 status is constrained to `SUCCESS` or `FAILED`, and action is constrained to
 `CREATE` or `UPDATE` at both the API-schema and PostgreSQL levels.
+
+## Integration service availability
+
+Processing endpoints are protected by reusable, database-backed service
+switches. The migration seeds all switches as inactive so deployments fail
+closed until an operator enables the required services. See
+[`documentation/integration-service-availability.md`](documentation/integration-service-availability.md)
+for endpoint mappings and activation instructions.
