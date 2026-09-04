@@ -1,4 +1,6 @@
 from typing import Any
+import time
+import asyncio
 
 import httpx
 
@@ -25,6 +27,12 @@ class CasewareCloudService:
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or get_settings()
         self.timeout = 60.0
+
+        self._access_token: str | None = None
+        self._token_expires_at: float = 0
+
+        # Prevent multiple async requests from requesting a token simultaneously
+        self._token_lock = asyncio.Lock()
 
     async def create_entity(self, maconomy_job_data: dict[str, Any]) -> dict[str, Any]:
         try:
@@ -210,7 +218,6 @@ class CasewareCloudService:
         address_data = map_maconomy_job_to_caseware_address_update(
             maconomy_job_data
         )
-
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 token = await self._get_token(client)
@@ -356,31 +363,57 @@ class CasewareCloudService:
         return self._find_created_address(addresses, address_id)
 
     async def _get_token(self, client: httpx.AsyncClient) -> str:
-        response = await client.post(
-            f"{self.settings.caseware_cloud_url}/api/v2/auth/token",
-            headers={"Content-Type": "application/json"},
-            json={
-                "ClientId": self.settings.caseware_cloud_client_id,
-                "ClientSecret": (
-                    self.settings.caseware_cloud_client_secret.get_secret_value()
-                ),
-                "Language": self.settings.caseware_cloud_language,
-            },
-        )
-        response.raise_for_status()
+        # Return cached token if still valid
+        if (
+            self._access_token
+            and time.time() < self._token_expires_at
+        ):
+            return self._access_token
 
-        try:
-            token = response.json()["Token"]
-        except (KeyError, TypeError, ValueError) as exc:
-            raise CasewareCloudServiceError(
-                "Invalid Caseware Cloud authentication response"
-            ) from exc
+        async with self._token_lock:
+            if (
+                self._access_token
+                and time.time() < self._token_expires_at
+            ):
+                return self._access_token
 
-        if not isinstance(token, str) or not token:
-            raise CasewareCloudServiceError(
-                "Invalid Caseware Cloud authentication response"
+            response = await client.post(
+                f"{self.settings.caseware_cloud_url}/api/v2/auth/token",
+                headers={
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "ClientId": self.settings.caseware_cloud_client_id,
+                    "ClientSecret": (
+                        self.settings.caseware_cloud_client_secret.get_secret_value()
+                    ),
+                    "Language": self.settings.caseware_cloud_language,
+                },
             )
-        return token
+
+            response.raise_for_status()
+
+            try:
+                data = response.json()
+                token = data["Token"]
+            except (KeyError, TypeError, ValueError) as exc:
+                raise CasewareCloudServiceError(
+                    "Invalid Caseware Cloud authentication response"
+                ) from exc
+
+            if not isinstance(token, str) or not token:
+                raise CasewareCloudServiceError(
+                    "Invalid Caseware Cloud authentication response"
+                )
+
+            self._access_token = token
+
+            # IMPORTANT:
+            # Replace this value with the actual CaseWare token lifetime
+            # if the authentication response provides one.
+            self._token_expires_at = time.time() + (28 * 60)
+
+            return self._access_token
 
     @staticmethod
     def _parse_entity_response(response: httpx.Response) -> dict[str, Any]:
