@@ -5,10 +5,6 @@ from typing import Any
 import httpx
 
 from app.core.config import Settings, get_settings
-from app.features.sap_concur_integration.mappers import (
-    map_concur_expense_report_to_maconomy_expensesheet,
-    map_concur_expense_to_maconomy_expense
-)
 
 
 class SAPConcurServiceError(Exception):
@@ -27,21 +23,22 @@ class SAPConcurService:
         self.timeout = 60.0
 
 
-    #  Get report details using report_id
+    #  Get report details using report_id V4 API
     async def get_report_by_id(
         self,
         report_id: str,
         user_id: str,
         context_type: str,
     ) -> dict[str, Any] | None:
+        print(f"Fetching report details for report_id: {report_id}, user_id: {user_id}, context_type: {context_type}")
         if not report_id.strip():
             raise SAPConcurServiceError("Invalid Concur Expense report ID")
 
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
-                token = await self._get_token(client)
+                token = await self._get_token_from_refresh_token(client)
                 response = await client.get(
-                    f"{self.settings.sap_concur_url}/expensereports/v4/users/{user_id}/context/{context_type}/{report_id}",
+                    f"https://us2.api.concursolutions.com/expensereports/v4/users/{user_id}/context/{context_type}/reports/{report_id}",
                     headers={
                         "Authorization": f"Bearer {token}",
                         "Content-Type": "application/json",
@@ -67,11 +64,11 @@ class SAPConcurService:
                 "Invalid Concur report response"
             )
 
-        report_number = report.get("ReportID")
-        report_name = report.get("ReportName")
+        exp_report_id = report["reportId"]
+        report_name = report["name"]
         if (
-            not isinstance(report_number, str)
-            or not report_number.strip()
+            not isinstance(exp_report_id, str)
+            or not exp_report_id.strip()
             or not isinstance(report_name, str)
         ):
             raise SAPConcurServiceError(
@@ -93,9 +90,9 @@ class SAPConcurService:
 
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
-                token = await self._get_token(client)
+                token = await self._get_token_from_refresh_token(client)
                 response = await client.get(
-                    f"{self.settings.sap_concur_url}/expensereports/v4/users/{user_id}/context/{context_type}/{report_id}/expenses",
+                    f"https://us2.api.concursolutions.com/expensereports/v4/users/{user_id}/context/{context_type}/{report_id}/expenses",
                     headers={
                         "Authorization": f"Bearer {token}",
                         "Content-Type": "application/json",
@@ -145,8 +142,42 @@ class SAPConcurService:
     async def _get_token(self, client: httpx.AsyncClient) -> str:
         response = await client.post(
             f"{self.settings.sap_concur_url}/oauth2/v0/token",
-            headers={"Content-Type": "application/json"},
-            json={
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            # json={
+            #     "client_id": self.settings.sap_concur_client_id,
+            #     "client_secret": (
+            #         self.settings.sap_concur_client_secret.get_secret_value()
+            #     ),
+            #     "username": self.settings.sap_concur_username,
+            #     "password": self.settings.sap_concur_password.get_secret_value(),
+            #     "grant_type" : "refresh_token",
+            # },
+            payload = f"client_id={self.settings.sap_concur_client_id}&client_secret={self.settings.sap_concur_client_secret.get_secret_value()}&username={self.settings.sap_concur_username}&password={self.settings.sap_concur_password.get_secret_value()}&grant_type=authtoken"
+        )
+        print(f"Concur Token Response: {response.status_code} - {response.text}")
+        response.raise_for_status()
+
+        try:
+            token = response.json()["access_token"]
+        except (KeyError, TypeError, ValueError) as exc:
+            raise SAPConcurServiceError(
+                "Invalid SAP Concur authentication response"
+            ) from exc
+
+        if not isinstance(token, str) or not token:
+            raise SAPConcurServiceError(
+                "Invalid SAP Concur authentication response"
+            )
+        return token
+
+
+    # Get Token from Concur API
+    async def _get_token_from_refresh_token(self, client: httpx.AsyncClient) -> str:
+
+        response = await client.post(
+            f"https://us.api.concursolutions.com/oauth2/v0/token",
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            data={
                 "client_id": self.settings.sap_concur_client_id,
                 "client_secret": (
                     self.settings.sap_concur_client_secret.get_secret_value()
@@ -154,12 +185,18 @@ class SAPConcurService:
                 "grant_type" : "refresh_token",
                 "refresh_token": self.settings.sap_concur_refresh_token,
             },
+            # data = f"client_id={self.settings.sap_concur_client_id}&client_secret={self.settings.sap_concur_client_secret.get_secret_value()}&grant_type=refresh_token&refresh_token={self.settings.sap_concur_refresh_token}"
         )
-        print(f"Concur Token Response: {response.status_code} - {response.text}")
+        
         response.raise_for_status()
+        print("Token status:", response.status_code)
 
         try:
-            token = response.json()["access_token"]
+            payload = response.json()
+            token = payload["access_token"]
+            new_refresh_token = payload["refresh_token"]
+            # print(f"Concur Access Token: {token}")
+            # print(f"Concur Refresh Token: {new_refresh_token}")
         except (KeyError, TypeError, ValueError) as exc:
             raise SAPConcurServiceError(
                 "Invalid SAP Concur authentication response"
@@ -192,15 +229,18 @@ class SAPConcurService:
         """
         Fetch Concur expense reports created yesterday or today.
         """
+        print("Fetching new expense reports from SAP Concur...")
         today = datetime.now().date()
         yesterday = today - timedelta(days=1)
         tomorrow = today + timedelta(days=1)
 
-        token = await self._get_token(client)
-        url = f"{self.settings.sap_concur_url}/api/v3.0/expense/reports"
+        token = await self._get_token_from_refresh_token(client)
+        print(f"Using token fetch reports from {yesterday} to {tomorrow}")
+        url = f"https://us.api.concursolutions.com/api/v3.0/expense/reports"
         headers = {
             "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Accept": "application/json"
         }
         params = {
             "user": "ALL",
@@ -235,4 +275,39 @@ class SAPConcurService:
                 )
 
         return items
-    
+
+
+    async def get_user_id_by_login_id(self, owner_login_id: str) -> str:
+        try:
+            print(f"Fetching user ID for owner_login_id: {owner_login_id}")
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                token = await self._get_token_from_refresh_token(client)
+                url = f"https://us.api.concursolutions.com/profile/identity/v4/Users"
+                headers = {
+                    "Authorization": f"Bearer {token}",
+                    "Accept": "application/json",
+                }
+                params = {
+                    "filter": f'userName eq "{owner_login_id}"',
+                }
+
+                response = await client.get(url, headers=headers, params=params)
+                print("Response:", response)
+                response.raise_for_status()
+
+                try:
+                    payload = response.json()
+                    user_id = payload["Resources"][0].get("id")
+                except (KeyError, TypeError, ValueError, IndexError) as exc:
+                    raise SAPConcurServiceError(
+                        "Invalid SAP Concur user response"
+                    ) from exc
+                except ValueError as exc:
+                    raise SAPConcurServiceError(
+                        "Invalid SAP Concur user response"
+                    ) from exc
+
+
+                return user_id
+        except httpx.HTTPError as exc:
+            raise SAPConcurServiceError("SAP Concur request failed") from exc

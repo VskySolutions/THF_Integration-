@@ -43,6 +43,7 @@ async def sync_todays_created_sap_concur_expense_reports_with_maconomy(
 ) -> list[dict[str, Any]]:
 
     results: list[dict[str, Any]] = []
+    print("======== get_yesterday_and_todays_new_expense_reports_from_sap_concur ========")
     try:
         new_expense_reports = (
             await SAPConcurService().get_yesterday_and_todays_new_expense_reports_from_sap_concur()
@@ -56,6 +57,7 @@ async def sync_todays_created_sap_concur_expense_reports_with_maconomy(
 
     for report in new_expense_reports:
         expense_report_id = report.get("ID")
+        expense_report_login_id = report.get("OwnerLoginID")
         if not expense_report_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -64,7 +66,10 @@ async def sync_todays_created_sap_concur_expense_reports_with_maconomy(
 
         try:
             result = await create_maconomy_expense_sheet(
-                report_id=expense_report_id, session=session, action_from="SYNCAPI"
+                report_id=expense_report_id,
+                login_id=expense_report_login_id,
+                session=session,
+                action_from="SYNCAPI"
             )
 
             results.append({
@@ -93,16 +98,17 @@ async def sync_todays_created_sap_concur_expense_reports_with_maconomy(
     return results
 
 
-
 async def create_maconomy_expense_sheet(
     report_id: str,
+    login_id: str,
     session: AsyncSession,
     action_from:str = "CREATEAPI"
 ) -> dict[str, Any]:
-
+    print("======= create_maconomy_expense_sheet ==========")
     existing_mapping = await expensesheet_expensereport_mapping_service.get_mapping_by_report_id(
         report_id, session
     )
+    existing_mapping = None
 
     # If a mapping already exists for the given report_id, raise an HTTPException with a 400 status code and a message indicating that the mapping already exists.
     if existing_mapping:
@@ -131,7 +137,8 @@ async def create_maconomy_expense_sheet(
         return None
 
     try:
-        report_detail = await SAPConcurService().get_report_by_id(report_id)
+        user_id = await SAPConcurService().get_user_id_by_login_id(owner_login_id=login_id)
+        report_detail = await SAPConcurService().get_report_by_id(report_id, user_id, context_type="TRAVELER")
     except Exception as e:
         message = f"Failed to fetch SAP Concur report details: {str(e)}"
         await _save_integration_log(
@@ -158,11 +165,14 @@ async def create_maconomy_expense_sheet(
             status_code=status.HTTP_404_NOT_FOUND, detail=message
         )
 
+
     # Maconomy Service initiates
     maconomy_service = MaconomyService()
     mapping = existing_mapping
     is_new_expensesheet = mapping is None
     expensesheet_was_reconciled = False
+
+    print("======== Maconomy service initiated =========")
 
     if is_new_expensesheet:
         try:
@@ -170,39 +180,42 @@ async def create_maconomy_expense_sheet(
         except MaconomyServiceError as e:
             message = f"Failed to create Maconomy expense sheet: {str(e)}"
 
-            try:
-                reconciled_expensesheet = await maconomy_service.get_expensesheet_by_expensesheetnumber(report_id)
-            except MaconomyServiceError as e:
-                await _raise_expense_sheet_creation_error(session, report_id, e)
+            # try:
+            #     reconciled_expensesheet = await maconomy_service.get_expensesheet_by_expensesheetnumber(report_id)
+            # except MaconomyServiceError as e:
+            #     await _raise_expense_sheet_creation_error(session, report_id, e)
 
-            if reconciled_expensesheet is None:
-                await _raise_expense_sheet_creation_error(
-                    session, report_id, e
-                )
+            # if reconciled_expensesheet is None:
+            #     await _raise_expense_sheet_creation_error(
+            #         session, report_id, e
+            #     )
 
-            maconomy_expense_sheet_result = {
-                "expense_sheet_number": str(maconomy_result.get("expenseSheetNumber", "")),
-            }
+        try:
+            records = maconomy_result["panes"]["card"]["records"]
+            expense_sheet_number = records[0]["data"]["expensesheetnumber"]
+        except (KeyError, TypeError, IndexError) as exc:
+            raise MaconomyServiceError("Invalid Maconomy expense sheet response") from exc
 
-            expensesheet_was_reconciled = True
+        if not isinstance(expense_sheet_number, str) or not expense_sheet_number.strip():
+            raise MaconomyServiceError("Invalid Maconomy expense sheet response")
 
-        except MaconomyServiceError as e:
-            await _raise_expense_sheet_creation_error(session, report_id, e)
+        maconomy_expense_sheet_result = {
+            "expense_sheet_number": expense_sheet_number,
+        }
+
+        expensesheet_was_reconciled = True
+
+        # except MaconomyServiceError as e:
+        #     await _raise_expense_sheet_creation_error(session, report_id, e)
 
         mapping = await expensesheet_expensereport_mapping_service.create_mapping(
             session,
             sap_concur_expensereport_id=report_id,
             maconomy_expensesheet_no=maconomy_expense_sheet_result["expense_sheet_number"],
         )
-        
 
-    
     return maconomy_expense_sheet_result
-    # {
-    #     "report_detail": report_detail,
-    #     "message": "Create Maconomy Expense Sheet" 
-    # }
-    
+
 
 async def _save_integration_log(
     session: AsyncSession,
@@ -219,7 +232,8 @@ async def _save_integration_log(
     await integration_log_service.create_log(
         session,
         mapping_id=mapping_id,
-        expensesheet_number=report_id,
+        report_id=report_id,
+        # expensesheet_number=report_id
         status=integration_status,
         action=action,
         message=message,
@@ -228,16 +242,25 @@ async def _save_integration_log(
 
 async def _raise_expense_sheet_creation_error(
     session: AsyncSession,
-    expensesheet_number: str,
+    # expensesheet_number: str,
+    report_id: str,
     exc: MaconomyServiceError,
 ) -> None:
     await _save_integration_log(
         session,
-        IntegrationAction.CREATE,
-        IntegrationStatus.FAILED,
-        str(exc),
-        expensesheet_number=expensesheet_number,
+        report_id=report_id,
+        action=IntegrationAction.CREATE,
+        integration_status=IntegrationStatus.FAILED,
+        message=str(exc),
     )
+    # await _save_integration_log(
+    #     session,
+    #     IntegrationAction.CREATE,
+    #     IntegrationStatus.FAILED,
+    #     str(exc),
+    #     # expensesheet_number=expensesheet_number,
+    #     report_id
+    # )
     raise HTTPException(
         status_code=status.HTTP_502_BAD_GATEWAY,
         detail="Unable to create or reconcile entity in CaseWare Cloud",

@@ -52,7 +52,7 @@ class Settings(BaseSettings):
     sap_concur_client_secret: SecretStr = SecretStr(
         "5acfaf42-41e9-473c-bf83-d2198d872262"
     )
-    sap_concur_refresh_token: str = "replace-with-your-refresh-token"
+    sap_concur_refresh_token: str = "qlf4dtv1l6m53n5dy9pyysfwvio"
 
     @field_validator("api_v1_prefix")
     @classmethod
