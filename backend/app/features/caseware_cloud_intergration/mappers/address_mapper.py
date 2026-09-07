@@ -10,10 +10,11 @@ def map_maconomy_customer_to_caseware_address(
         raise ValueError("Caseware entity CWGuid is required")
     if not isinstance(entity_cw_owner_id, int):
         raise ValueError("Caseware entity owner ID must be an integer")
-
     return {
         "Id": 0,
         "Address1": customer_data.get("name2", ""),
+        "Address2": customer_data.get("name3", ""),
+        "Address3": customer_data.get("name4", ""),
         "City": customer_data.get("postaldistrict", ""),
         "Country": customer_data.get("country", ""),
         "Name": customer_data.get("name1", ""),
@@ -28,6 +29,8 @@ def map_maconomy_job_to_caseware_address_update(
 ) -> dict[str, Any]:
     return {
         "Address1": job_data.get("name2", ""),
+        "Address2": job_data.get("name3", ""),
+        "Address3": job_data.get("name4", ""),
         "AddressCategory": "Business",
         "City": job_data.get("postaldistrict", ""),
         "Country": job_data.get("country", ""),

@@ -12,6 +12,7 @@ from app.features.caseware_cloud_intergration.routers import (
 )
 from app.features.sap_concur_integration.routers.create_maconomy_expense_sheet import router as sap_concur_router    
 from app.features.exception_logs import install_exception_logging
+from app.features.schedular_services import SchedulerService
 
 
 @asynccontextmanager
@@ -19,8 +20,13 @@ async def lifespan(_: FastAPI):
     # Database connections are created lazily by SQLAlchemy and disposed on exit.
     from app.db.session import engine
 
-    yield
-    await engine.dispose()
+    scheduler_service = SchedulerService(get_settings())
+    await scheduler_service.start()
+    try:
+        yield
+    finally:
+        await scheduler_service.shutdown()
+        await engine.dispose()
 
 
 settings = get_settings()

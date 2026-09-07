@@ -29,6 +29,12 @@ class Settings(BaseSettings):
     # Comma-separated values allow key rotation without downtime.
     api_keys: SecretStr = Field(default=SecretStr("change-me"))
 
+    scheduler_enabled: bool = False
+    scheduler_api_base_url: AnyHttpUrl = AnyHttpUrl("http://127.0.0.1:8000")
+    scheduler_api_key: SecretStr = SecretStr("change-me")
+    scheduler_interval_minutes: int = Field(default=5, ge=1)
+    scheduler_request_timeout_seconds: float = Field(default=600, gt=0)
+
     maconomy_base_url: AnyHttpUrl = AnyHttpUrl("http://localhost:8080")
     maconomy_shortname: str = "d104p"
     maconomy_username: str = "admin"
@@ -77,6 +83,10 @@ class Settings(BaseSettings):
     @property
     def caseware_cloud_url(self) -> str:
         return str(self.caseware_cloud_base_url).rstrip("/")
+
+    @property
+    def scheduler_api_url(self) -> str:
+        return str(self.scheduler_api_base_url).rstrip("/")
 
     @property
     def accepted_api_keys(self) -> tuple[str, ...]:
