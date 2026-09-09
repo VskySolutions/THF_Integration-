@@ -61,6 +61,16 @@ class PaycorService:
             },
         )
 
+    async def get_all_onboarding_data(
+        self,
+    ) -> tuple[
+        list[dict[str, Any]],
+        list[dict[str, Any]],
+    ]:
+        """Return all employees and work locations."""
+
+        return await self._retrieve_onboarding_data()
+
     async def _retrieve_onboarding_data(
         self,
     ) -> tuple[

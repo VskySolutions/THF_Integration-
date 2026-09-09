@@ -1,16 +1,30 @@
-"""Paycor employee sync routes."""
+"""Paycor employee synchronization routes."""
 
 import logging
-from typing import Any
+from typing import Annotated, Any
+
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    status,
+    Query
+)
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.db.session import get_db
 from app.features.auth.dependencies import require_api_key
-
-from fastapi import APIRouter, Depends, HTTPException, status
-
-from app.features.paycor_integration.services import (
-    MaconomyEmployeeService,
-    MaconomyEmployeeServiceError,
+# from app.features.integration_services import (
+#     #IntegrationServiceIdentifier,
+#     #require_active_integration_service,
+# )
+from app.features.paycor_integration.services.paycor_employee_service import (
     PaycorService,
     PaycorServiceError,
+)
+from app.features.paycor_integration.services.paycor_employee_sync_service import (
+    PaycorEmployeeSyncService,
+    #PaycorEmployeeSyncServiceError,
 )
 
 
@@ -24,13 +38,23 @@ router = APIRouter(
 )
 
 
+DatabaseSession = Annotated[
+    AsyncSession,
+    Depends(get_db),
+]
+
+
 @router.get(
     "/hired-today",
-    response_model=list[dict[str, Any]]
+    response_model=list[dict[str, Any]],
 )
-async def get_hired_employees_today() -> list[dict[str, Any]]:
+async def get_hired_employees_today(
+) -> list[dict[str, Any]]:
     try:
-        return await PaycorService().get_hired_employees_today()
+        return await (
+            PaycorService()
+            .get_hired_employees_today()
+        )
 
     except PaycorServiceError as exc:
         LOGGER.exception(
@@ -46,14 +70,17 @@ async def get_hired_employees_today() -> list[dict[str, Any]]:
             ),
         ) from exc
 
-#get recent hires
+
 @router.get(
     "/recent-hires",
-    response_model=list[dict[str, Any]]
+    response_model=list[dict[str, Any]],
 )
-async def get_recent_hires() -> list[dict[str, Any]]:
+async def get_recent_hires(
+) -> list[dict[str, Any]]:
     try:
-        return await PaycorService().get_recent_hires()
+        return await (
+            PaycorService().get_recent_hires()
+        )
 
     except PaycorServiceError as exc:
         LOGGER.exception(
@@ -74,27 +101,19 @@ async def get_recent_hires() -> list[dict[str, Any]]:
 
 
 
-# ------------------------------Temporarily disabled to prevent accidental employee creation,------------------------------------------------------
-# @router.post(
-#     "/test-maconomy-employee",
-#     response_model=dict[str, Any],
-#     status_code=status.HTTP_201_CREATED,
-# )
-async def test_create_maconomy_employee(
-    employee_data: dict[str, Any],
-) -> dict[str, Any]:
-    try:
-        return await MaconomyEmployeeService().create_employee(
-            employee_data
-        )
+@router.post("/sync-onboarding-employees-with-maconomy")
+async def sync_onboarding_employees_with_maconomy(
+    max_records: int = Query(
+        default=2,
+        ge=1,
+        le=3,
+        description="Temporary testing limit",
+    ),
+    session: AsyncSession = Depends(get_db),
+) -> list[dict[str, Any]]:
+    sync_service = PaycorEmployeeSyncService()
 
-    except MaconomyEmployeeServiceError as exc:
-        LOGGER.exception(
-            "Maconomy employee creation failed: %s",
-            exc,
-        )
-
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=str(exc),
-        ) from exc
+    return await sync_service.sync_onboarding_employees(
+        session,
+        max_records=max_records,
+    )
