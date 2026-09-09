@@ -35,23 +35,28 @@ def map_concur_expense_to_maconomy_expense(
     }
 
 
-{"data":{
-    "entrydate":"2026-08-26",
-    "jobnumber":"10100",
-    "text":"",
-    "currency":"usd",
-    "financevatcode":"",
-    "taskname":"400",
-    "locationname":"AUD",
-    "purposename":"-",
-    "unitpricecurrency":0,
-    "numberof":1,
-    "documentname":"",
-    "favorite":"",
-    "financevatcode2":""
-    ,"financevatcode3":"",
-    "vat1currency":0,
-    "vat2currency":0,
-    "vat3currency":0,
-    "specification4name":"19"
-    },"offset":0,"limit":100,"row":"end"}
+def map_expense_to_summary(
+    expense: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    Map a full SAP Concur expense to a simplified summary with only required fields.
+    
+    Args:
+        expense: Full expense dict from SAP Concur API.
+        
+    Returns:
+        dict with expense_type, transaction_date, payment_type, currency,
+        business_purpose, amount, location, and department fields.
+    """
+    return {
+        "expense_type": str(expense.get("expenseType", {}).get("name", "")),
+        "transaction_date": str(expense.get("transactionDate", "")),
+        "payment_type": str(expense.get("paymentType", {}).get("name", "")),
+        "currency": str(expense.get("transactionAmount", {}).get("currencyCode", "")),
+        "business_purpose": str(expense.get("businessPurpose", "")),
+        "amount": expense.get("transactionAmount", {}).get("value", ""),
+        "vendor": str(expense.get("vendor", {}).get("name", "")),
+        "location": str(expense.get("location", {}).get("name", "")),
+        "department": str(expense.get("department", "")),
+    }
+

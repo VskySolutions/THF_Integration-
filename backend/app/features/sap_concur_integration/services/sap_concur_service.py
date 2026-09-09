@@ -92,7 +92,7 @@ class SAPConcurService:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 token = await self._get_token_from_refresh_token(client)
                 response = await client.get(
-                    f"https://us2.api.concursolutions.com/expensereports/v4/users/{user_id}/context/{context_type}/{report_id}/expenses",
+                    f"https://us2.api.concursolutions.com/expensereports/v4/users/{user_id}/context/{context_type}/reports/{report_id}/expenses",
                     headers={
                         "Authorization": f"Bearer {token}",
                         "Content-Type": "application/json",
@@ -123,13 +123,13 @@ class SAPConcurService:
             )
 
         for expense in expenses:
-            expense_id = expense.get("ExpenseID")
-            amount = expense.get("Amount")
+            expense_id = expense.get("expenseId")
+            # amount = expense.get("Amount")
             if (
                 not isinstance(expense_id, str)
                 or not expense_id.strip()
-                or not isinstance(amount, (int, float))
-                or isinstance(amount, bool)
+                # or not isinstance(amount, (int, float))
+                # or isinstance(amount, bool)
             ):
                 raise SAPConcurServiceError(
                     "Invalid Concur expenses response"
@@ -273,6 +273,65 @@ class SAPConcurService:
                 raise SAPConcurServiceError(
                     "Invalid Concur expense reports response"
                 )
+
+        return items
+
+
+    # Get expense reports by email ID from SAP Concur
+    async def get_expense_reports_by_email_id_from_sap_concur(
+        self,
+        email_id: str,
+    ) -> list[dict[str, Any]]:
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                return await self._get_expense_reports_by_email_id(
+                    client,
+                    email_id,
+                )
+        except httpx.HTTPError as exc:
+            raise SAPConcurServiceError("SAP Concur request failed") from exc
+
+
+    async def _get_expense_reports_by_email_id(
+        self,
+        client: httpx.AsyncClient,
+        email_id: str,
+    ) -> list[dict[str, Any]]:
+        """
+        Fetch Concur expense reports for a specific user by Email ID.
+        """
+        print(f"Fetching expense reports for email_id: {email_id}")
+
+        token = await self._get_token_from_refresh_token(client)
+        print(f"Using token to fetch reports for user: {email_id}")
+        url = f"https://us.api.concursolutions.com/api/v3.0/expense/reports"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Accept": "application/json"
+        }
+        params = {
+            "user": email_id,
+            "limit": 100,
+        }
+
+        response = await client.get(url, headers=headers, params=params)
+        response.raise_for_status()
+
+        try:
+            payload = response.json()
+            items = payload["Items"]
+        except (KeyError, TypeError, ValueError) as exc:
+            raise SAPConcurServiceError(
+                "Invalid Concur expense reports response"
+            ) from exc
+
+        if not isinstance(items, list) or any(
+            not isinstance(item, dict) for item in items
+        ):
+            raise SAPConcurServiceError(
+                "Invalid Concur expense reports response"
+            )
 
         return items
 

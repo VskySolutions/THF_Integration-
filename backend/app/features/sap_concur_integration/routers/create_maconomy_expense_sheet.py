@@ -9,6 +9,11 @@ from app.features.sap_concur_integration.constants import (
 from app.db.session import get_db
 from app.features.auth.dependencies import require_api_key
 from app.features.sap_concur_integration.services.sap_concur_service import SAPConcurService
+from app.features.sap_concur_integration.schemas.sap_concur import ExpenseReportEmailRequest
+from app.features.sap_concur_integration.mappers import (
+    map_expense_report_to_summary,
+    map_expense_to_summary,
+)
 from app.features.sap_concur_integration.services import (
     MaconomyService,
     MaconomyServiceError,
@@ -32,6 +37,22 @@ async def sap_concur():
     return {
         "message": "SAP Concur Integration"
     }
+
+@router.post(
+    "/get-employee-from-maconomy",
+    response_model=list[dict[str, Any]],
+)
+async def get_employee(
+) -> list[dict[str, Any]]:
+    try:
+        expense_reports = await MaconomyService().get_all_employees_from_maconomy()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to fetch expense reports from SAP Concur: {str(exc)}",
+        ) from exc
+
+    return expense_reports
 
 
 @router.post(
@@ -98,6 +119,83 @@ async def sync_todays_created_sap_concur_expense_reports_with_maconomy(
     return results
 
 
+@router.post(
+    "/get-expense-reports-by-email",
+    response_model=list[dict[str, Any]],
+)
+async def get_expense_reports_by_email(
+    request: ExpenseReportEmailRequest,
+) -> list[dict[str, Any]]:
+    """
+    Retrieve mapped SAP Concur expense report summaries and expense summaries for a given Email ID.
+    
+    Flow: Email ID -> Expense Report IDs -> SAP Concur User ID -> Mapped Report + Expense Summaries
+    """
+    email_id = request.email_id
+    detailed_reports: list[dict[str, Any]] = []
+
+    # Step 1: Get expense report IDs using Email ID
+    try:
+        expense_reports = await SAPConcurService().get_expense_reports_by_email_id_from_sap_concur(email_id)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to fetch expense reports from SAP Concur: {str(exc)}",
+        ) from exc
+
+    if not expense_reports:
+        return detailed_reports
+
+    # Step 2: Get SAP Concur User ID using Email ID
+    try:
+        user_id = await SAPConcurService().get_user_id_by_login_id(owner_login_id=email_id)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to fetch SAP Concur User ID: {str(exc)}",
+        ) from exc
+
+    # Step 3: Get detailed report and expenses for each Report ID
+    for report in expense_reports:
+        report_id = report.get("ID")
+        if not report_id:
+            continue
+
+        try:
+            report_detail = await SAPConcurService().get_report_by_id(
+                report_id=report_id,
+                user_id=user_id,
+                context_type="TRAVELER",
+            )
+            if report_detail is None:
+                continue
+        except Exception as exc:
+            print(f"Failed to fetch report {report_id}: {str(exc)}")
+            continue
+
+        # Step 4: Get expenses for this report
+        try:
+            expenses = await SAPConcurService().get_expenses_by_report_id(
+                report_id=report_id,
+                user_id=user_id,
+                context_type="TRAVELER",
+            )
+        except Exception as exc:
+            print(f"Failed to fetch expenses for report {report_id}: {str(exc)}")
+            expenses = []
+
+        # Step 5: Map report and expenses to summaries
+        report_summary = map_expense_report_to_summary(report_detail)
+        expense_summaries = [map_expense_to_summary(exp) for exp in expenses]
+
+        detailed_reports.append({
+            "report": report_summary,
+            "expenses": expense_summaries,
+        })
+
+    return detailed_reports
+
+
 async def create_maconomy_expense_sheet(
     report_id: str,
     login_id: str,
@@ -106,15 +204,14 @@ async def create_maconomy_expense_sheet(
 ) -> dict[str, Any]:
     print("======= create_maconomy_expense_sheet ==========")
     existing_mapping = await expensesheet_expensereport_mapping_service.get_mapping_by_report_id(
-        report_id, session
+        session, report_id
     )
-    existing_mapping = None
 
     # If a mapping already exists for the given report_id, raise an HTTPException with a 400 status code and a message indicating that the mapping already exists.
-    if existing_mapping:
+    if existing_mapping is not None:
         message = (
-            "Maconomy expense sheet record is already created for this Maconomy Job "
-            "number"
+            "Maconomy expense sheet record is already created for this SAP Concur "
+            "expense report"
         )
         integration_status = (
             IntegrationStatus.FAILED
@@ -124,7 +221,7 @@ async def create_maconomy_expense_sheet(
         await integration_log_service.create_log(
             session,
             mapping_id=existing_mapping.id,
-            expense_report_id=report_id,
+            expensesheet_number=report_id,
             status=integration_status,
             action=IntegrationAction.CREATE,
             message=message,
@@ -179,9 +276,11 @@ async def create_maconomy_expense_sheet(
             maconomy_result = await maconomy_service.create_expense_sheet(report_detail)
         except MaconomyServiceError as e:
             message = f"Failed to create Maconomy expense sheet: {str(e)}"
+            if not exc.reconciliation_allowed: 
+                await _raise_expense_sheet_creation_error( session, report_id, exc, )
 
             # try:
-            #     reconciled_expensesheet = await maconomy_service.get_expensesheet_by_expensesheetnumber(report_id)
+            #     reconciled_expensesheet = await maconomy_service.get_expensesheet_by_expensesheetnumber(mapping.maconomy_expensesheet_no)
             # except MaconomyServiceError as e:
             #     await _raise_expense_sheet_creation_error(session, report_id, e)
 
@@ -214,6 +313,46 @@ async def create_maconomy_expense_sheet(
             maconomy_expensesheet_no=maconomy_expense_sheet_result["expense_sheet_number"],
         )
 
+    # else:
+    #     try:
+    #         expense_sheet_detail = ( 
+    #             await maconomy_service.get_expensesheet_by_expensesheetnumber( 
+    #                 mapping.maconomy_expensesheet_no 
+    #             ) 
+    #         )
+    #     except MaconomyServiceError as exc:
+    #         await _save_integration_log(
+    #             session, 
+    #             report_id, 
+    #             IntegrationAction.CREATE, 
+    #             IntegrationStatus.FAILED, str(exc),
+    #         )
+
+    #     if expense_sheet_detail is None: 
+    #         raise MaconomyServiceError( "Mapped Maconomy expense sheet was not found" )
+
+    #     maconomy_expense_sheet_result = { 
+    #         "expense_sheet_number": str( expense_sheet_detail["expensesheetnumber"] ), 
+    #     }
+
+        
+
+
+    await integration_log_service.create_log(
+        session,
+        mapping_id=mapping.id,
+        expensesheet_number=expense_sheet_number,
+        status=IntegrationStatus.SUCCESS,
+        action=IntegrationAction.CREATE,
+        message=(
+            "SAP Concur Expense sheet reconciled and synchronized successfully"
+            if expensesheet_was_reconciled
+            else "SAP Concur Expense Sheet Created successfully"
+            if is_new_expensesheet
+            else "Incomplete SAP Concur create workflow resumed successfully"
+        )
+    )
+
     return maconomy_expense_sheet_result
 
 
@@ -232,8 +371,8 @@ async def _save_integration_log(
     await integration_log_service.create_log(
         session,
         mapping_id=mapping_id,
-        report_id=report_id,
-        # expensesheet_number=report_id
+        # report_id=report_id,
+        expensesheet_number=report_id,
         status=integration_status,
         action=action,
         message=message,
