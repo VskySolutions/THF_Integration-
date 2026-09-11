@@ -1,4 +1,4 @@
-"""Service for creating employees in Maconomy."""
+"""Service for reading and creating employees in Maconomy."""
 
 import base64
 import uuid
@@ -31,12 +31,21 @@ EMPLOYEE_FIELDS = (
     "country",
     "dateemployed",
     "electronicmailaddress",
+    "position",
+    "superioremployee",
     "instancekey",
+    "text10",
 )
+
+EMPLOYEE_LOOKUP_FIELDS = (
+    "employeenumber",
+)
+
+EMPLOYEE_FILTER_PAGE_SIZE = 1000
 
 
 class MaconomyEmployeeServiceError(Exception):
-    pass
+    """Raised when a Maconomy employee operation fails."""
 
 
 class MaconomyEmployeeService:
@@ -46,6 +55,34 @@ class MaconomyEmployeeService:
     ) -> None:
         self.settings = settings or get_settings()
         self.timeout = 60.0
+        self.max_filter_pages = 1000
+
+    async def get_all_employee_numbers(
+        self,
+    ) -> set[str]:
+        """Return all existing Maconomy employee numbers."""
+
+        try:
+            async with httpx.AsyncClient(
+                timeout=self.timeout
+            ) as client:
+                reconnect_token = (
+                    await self._get_reconnect_token(
+                        client
+                    )
+                )
+
+                return await (
+                    self._get_paginated_employee_numbers(
+                        client,
+                        reconnect_token,
+                    )
+                )
+
+        except httpx.HTTPError as exc:
+            raise MaconomyEmployeeServiceError(
+                "Unable to retrieve Maconomy employees"
+            ) from exc
 
     async def create_employee(
         self,
@@ -54,23 +91,32 @@ class MaconomyEmployeeService:
         """Create one Maconomy employee from one Paycor employee."""
 
         try:
-            mapped_data = map_paycor_employee_to_maconomy(
-                paycor_employee_data
+            employee_payload = (
+                map_paycor_employee_to_maconomy(
+                    paycor_employee_data
+                )
             )
+
         except ValueError as exc:
-            raise MaconomyEmployeeServiceError(str(exc)) from exc
+            raise MaconomyEmployeeServiceError(
+                str(exc)
+            ) from exc
+
+        mapped_data = employee_payload.get("data")
 
         if not isinstance(mapped_data, dict):
             raise MaconomyEmployeeServiceError(
-        "Invalid Maconomy employee payload"
+                "Invalid Maconomy employee payload"
             )
 
         try:
             async with httpx.AsyncClient(
                 timeout=self.timeout
             ) as client:
-                reconnect_token = await self._get_reconnect_token(
-                    client
+                reconnect_token = (
+                    await self._get_reconnect_token(
+                        client
+                    )
                 )
 
                 instance_id, concurrency_token = (
@@ -89,8 +135,6 @@ class MaconomyEmployeeService:
                     )
                 )
 
-                # Preserve Maconomy's initialized/default values,
-                # then overwrite them with the Paycor values.
                 employee_data = {
                     **initialized_data,
                     **mapped_data,
@@ -104,9 +148,18 @@ class MaconomyEmployeeService:
                     employee_data,
                 )
 
-        except httpx.HTTPError as exc:
+        except httpx.HTTPStatusError as exc:
+            response_text = exc.response.text.strip()
+
             raise MaconomyEmployeeServiceError(
-                "Maconomy employee request failed"
+                "Maconomy employee request failed "
+                f"with HTTP {exc.response.status_code}: "
+                f"{response_text[:1000]}"
+            ) from exc
+
+        except httpx.RequestError as exc:
+            raise MaconomyEmployeeServiceError(
+                "Unable to connect to Maconomy"
             ) from exc
 
     async def _get_reconnect_token(
@@ -149,12 +202,153 @@ class MaconomyEmployeeService:
             "",
         ).strip()
 
-        if response.status_code != 204 or not reconnect_token:
+        if (
+            response.status_code != 204
+            or not reconnect_token
+        ):
             raise MaconomyEmployeeServiceError(
                 "Maconomy authentication failed"
             )
 
         return reconnect_token
+
+    async def _get_paginated_employee_numbers(
+        self,
+        client: httpx.AsyncClient,
+        reconnect_token: str,
+    ) -> set[str]:
+        url = f"{self._employees_url()}/filter"
+
+        headers = self._container_headers(
+            reconnect_token
+        )
+
+        employee_numbers: set[str] = set()
+        offset = 0
+
+        for _ in range(self.max_filter_pages):
+            payload = {
+                "fields": list(
+                    EMPLOYEE_LOOKUP_FIELDS
+                ),
+                "offset": offset,
+                "limit": EMPLOYEE_FILTER_PAGE_SIZE,
+            }
+
+            response = await client.post(
+                url,
+                headers=headers,
+                json=payload,
+            )
+            response.raise_for_status()
+
+            try:
+                filter_pane = (
+                    response.json()["panes"]["filter"]
+                )
+                meta = filter_pane["meta"]
+                records = filter_pane["records"]
+
+            except (
+                KeyError,
+                TypeError,
+                ValueError,
+            ) as exc:
+                raise MaconomyEmployeeServiceError(
+                    "Invalid Maconomy employee "
+                    "filter response"
+                ) from exc
+
+            if (
+                not isinstance(meta, dict)
+                or not isinstance(records, list)
+            ):
+                raise MaconomyEmployeeServiceError(
+                    "Invalid Maconomy employee "
+                    "filter response"
+                )
+
+            row_total_count = (
+                self._parse_optional_filter_count(
+                    meta.get("rowTotalCount"),
+                    "rowTotalCount",
+                )
+            )
+
+            row_count = self._parse_filter_count(
+                meta.get("rowCount"),
+                "rowCount",
+            )
+
+            row_offset = self._parse_filter_count(
+                meta.get("rowOffset"),
+                "rowOffset",
+            )
+
+            if row_count != len(records):
+                raise MaconomyEmployeeServiceError(
+                    "Maconomy employee filter returned "
+                    "an inconsistent row count"
+                )
+
+            for record in records:
+                if not isinstance(record, dict):
+                    raise MaconomyEmployeeServiceError(
+                        "Invalid Maconomy employee record"
+                    )
+
+                employee_data = record.get("data")
+
+                if not isinstance(employee_data, dict):
+                    raise MaconomyEmployeeServiceError(
+                        "Invalid Maconomy employee record"
+                    )
+
+                employee_number = employee_data.get(
+                    "employeenumber"
+                )
+
+                if employee_number is None:
+                    continue
+
+                normalized_employee_number = str(
+                    employee_number
+                ).strip()
+
+                if normalized_employee_number:
+                    employee_numbers.add(
+                        normalized_employee_number
+                    )
+
+            next_offset = row_offset + row_count
+
+            if (
+                row_total_count is not None
+                and next_offset >= row_total_count
+            ):
+                return employee_numbers
+
+            if row_count == 0:
+                if row_total_count is None:
+                    return employee_numbers
+
+                raise MaconomyEmployeeServiceError(
+                    "Maconomy employee filter ended "
+                    "before all records were returned"
+                )
+
+            if next_offset <= offset:
+                raise MaconomyEmployeeServiceError(
+                    "Maconomy employee filter pagination "
+                    "did not advance"
+                )
+
+            offset = next_offset
+
+        raise MaconomyEmployeeServiceError(
+            "Maconomy employee filter exceeded "
+            "the maximum page limit"
+        )
 
     async def _start_employee_creation(
         self,
@@ -184,15 +378,22 @@ class MaconomyEmployeeService:
             instance_id = response.json()["meta"][
                 "containerInstanceId"
             ]
-            instance_id = str(uuid.UUID(instance_id))
+            instance_id = str(
+                uuid.UUID(instance_id)
+            )
 
-        except (KeyError, TypeError, ValueError) as exc:
+        except (
+            KeyError,
+            TypeError,
+            ValueError,
+        ) as exc:
             raise MaconomyEmployeeServiceError(
-                "Invalid Maconomy employee instance response"
+                "Invalid Maconomy employee "
+                "instance response"
             ) from exc
 
-        concurrency_token = self._get_concurrency_token(
-            response
+        concurrency_token = (
+            self._get_concurrency_token(response)
         )
 
         return instance_id, concurrency_token
@@ -226,31 +427,43 @@ class MaconomyEmployeeService:
         try:
             initialized_data = response.json()["data"]
 
-        except (KeyError, TypeError, ValueError) as exc:
+        except (
+            KeyError,
+            TypeError,
+            ValueError,
+        ) as exc:
             raise MaconomyEmployeeServiceError(
-                "Invalid Maconomy employee initialization response"
+                "Invalid Maconomy employee "
+                "initialization response"
             ) from exc
 
         if not isinstance(initialized_data, dict):
             raise MaconomyEmployeeServiceError(
-                "Invalid Maconomy employee initialization response"
+                "Invalid Maconomy employee "
+                "initialization response"
             )
 
-        instance_key = initialized_data.get("instancekey")
+        instance_key = initialized_data.get(
+            "instancekey"
+        )
 
         if (
             not isinstance(instance_key, str)
             or not instance_key.strip()
         ):
             raise MaconomyEmployeeServiceError(
-                "Maconomy employee instance key is missing"
+                "Maconomy employee instance key "
+                "is missing"
             )
 
-        new_concurrency_token = self._get_concurrency_token(
-            response
+        new_concurrency_token = (
+            self._get_concurrency_token(response)
         )
 
-        return dict(initialized_data), new_concurrency_token
+        return (
+            dict(initialized_data),
+            new_concurrency_token,
+        )
 
     async def _submit_employee_card(
         self,
@@ -288,7 +501,8 @@ class MaconomyEmployeeService:
                 or len(records) != 1
             ):
                 raise MaconomyEmployeeServiceError(
-                    "Unexpected Maconomy employee record count"
+                    "Unexpected Maconomy employee "
+                    "record count"
                 )
 
             created_employee = records[0]["data"]
@@ -296,14 +510,20 @@ class MaconomyEmployeeService:
         except MaconomyEmployeeServiceError:
             raise
 
-        except (KeyError, TypeError, ValueError) as exc:
+        except (
+            KeyError,
+            TypeError,
+            ValueError,
+        ) as exc:
             raise MaconomyEmployeeServiceError(
-                "Invalid Maconomy employee creation response"
+                "Invalid Maconomy employee "
+                "creation response"
             ) from exc
 
         if not isinstance(created_employee, dict):
             raise MaconomyEmployeeServiceError(
-                "Invalid Maconomy employee creation response"
+                "Invalid Maconomy employee "
+                "creation response"
             )
 
         employee_number = created_employee.get(
@@ -315,7 +535,8 @@ class MaconomyEmployeeService:
             or not employee_number.strip()
         ):
             raise MaconomyEmployeeServiceError(
-                "Maconomy did not return an employee number"
+                "Maconomy did not return an "
+                "employee number"
             )
 
         return created_employee
@@ -342,9 +563,14 @@ class MaconomyEmployeeService:
         ).strip()
 
         try:
-            return str(uuid.UUID(concurrency_token))
+            return str(
+                uuid.UUID(concurrency_token)
+            )
 
-        except (TypeError, ValueError) as exc:
+        except (
+            TypeError,
+            ValueError,
+        ) as exc:
             raise MaconomyEmployeeServiceError(
                 "Invalid Maconomy concurrency token"
             ) from exc
@@ -360,3 +586,70 @@ class MaconomyEmployeeService:
                 f"X-Reconnect {reconnect_token}"
             ),
         }
+
+    @staticmethod
+    def _parse_filter_count(
+        value: Any,
+        field_name: str,
+    ) -> int:
+        if isinstance(value, bool):
+            raise MaconomyEmployeeServiceError(
+                "Invalid Maconomy employee filter "
+                f"{field_name}: {value!r}"
+            )
+
+        if isinstance(value, int) and value >= 0:
+            return value
+
+        if isinstance(value, str):
+            normalized_value = value.strip()
+
+            if normalized_value.isdigit():
+                return int(normalized_value)
+
+        raise MaconomyEmployeeServiceError(
+            "Invalid Maconomy employee filter "
+            f"{field_name}: {value!r}"
+        )
+
+
+    @staticmethod
+    def _parse_optional_filter_count(
+        value: Any,
+        field_name: str,
+    ) -> int | None:
+        if value is None:
+            return None
+
+        if isinstance(value, bool):
+            raise MaconomyEmployeeServiceError(
+                "Invalid Maconomy employee filter "
+                f"{field_name}: {value!r}"
+            )
+
+        if isinstance(value, int):
+            if value == -1:
+                return None
+
+            if value >= 0:
+                return value
+
+        if isinstance(value, str):
+            normalized_value = value.strip()
+
+            if normalized_value in {"", "-1"}:
+                return None
+
+            if normalized_value.isdigit():
+                return int(normalized_value)
+
+            if (
+                normalized_value.endswith("+")
+                and normalized_value[:-1].isdigit()
+            ):
+                return None
+
+        raise MaconomyEmployeeServiceError(
+            "Invalid Maconomy employee filter "
+            f"{field_name}: {value!r}"
+        )

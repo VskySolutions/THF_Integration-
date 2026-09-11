@@ -1,6 +1,7 @@
 """Paycor employee synchronization routes."""
 
 import logging
+import uuid
 from typing import Annotated, Any
 
 from fastapi import (
@@ -8,23 +9,20 @@ from fastapi import (
     Depends,
     HTTPException,
     status,
-    Query
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
-from app.features.auth.dependencies import require_api_key
-# from app.features.integration_services import (
-#     #IntegrationServiceIdentifier,
-#     #require_active_integration_service,
-# )
-from app.features.paycor_integration.services.paycor_employee_service import (
-    PaycorService,
-    PaycorServiceError,
+from app.features.auth.dependencies import (
+    require_api_key,
+)
+from app.features.integration_services import (
+    IntegrationServiceIdentifier,
+    require_active_integration_service,
 )
 from app.features.paycor_integration.services.paycor_employee_sync_service import (
     PaycorEmployeeSyncService,
-    #PaycorEmployeeSyncServiceError,
+    PaycorEmployeeSyncServiceError,
 )
 
 
@@ -44,76 +42,83 @@ DatabaseSession = Annotated[
 ]
 
 
-@router.get(
-    "/hired-today",
-    response_model=list[dict[str, Any]],
+@router.post(
+    "/employees/{paycor_employee_id}/sync-with-maconomy",
+    response_model=dict[str, Any],
+    dependencies=[
+        Depends(
+            require_active_integration_service(
+                IntegrationServiceIdentifier
+                .PAYCOR_SYNC_EMPLOYEES
+            )
+        )
+    ],
 )
-async def get_hired_employees_today(
-) -> list[dict[str, Any]]:
+async def sync_employee_with_maconomy(
+    paycor_employee_id: uuid.UUID,
+    session: DatabaseSession,
+) -> dict[str, Any]:
+    """Manually synchronize one Paycor employee."""
+
     try:
         return await (
-            PaycorService()
-            .get_hired_employees_today()
+            PaycorEmployeeSyncService()
+            .sync_employee_by_id(
+                session,
+                paycor_employee_id=(
+                    paycor_employee_id
+                ),
+            )
         )
 
-    except PaycorServiceError as exc:
+    except PaycorEmployeeSyncServiceError as exc:
         LOGGER.exception(
-            "Paycor invited-today retrieval failed: %s",
+            "Manual Paycor employee "
+            "synchronization failed: %s",
             exc,
         )
 
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=(
-                "Unable to retrieve employees "
-                "invited today from Paycor"
+            status_code=(
+                status.HTTP_502_BAD_GATEWAY
             ),
+            detail=str(exc),
         ) from exc
 
 
-@router.get(
-    "/recent-hires",
+@router.post(
+    "/sync-recent-hires-with-maconomy",
     response_model=list[dict[str, Any]],
+    dependencies=[
+        Depends(
+            require_active_integration_service(
+                IntegrationServiceIdentifier
+                .PAYCOR_SYNC_EMPLOYEES
+            )
+        )
+    ],
 )
-async def get_recent_hires(
+async def sync_recent_hires_with_maconomy(
+    session: DatabaseSession,
 ) -> list[dict[str, Any]]:
+    """Synchronize all eligible recent Paycor hires."""
+
     try:
         return await (
-            PaycorService().get_recent_hires()
+            PaycorEmployeeSyncService()
+            .sync_recent_hires(session)
         )
 
-    except PaycorServiceError as exc:
+    except PaycorEmployeeSyncServiceError as exc:
         LOGGER.exception(
-            "Paycor recent-onboarding retrieval "
-            "failed: %s",
+            "Recent Paycor hire "
+            "synchronization failed: %s",
             exc,
         )
 
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=(
-                "Unable to retrieve recently invited "
-                "employees from Paycor"
+            status_code=(
+                status.HTTP_502_BAD_GATEWAY
             ),
+            detail=str(exc),
         ) from exc
-
-
-
-
-
-@router.post("/sync-onboarding-employees-with-maconomy")
-async def sync_onboarding_employees_with_maconomy(
-    max_records: int = Query(
-        default=2,
-        ge=1,
-        le=3,
-        description="Temporary testing limit",
-    ),
-    session: AsyncSession = Depends(get_db),
-) -> list[dict[str, Any]]:
-    sync_service = PaycorEmployeeSyncService()
-
-    return await sync_service.sync_onboarding_employees(
-        session,
-        max_records=max_records,
-    )

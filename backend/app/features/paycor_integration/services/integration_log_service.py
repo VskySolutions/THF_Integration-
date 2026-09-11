@@ -19,17 +19,19 @@ async def create_log(
     session: AsyncSession,
     *,
     mapping_id: uuid.UUID | None,
-    onboarding_employee_id: uuid.UUID,
+    paycor_employee_id: uuid.UUID,
+    paycor_employee_number: str | None,
     legal_entity_id: int,
     status: IntegrationStatus,
     action: IntegrationAction,
-    message: str,
+    message: str | None,
 ) -> PaycorIntegrationLog:
     settings = get_settings()
 
     integration_log = PaycorIntegrationLog(
         paycor_employee_mapping_log_id=mapping_id,
-        paycor_onboarding_employee_id=onboarding_employee_id,
+        paycor_employee_id=paycor_employee_id,
+        paycor_employee_number=paycor_employee_number,
         instance=str(legal_entity_id),
         base_url=settings.paycor_url,
         status=status,
@@ -53,12 +55,15 @@ async def list_logs(
 ) -> list[PaycorIntegrationLog]:
     statement = (
         select(PaycorIntegrationLog)
-        .order_by(PaycorIntegrationLog.created_on_utc.desc())
+        .order_by(
+            PaycorIntegrationLog.created_on_utc.desc()
+        )
         .offset(offset)
         .limit(limit)
     )
 
     result = await session.scalars(statement)
+
     return list(result)
 
 
@@ -66,4 +71,7 @@ async def get_log(
     session: AsyncSession,
     log_id: uuid.UUID,
 ) -> PaycorIntegrationLog | None:
-    return await session.get(PaycorIntegrationLog, log_id)
+    return await session.get(
+        PaycorIntegrationLog,
+        log_id,
+    )

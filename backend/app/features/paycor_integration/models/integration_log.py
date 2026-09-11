@@ -44,8 +44,13 @@ class PaycorIntegrationLog(Base):
         nullable=True,
     )
 
-    paycor_onboarding_employee_id: Mapped[uuid.UUID] = (
-        mapped_column(nullable=False)
+    paycor_employee_id: Mapped[uuid.UUID] = mapped_column(
+        nullable=False,
+    )
+
+    paycor_employee_number: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
     )
 
     instance: Mapped[str] = mapped_column(

@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     DateTime,
-    Enum,
     Integer,
     Text,
     UniqueConstraint,
@@ -19,9 +18,6 @@ from sqlalchemy.orm import (
 )
 
 from app.db.base import Base
-from app.features.paycor_integration.constants import (
-    EmployeeStatus,
-)
 
 if TYPE_CHECKING:
     from app.features.paycor_integration.models.integration_log import (
@@ -35,11 +31,8 @@ class PaycorEmployeeMappingLog(Base):
     __table_args__ = (
         UniqueConstraint(
             "paycor_legal_entity_id",
-            "paycor_onboarding_employee_id",
-            name=(
-                "uq_paycor_mapping_legal_entity_"
-                "onboarding_employee"
-            ),
+            "paycor_employee_id",
+            name="uq_paycor_mapping_legal_entity_employee",
         ),
     )
 
@@ -48,8 +41,8 @@ class PaycorEmployeeMappingLog(Base):
         default=uuid.uuid4,
     )
 
-    paycor_onboarding_employee_id: Mapped[uuid.UUID] = (
-        mapped_column(nullable=False)
+    paycor_employee_id: Mapped[uuid.UUID] = mapped_column(
+        nullable=False,
     )
 
     paycor_legal_entity_id: Mapped[int] = mapped_column(
@@ -57,22 +50,14 @@ class PaycorEmployeeMappingLog(Base):
         nullable=False,
     )
 
-    paycor_employee_number: Mapped[str | None] = mapped_column(
+    paycor_employee_number: Mapped[str] = mapped_column(
         Text,
-        nullable=True,
+        nullable=False,
     )
 
     maconomy_employee_number: Mapped[str | None] = mapped_column(
         Text,
         nullable=True,
-    )
-
-    employee_status: Mapped[EmployeeStatus] = mapped_column(
-        Enum(
-            EmployeeStatus,
-            name="paycor_employee_status",
-        ),
-        nullable=False,
     )
 
     created_on_utc: Mapped[datetime] = mapped_column(

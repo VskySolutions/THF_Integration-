@@ -1,6 +1,7 @@
-"""Service for retrieving onboarding employees from Paycor."""
+"""Service for retrieving employees from Paycor."""
 
-from datetime import date, timedelta
+import asyncio
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urljoin
 
@@ -13,7 +14,7 @@ from app.features.paycor_integration.mappers import (
 
 
 class PaycorServiceError(Exception):
-    pass
+    """Raised when Paycor employee data cannot be retrieved."""
 
 
 class PaycorService:
@@ -25,59 +26,91 @@ class PaycorService:
         self.timeout = 60.0
         self.max_pages = 1000
 
-    async def get_hired_employees_today(
-        self,
-    ) -> list[dict[str, Any]]:
-        """Return onboarding employees invited today."""
-
-        employees, work_locations = (
-            await self._retrieve_onboarding_data()
-        )
-
-        return self._filter_employees_by_invited_dates(
-            employees=employees,
-            work_locations=work_locations,
-            valid_dates={date.today()},
-        )
-
     async def get_recent_hires(
         self,
     ) -> list[dict[str, Any]]:
-        """Return onboarding employees invited today or yesterday."""
+        """Return active Paycor employees hired today or yesterday."""
 
-        employees, work_locations = (
-            await self._retrieve_onboarding_data()
+        employees, departments = (
+            await self._retrieve_employee_data()
         )
 
-        today = date.today()
+        today = datetime.now(timezone.utc).date()
         yesterday = today - timedelta(days=1)
 
-        return self._filter_employees_by_invited_dates(
+        return self._filter_employees_by_hire_dates(
             employees=employees,
-            work_locations=work_locations,
+            departments=departments,
             valid_dates={
                 today,
                 yesterday,
             },
         )
+        
+    async def get_employee_by_id(
+        self,
+        paycor_employee_id: str,
+    ) -> dict[str, Any] | None:
+        """Return one normalized Paycor employee by employee ID."""
 
-    async def get_all_onboarding_data(
+        employees, departments = (
+            await self._retrieve_employee_data()
+        )
+
+        normalized_employee_id = (
+            paycor_employee_id.strip().lower()
+        )
+
+        employee = next(
+            (
+                record
+                for record in employees
+                if str(
+                    record.get("id", "")
+                ).strip().lower()
+                == normalized_employee_id
+            ),
+            None,
+        )
+
+        if employee is None:
+            return None
+
+        departments_by_id = (
+            self._build_department_lookup(
+                departments
+            )
+        )
+
+        try:
+            return map_paycor_employee(
+                employee,
+                departments_by_id=departments_by_id,
+            )
+
+        except ValueError as exc:
+            raise PaycorServiceError(
+                "Unable to map Paycor employee "
+                f"{paycor_employee_id}"
+            ) from exc
+
+    async def get_all_employee_data(
         self,
     ) -> tuple[
         list[dict[str, Any]],
         list[dict[str, Any]],
     ]:
-        """Return all employees and work locations."""
+        """Return all Paycor employees and departments."""
 
-        return await self._retrieve_onboarding_data()
+        return await self._retrieve_employee_data()
 
-    async def _retrieve_onboarding_data(
+    async def _retrieve_employee_data(
         self,
     ) -> tuple[
         list[dict[str, Any]],
         list[dict[str, Any]],
     ]:
-        """Retrieve onboarding employees and work locations."""
+        """Retrieve employees and departments from Paycor."""
 
         try:
             async with httpx.AsyncClient(
@@ -87,25 +120,25 @@ class PaycorService:
                     client
                 )
 
-                employees = (
-                    await self._get_all_onboarding_employees(
+                employees, departments = await asyncio.gather(
+                    self._get_all_employees(
                         client,
                         access_token,
-                    )
-                )
-
-                work_locations = (
-                    await self._get_all_work_locations(
+                    ),
+                    self._get_all_departments(
                         client,
                         access_token,
-                    )
+                    ),
                 )
 
-                return employees, work_locations
+                return employees, departments
+
+        except PaycorServiceError:
+            raise
 
         except httpx.HTTPError as exc:
             raise PaycorServiceError(
-                "Unable to retrieve onboarding data "
+                "Unable to retrieve employee data "
                 "from Paycor"
             ) from exc
 
@@ -174,42 +207,73 @@ class PaycorService:
 
         return access_token.strip()
 
-    async def _get_all_onboarding_employees(
+    def _get_api_headers(
+        self,
+        access_token: str,
+    ) -> dict[str, str]:
+        return {
+            "Accept": "application/json",
+            "Authorization": (
+                f"Bearer {access_token}"
+            ),
+            "Ocp-Apim-Subscription-Key": (
+                self.settings
+                .paycor_subscription_key
+                .get_secret_value()
+            ),
+        }
+
+    async def _get_all_employees(
         self,
         client: httpx.AsyncClient,
         access_token: str,
     ) -> list[dict[str, Any]]:
-        initial_url = (
-            f"{self.settings.paycor_url}"
-            "/v2/legalentities/"
-            f"{self.settings.paycor_legal_entity_id}"
-            "/onboardingemployees"
-        )
+        """Retrieve all active employees for the legal entity."""
 
-        return await self._get_all_paginated_records(
-            client=client,
-            access_token=access_token,
-            initial_url=initial_url,
-            resource_name="employee",
-        )
-
-    async def _get_all_work_locations(
-        self,
-        client: httpx.AsyncClient,
-        access_token: str,
-    ) -> list[dict[str, Any]]:
         initial_url = (
             f"{self.settings.paycor_url}"
             "/v1/legalentities/"
             f"{self.settings.paycor_legal_entity_id}"
-            "/worklocations"
+            "/employees"
+        )
+
+        initial_params = [
+            ("include", "EmploymentDates"),
+            ("include", "Status"),
+            ("include", "Position"),
+            ("include", "WorkLocation"),
+            ("emailType", "Work"),
+            ("statusFilter", "Active"),
+        ]
+
+        return await self._get_all_paginated_records(
+            client=client,
+            access_token=access_token,
+            initial_url=initial_url,
+            initial_params=initial_params,
+            resource_name="employee",
+        )
+
+    async def _get_all_departments(
+        self,
+        client: httpx.AsyncClient,
+        access_token: str,
+    ) -> list[dict[str, Any]]:
+        """Retrieve all departments for the legal entity."""
+
+        initial_url = (
+            f"{self.settings.paycor_url}"
+            "/v1/legalentities/"
+            f"{self.settings.paycor_legal_entity_id}"
+            "/departments"
         )
 
         return await self._get_all_paginated_records(
             client=client,
             access_token=access_token,
             initial_url=initial_url,
-            resource_name="work-location",
+            initial_params=None,
+            resource_name="department",
         )
 
     async def _get_all_paginated_records(
@@ -218,10 +282,21 @@ class PaycorService:
         client: httpx.AsyncClient,
         access_token: str,
         initial_url: str,
+        initial_params: list[
+            tuple[str, str]
+        ] | None,
         resource_name: str,
     ) -> list[dict[str, Any]]:
+        """Retrieve all pages from a Paycor list endpoint."""
+
         url = initial_url
-        params: dict[str, str] | None = None
+
+        params = (
+            list(initial_params)
+            if initial_params
+            else None
+        )
+
         records: list[dict[str, Any]] = []
         seen_cursors: set[str] = set()
 
@@ -235,7 +310,21 @@ class PaycorService:
                 headers=headers,
                 params=params,
             )
-            response.raise_for_status()
+
+            try:
+                response.raise_for_status()
+
+            except httpx.HTTPStatusError as exc:
+                response_text = (
+                    exc.response.text.strip()
+                )
+
+                raise PaycorServiceError(
+                    f"Paycor {resource_name} request "
+                    "failed with HTTP "
+                    f"{exc.response.status_code}: "
+                    f"{response_text[:1000]}"
+                ) from exc
 
             try:
                 response_data = response.json()
@@ -256,13 +345,19 @@ class PaycorService:
                 "records"
             )
 
-            if not isinstance(page_records, list) or any(
+            if not isinstance(page_records, list):
+                raise PaycorServiceError(
+                    f"Invalid Paycor {resource_name} "
+                    "response"
+                )
+
+            if any(
                 not isinstance(record, dict)
                 for record in page_records
             ):
                 raise PaycorServiceError(
                     f"Invalid Paycor {resource_name} "
-                    "response"
+                    "record"
                 )
 
             records.extend(page_records)
@@ -276,6 +371,7 @@ class PaycorService:
                 self._get_next_page_request(
                     response_data=response_data,
                     initial_url=initial_url,
+                    initial_params=initial_params,
                 )
             )
 
@@ -297,11 +393,14 @@ class PaycorService:
         *,
         response_data: dict[str, Any],
         initial_url: str,
+        initial_params: list[tuple[str, str]] | None,
     ) -> tuple[
         str,
-        dict[str, str] | None,
+        list[tuple[str, str]] | None,
         str,
     ]:
+        """Build the request for the next Paycor page."""
+
         additional_results_url = response_data.get(
             "additionalResultsUrl"
         )
@@ -336,13 +435,17 @@ class PaycorService:
                 continuation_token.strip()
             )
 
+            next_params = list(initial_params or [])
+            next_params.append(
+                (
+                    "continuationToken",
+                    normalized_token,
+                )
+            )
+
             return (
                 initial_url,
-                {
-                    "continuationToken": (
-                        normalized_token
-                    )
-                },
+                next_params,
                 f"token:{normalized_token}",
             )
 
@@ -351,58 +454,113 @@ class PaycorService:
             "but no continuation information was provided"
         )
 
-    def _get_api_headers(
-        self,
-        access_token: str,
-    ) -> dict[str, str]:
-        return {
-            "Accept": "application/json",
-            "Authorization": (
-                f"Bearer {access_token}"
-            ),
-            "Ocp-Apim-Subscription-Key": (
-                self.settings
-                .paycor_subscription_key
-                .get_secret_value()
-            ),
-        }
+    @staticmethod
+    def _has_more_results(
+        response_data: dict[str, Any],
+    ) -> bool:
+        """Return whether Paycor indicates another page exists."""
 
-    def _filter_employees_by_invited_dates(
+        value = response_data.get(
+            "hasMoreResults"
+        )
+
+        if isinstance(value, bool):
+            return value
+
+        if isinstance(value, str):
+            return value.strip().lower() == "true"
+
+        return False
+
+    def _filter_employees_by_hire_dates(
         self,
         *,
         employees: list[dict[str, Any]],
-        work_locations: list[dict[str, Any]],
+        departments: list[dict[str, Any]],
         valid_dates: set[date],
     ) -> list[dict[str, Any]]:
+        """Filter and map employees using their hire dates."""
+
         filtered_employees: list[dict[str, Any]] = []
 
+        departments_by_id = (
+            self._build_department_lookup(
+                departments
+            )
+        )
+
         for employee in employees:
-            invited_date = self._normalize_date(
-                employee.get("invitedDate")
+            employment_date_data = employee.get(
+                "employmentDateData"
             )
 
-            if invited_date not in valid_dates:
+            if not isinstance(
+                employment_date_data,
+                dict,
+            ):
+                continue
+
+            hire_date = self._normalize_date(
+                employment_date_data.get(
+                    "hireDate"
+                )
+            )
+
+            if hire_date not in valid_dates:
                 continue
 
             try:
-                filtered_employees.append(
-                    map_paycor_employee(
-                        employee,
-                        work_locations=work_locations,
-                    )
+                mapped_employee = map_paycor_employee(
+                    employee,
+                    departments_by_id=(
+                        departments_by_id
+                    ),
                 )
 
             except ValueError as exc:
+                employee_id = employee.get("id")
+
                 raise PaycorServiceError(
-                    "Unable to map Paycor employee"
+                    "Unable to map Paycor employee "
+                    f"{employee_id}"
                 ) from exc
 
+            filtered_employees.append(
+                mapped_employee
+            )
+
         return filtered_employees
+
+    @staticmethod
+    def _build_department_lookup(
+        departments: list[dict[str, Any]],
+    ) -> dict[str, dict[str, Any]]:
+        """Build a department lookup using Paycor department ID."""
+
+        departments_by_id: dict[
+            str,
+            dict[str, Any],
+        ] = {}
+
+        for department in departments:
+            department_id = department.get("id")
+
+            if (
+                isinstance(department_id, str)
+                and department_id.strip()
+            ):
+                departments_by_id[
+                    department_id.strip()
+                ] = department
+
+        return departments_by_id
 
     @staticmethod
     def _normalize_date(
         value: Any,
     ) -> date | None:
+        """Convert a Paycor datetime string into a date."""
+
         if not isinstance(value, str):
             return None
 
@@ -418,19 +576,3 @@ class PaycorService:
 
         except ValueError:
             return None
-
-    @staticmethod
-    def _has_more_results(
-        response_data: dict[str, Any],
-    ) -> bool:
-        value = response_data.get(
-            "hasMoreResults"
-        )
-
-        if isinstance(value, bool):
-            return value
-
-        if isinstance(value, str):
-            return value.strip().lower() == "true"
-
-        return False

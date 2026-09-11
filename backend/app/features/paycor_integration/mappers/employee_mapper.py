@@ -1,30 +1,40 @@
+"""Map Paycor employee records to integration and Maconomy data."""
+
+import uuid
 from datetime import date
 from typing import Any
 
-from app.features.paycor_integration.constants import (
-    EmployeeStatus,
-)
 
-
-# Add other countries only after confirmation.
+# Add other country mappings only after confirmation.
 PAYCOR_TO_MACONOMY_COUNTRY = {
     "USA": "united_states_of_america",
 }
 
 
-def _normalize_optional_date(
+def _normalize_optional_string(
     value: Any,
-    field_name: str,
 ) -> str | None:
-    if value is None:
+    if not isinstance(value, str):
         return None
 
-    if not isinstance(value, str):
+    normalized_value = value.strip()
+    return normalized_value or None
+
+
+def _normalize_required_string(
+    value: Any,
+    field_name: str,
+) -> str:
+    normalized_value = _normalize_optional_string(
+        value
+    )
+
+    if normalized_value is None:
         raise ValueError(
-            f"Paycor {field_name} must be a string or null"
+            f"Paycor {field_name} is required"
         )
 
-    return value.strip() or None
+    return normalized_value
 
 
 def _parse_paycor_date(
@@ -35,166 +45,300 @@ def _parse_paycor_date(
         return date.fromisoformat(
             value.strip()[:10]
         )
+
     except ValueError as exc:
         raise ValueError(
             f"Paycor {field_name} is invalid"
         ) from exc
 
 
-def get_country_by_work_location_id(
-    work_location_id: Any,
-    work_locations: list[dict[str, Any]],
-) -> str | None:
-    if (
-        not isinstance(work_location_id, str)
-        or not work_location_id.strip()
-    ):
-        return None
-
-    normalized_location_id = (
-        work_location_id.strip()
+def _parse_employee_id(
+    value: Any,
+) -> str:
+    employee_id = _normalize_required_string(
+        value,
+        "employee ID",
     )
 
-    for work_location in work_locations:
-        location_id = work_location.get("id")
+    try:
+        return str(uuid.UUID(employee_id))
 
-        if (
-            not isinstance(location_id, str)
-            or location_id.strip()
-            != normalized_location_id
-        ):
-            continue
+    except ValueError as exc:
+        raise ValueError(
+            "Paycor employee ID must be a valid UUID"
+        ) from exc
 
-        addresses = work_location.get("addresses")
 
-        if not isinstance(addresses, list):
-            return None
+def _parse_legal_entity_id(
+    value: Any,
+) -> int:
+    if isinstance(value, bool):
+        raise ValueError(
+            "Paycor legal entity ID is invalid"
+        )
 
-        countries: set[str] = set()
+    try:
+        legal_entity_id = int(
+            str(value).strip()
+        )
 
-        for address in addresses:
-            if not isinstance(address, dict):
-                continue
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "Paycor legal entity ID must be an integer"
+        ) from exc
 
-            country = address.get("country")
+    if legal_entity_id <= 0:
+        raise ValueError(
+            "Paycor legal entity ID must be positive"
+        )
 
-            if (
-                isinstance(country, str)
-                and country.strip()
-            ):
-                countries.add(
-                    country.strip().upper()
-                )
+    return legal_entity_id
 
-        if len(countries) == 1:
-            return next(iter(countries))
 
-        return None
+def _build_full_name(
+    employee_data: dict[str, Any],
+) -> str:
+    name_parts = [
+        _normalize_optional_string(
+            employee_data.get("firstName")
+        ),
+        _normalize_optional_string(
+            employee_data.get("middleName")
+        ),
+        _normalize_optional_string(
+            employee_data.get("lastName")
+        ),
+    ]
 
-    return None
+    full_name = " ".join(
+        part
+        for part in name_parts
+        if part is not None
+    )
+
+    if not full_name:
+        raise ValueError(
+            "Paycor employee name is required"
+        )
+
+    return full_name
 
 
 def map_paycor_employee(
     employee_data: dict[str, Any],
     *,
-    work_locations: list[dict[str, Any]],
+    departments_by_id: dict[
+        str,
+        dict[str, Any],
+    ],
 ) -> dict[str, Any]:
-    onboarding_employee_id = employee_data.get(
-        "onboardingEmployeeId"
-    )
-    employee_number = employee_data.get(
-        "employeeNumber"
-    )
-    legal_entity_id = employee_data.get(
-        "legalEntityId"
-    )
-    work_location_id = employee_data.get(
-        "workLocationId"
+    """Map one Paycor employee into normalized integration data."""
+
+    paycor_employee_id = _parse_employee_id(
+        employee_data.get("id")
     )
 
-    hire_date = _normalize_optional_date(
-        employee_data.get("hireDate"),
-        "hireDate",
-    )
-    invited_date = _normalize_optional_date(
-        employee_data.get("invitedDate"),
-        "invitedDate",
+    employee_number = _normalize_required_string(
+        employee_data.get("employeeNumber"),
+        "employee number",
     )
 
-    if (
-        not isinstance(onboarding_employee_id, str)
-        or not onboarding_employee_id.strip()
+    full_name = _build_full_name(
+        employee_data
+    )
+
+    legal_entity_data = employee_data.get(
+        "legalEntity"
+    )
+
+    if not isinstance(legal_entity_data, dict):
+        raise ValueError(
+            "Paycor legal entity data is required"
+        )
+
+    legal_entity_id = _parse_legal_entity_id(
+        legal_entity_data.get("id")
+    )
+
+    employment_date_data = employee_data.get(
+        "employmentDateData"
+    )
+
+    if not isinstance(
+        employment_date_data,
+        dict,
     ):
         raise ValueError(
-            "Paycor onboarding employee ID is required"
+            "Paycor employment-date data is required"
         )
 
-    if (
-        not isinstance(legal_entity_id, int)
-        or isinstance(legal_entity_id, bool)
-    ):
-        raise ValueError(
-            "Paycor legal entity ID must be an integer"
-        )
+    hire_date_value = _normalize_required_string(
+        employment_date_data.get("hireDate"),
+        "hire date",
+    )
 
-    parsed_hire_date = (
-        _parse_paycor_date(
-            hire_date,
-            "hireDate",
+    hire_date = _parse_paycor_date(
+        hire_date_value,
+        "hire date",
+    )
+
+    email_data = employee_data.get("email")
+
+    email_address = (
+        _normalize_optional_string(
+            email_data.get("emailAddress")
         )
-        if hire_date is not None
+        if isinstance(email_data, dict)
         else None
     )
+    # email_address= f"{email_address}.test"     #testing
+    
 
-    employee_status = (
-        EmployeeStatus.HIRED.value
-        if (
-            parsed_hire_date is not None
-            and parsed_hire_date <= date.today()
+    position_data = employee_data.get(
+        "positionData"
+    )
+
+    if not isinstance(position_data, dict):
+        raise ValueError(
+            "Paycor position data is required"
         )
-        else EmployeeStatus.INVITED.value
+
+    job_title = _normalize_required_string(
+        position_data.get("jobTitle"),
+        "job title",
+    )
+
+    job_code = _normalize_optional_string(
+        position_data.get("jobCode")
+    )
+
+    manager_data = position_data.get(
+        "manager"
+    )
+
+    manager_employee_id: str | None = None
+    manager_employee_number: str | None = None
+
+    if isinstance(manager_data, dict):
+        manager_employee_id = (
+            _normalize_optional_string(
+                manager_data.get("id")
+            )
+        )
+
+        manager_employee_number = (
+            _normalize_optional_string(
+                manager_data.get(
+                    "employeeNumber"
+                )
+            )
+        )
+
+    work_location_data = employee_data.get(
+        "workLocation"
+    )
+
+    if not isinstance(
+        work_location_data,
+        dict,
+    ):
+        raise ValueError(
+            "Paycor work-location data is required"
+        )
+
+    work_location_id = (
+        _normalize_required_string(
+            work_location_data.get("id"),
+            "work-location ID",
+        )
+    )
+
+    work_location_name = (
+        _normalize_required_string(
+            work_location_data.get("name"),
+            "work-location name",
+        )
     )
 
     work_location_country = (
-        get_country_by_work_location_id(
-            work_location_id,
-            work_locations,
+        _normalize_required_string(
+            work_location_data.get("country"),
+            "work-location country",
+        )
+    )
+
+    department_reference = employee_data.get(
+        "department"
+    )
+
+    if not isinstance(
+        department_reference,
+        dict,
+    ):
+        raise ValueError(
+            "Paycor department data is required"
+        )
+
+    department_id = _normalize_required_string(
+        department_reference.get("id"),
+        "department ID",
+    )
+
+    department_data = departments_by_id.get(
+        department_id
+    )
+
+    if department_data is None:
+        raise ValueError(
+            "Paycor department was not found: "
+            f"{department_id}"
+        )
+
+    department_name = (
+        _normalize_required_string(
+            department_data.get("description"),
+            "department description",
+        )
+    )
+
+    department_number = (
+        _normalize_required_string(
+            department_data.get("code"),
+            "department code",
         )
     )
 
     return {
-        "onboardingEmployeeId": (
-            onboarding_employee_id.strip()
-        ),
+        "paycorEmployeeId": paycor_employee_id,
         "employeeNumber": employee_number,
         "legalEntityId": legal_entity_id,
-        "firstName": employee_data.get(
-            "firstName"
+        "firstName": _normalize_optional_string(
+            employee_data.get("firstName")
         ),
-        "lastName": employee_data.get(
-            "lastName"
+        "middleName": _normalize_optional_string(
+            employee_data.get("middleName")
         ),
-        "fullName": employee_data.get(
-            "fullName"
+        "lastName": _normalize_optional_string(
+            employee_data.get("lastName")
         ),
-        "emailAddress": employee_data.get(
-            "emailAddress"
-        ),
-        "invitedDate": invited_date,
-        "hireDate": hire_date,
-        "employeeStatus": employee_status,
-        "workLocation": employee_data.get(
-            "workLocation"
-        ),
+        "fullName": full_name,
+        "emailAddress": email_address,
+        "hireDate": hire_date.isoformat(),
+        "position": job_title,
+        "jobCode": job_code,
+        "departmentId": department_id,
+        "department": department_name,
+        "departmentNumber": department_number,
         "workLocationId": work_location_id,
+        "workLocationName": work_location_name,
         "workLocationCountry": (
             work_location_country
         ),
-        "manager": employee_data.get(
-            "manager"
+        "managerEmployeeId": (
+            manager_employee_id
         ),
-        "managerId": employee_data.get(
-            "managerId"
+        "managerEmployeeNumber": (
+            manager_employee_number
         ),
     }
 
@@ -202,50 +346,43 @@ def map_paycor_employee(
 def map_paycor_employee_to_maconomy(
     employee_data: dict[str, Any],
 ) -> dict[str, Any]:
-    full_name = employee_data.get(
-        "fullName"
+    """Map normalized Paycor data into a Maconomy payload."""
+
+    employee_number = _normalize_required_string(
+        employee_data.get("employeeNumber"),
+        "employee number",
     )
-    invited_date = employee_data.get(
-        "invitedDate"
-    )
-    email_address = employee_data.get(
-        "emailAddress"
-    )
-    work_location_country = employee_data.get(
-        "workLocationCountry"
+    
+    paycor_employee_id = _parse_employee_id(
+        employee_data.get("paycorEmployeeId")
+)
+
+    full_name = _normalize_required_string(
+        employee_data.get("fullName"),
+        "employee name",
     )
 
-    if (
-        not isinstance(full_name, str)
-        or not full_name.strip()
-    ):
-        raise ValueError(
-            "Paycor employee full name is required"
-        )
-
-    if (
-        not isinstance(invited_date, str)
-        or not invited_date.strip()
-    ):
-        raise ValueError(
-            "Paycor invited date is required"
-        )
-
-    if (
-        not isinstance(work_location_country, str)
-        or not work_location_country.strip()
-    ):
-        raise ValueError(
-            "Paycor work-location country is required"
-        )
+    hire_date_value = _normalize_required_string(
+        employee_data.get("hireDate"),
+        "hire date",
+    )
 
     date_employed = _parse_paycor_date(
-        invited_date,
-        "invitedDate",
+        hire_date_value,
+        "hire date",
+    )
+
+    work_location_country = (
+        _normalize_required_string(
+            employee_data.get(
+                "workLocationCountry"
+            ),
+            "work-location country",
+        )
     )
 
     paycor_country = (
-        work_location_country.strip().upper()
+        work_location_country.upper()
     )
 
     maconomy_country = (
@@ -260,18 +397,44 @@ def map_paycor_employee_to_maconomy(
             f"{work_location_country}"
         )
 
+    position = _normalize_required_string(
+        employee_data.get("position"),
+        "position",
+    )
+
+    
+
+    email_address = _normalize_optional_string(
+        employee_data.get("emailAddress")
+    )
+
+    manager_employee_number = (
+        _normalize_optional_string(
+            employee_data.get(
+                "managerEmployeeNumber"
+            )
+        )
+    )
+
     maconomy_data: dict[str, Any] = {
-        "name1": full_name.strip(),
-        "dateemployed": date_employed.isoformat(),
+        "employeenumber": employee_number,
+        "name1": full_name,
+        "dateemployed": (date_employed.isoformat()),
         "country": maconomy_country,
+        "position": position,
+        "text10": paycor_employee_id,
     }
 
-    if (
-        isinstance(email_address, str)
-        and email_address.strip()
-    ):
+    if email_address is not None:
         maconomy_data[
             "electronicmailaddress"
-        ] = email_address.strip()
+        ] = email_address
 
-    return maconomy_data
+    if manager_employee_number is not None:
+        maconomy_data[
+            "superioremployee"
+        ] = manager_employee_number
+
+    return {
+    "data": maconomy_data,
+}
