@@ -10,11 +10,19 @@ from app.features.caseware_cloud_intergration.routers import (
     integration_log_router,
     update_caseware_router,
 )
-from app.features.sap_concur_integration.routers.create_maconomy_expense_sheet import router as sap_concur_router    
+from app.features.sap_concur_integration.routers.create_maconomy_expense_sheet import (
+    router as sap_concur_router,
+)
 from app.features.exception_logs import install_exception_logging
 from app.features.schedular_services import SchedulerService
+from app.features.xcm_cch_axcess_integration.routers import (
+    pending_cch_task_mapping_router,
+)
 
-from app.features.cch_axcess_integration.routers.create_cch_axcess_router import router as cch_axcess_router
+from app.features.cch_axcess_integration.routers.create_cch_axcess_router import (
+    router as cch_axcess_router,
+)
+
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
@@ -54,3 +62,4 @@ app.include_router(integration_log_router, prefix=settings.api_v1_prefix)
 app.include_router(sap_concur_router, prefix=settings.api_v1_prefix)
 
 app.include_router(cch_axcess_router, prefix=settings.api_v1_prefix)
+app.include_router(pending_cch_task_mapping_router, prefix=settings.api_v1_prefix)
