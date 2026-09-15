@@ -12,10 +12,12 @@ async def create_mapping(
     session: AsyncSession,
     maconomy_expensesheet_no: str,
     sap_concur_expensereport_id: str,
+    maconomy_employee_number: str | None = None,
 ) -> SAPConcurExpensesheetExpenseReportMapping:
     mapping = SAPConcurExpensesheetExpenseReportMapping(
         maconomy_expensesheet_no=maconomy_expensesheet_no,
         sap_concur_expensereport_id=sap_concur_expensereport_id,
+        maconomy_employee_number=maconomy_employee_number,
     )
     session.add(mapping)
     await session.commit()
@@ -51,6 +53,18 @@ async def get_mapping_by_report_id(
     return await session.scalar(statement)
 
 
+async def update_mapping_metadata(
+    session: AsyncSession,
+    mapping_id: uuid.UUID,
+    expense_line_metadata: dict,
+) -> SAPConcurExpensesheetExpenseReportMapping | None:
+    mapping = await session.get(SAPConcurExpensesheetExpenseReportMapping, mapping_id)
+    if mapping is None:
+        return None
+    mapping.expense_line_metadata = expense_line_metadata
+    await session.commit()
+    await session.refresh(mapping)
+    return mapping
 
 
 # {"panes":{"card":{"fields":["amountbase","approvalgroupdatesubmittedvar","approvalgroupinstancekey","approvalgroupsubmittedbyvar","approvalhierarchyenabledheadervar","approvalhierarchyenabledlinesvar","approved","basecurrencyvar","cardrelationtitlevar","copyfromexpensesheetnumber","currency","description","documentarchivedescriptionvar","documentarchivelinecountvar","documentarchivenumber","duplicatedexpensesheetnumbervar","employeecompanynamevar","employeecompanynumbervar","employeeelectronicmailaddressvar","employeename","employeenumber","employeepositionvar","employeetelephonevar","exchangerate","expensesheetnumber","fromdate","headerapprovaldatevar","headerapprovedorrejectedbyvar","headercurrentapprovalstatusdescriptionvar","headercustomernamevar","headercustomernumbervar","headerremarkvar","jobname","jobnumber","nextheaderapproverdescriptionvar","nextheaderapproveremployeenumbervar","nextheaderapprovernamevar","numberoflinesmissingapprovalvar","numberofrejectedlinesvar","projectmanagernamevar","projectmanagernumbervar","submitted","tablerelationtitlevar","todate","vendorsettlementstatusvar","workflowstatusvar"]},"table":{"fields":["amountcurrency","currency","customernamevar","customernumbervar","documentname","entrydate","favorite","financevatcode","financevatcode2","financevatcode3","instancekey","jobnamevar","jobnumber","justificationcompletevar","justificationrequiredvar","lineapprovaldatevar","lineapprovedorrejectedbyvar","linecurrentapprovalstatusvar","linecurrentstatusvar","linenumber","lineremarkvar","nextlineapproverdescriptionvar","nextlineapproveremployeenumbervar","nextlineapprovernamevar","numberof","purposedescriptionvar","purposename","specification4name","submitted","unitpricecurrency","vat1currency","vat2currency","vat3currency"]}}}

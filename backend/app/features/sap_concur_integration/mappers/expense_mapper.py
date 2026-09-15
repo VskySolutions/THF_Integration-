@@ -1,35 +1,44 @@
 from typing import Any
-
+from decimal import Decimal
 
 def map_concur_expense_to_maconomy_expense(
     expense_data: dict[str, Any],
+    expense_sheet_number: str | None = None,
+    employee_number: str | None = None,
 ) -> dict[str, Any]:
-    expense_id = expense_data.get("expenseid")
+    expense_id = expense_data.get("expenseId")
     expense_type = expense_data.get("expenseType", {}).get("name")
     transaction_date = expense_data.get("transactionDate")
     business_purpose = expense_data.get("businessPurpose")
-    amount = expense_data.get("transactionAmount")
-    currency = expense_data.get("currency")
+    amount = expense_data.get("transactionAmount", {}).get("value")
+    print("amount:",amount)
+    currency = expense_data.get("transactionAmount", {}).get("currencyCode")
     location = expense_data.get("location", {}).get("name")
+
     department = expense_data.get("location") # Form Field
     
     payment_type = expense_data.get("paymentType").get("name")
     vendor_description = expense_data.get("vendor")
     # client_engagement = expense_data.get("jobnumber")
     travel_reason = expense_data.get("travelreason")
+    
 
     if not expense_id:
         raise ValueError("SAP Concur expense_id are required")
 
     return {
         "data":{
-            "purposename": str(business_purpose),
-            "text": str(expense_type), #taskname = Number of the expense type
-            "specification4name": str(location),
+            # "purposename": str(business_purpose),
+            "text": str(expense_type),
+            # "specification4name": str(location),
             "entrydate": str(transaction_date),
-            "locationname": str(department),
-            "currency": str(currency),
-            "amountbase": str(amount),
+            # "locationname": str(department),
+            # "currency": str(currency),
+            "amountbase": float(amount),
+            "expensesheetlinetext10": str(expense_id) if expense_id else "",
+            "currency": "USD", 
+            # "linenumber": ""
+            
         },
         "offset":0,"limit":100,"row":"end"    
     }
@@ -55,7 +64,7 @@ def map_expense_to_summary(
         "currency": str(expense.get("transactionAmount", {}).get("currencyCode", "")),
         "business_purpose": str(expense.get("businessPurpose", "")),
         "amount": expense.get("transactionAmount", {}).get("value", ""),
-        "vendor": str(expense.get("vendor", {}).get("name", "")),
+        "vendor": str(expense.get("vendor", {})),
         "location": str(expense.get("location", {}).get("name", "")),
         "department": str(expense.get("department", "")),
     }

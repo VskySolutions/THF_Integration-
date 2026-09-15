@@ -31,6 +31,7 @@ class SAPConcurIntegrationLog(Base):
     instance: Mapped[str] = mapped_column(Text, nullable=False)
     base_url: Mapped[str] = mapped_column(Text, nullable=False)
     username: Mapped[str] = mapped_column(Text, nullable=False)
+    employeeemail: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[IntegrationStatus] = mapped_column(
         Enum(IntegrationStatus, name="sap_concur_integration_status"), nullable=False
     )

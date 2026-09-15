@@ -21,6 +21,7 @@ async def create_log(
     status: IntegrationStatus,
     action: IntegrationAction,
     message: str,
+    employeeemail: str | None = None,
 ) -> SAPConcurIntegrationLog:
     settings = get_settings()
     integration_log = SAPConcurIntegrationLog(
@@ -28,6 +29,7 @@ async def create_log(
         instance=settings.maconomy_shortname,
         base_url=settings.maconomy_url,
         username=settings.maconomy_username,
+        employeeemail=employeeemail,
         status=status,
         message=message,
         action=action,

@@ -3,15 +3,15 @@ from typing import Any
 
 def map_concur_expense_report_to_maconomy_expensesheet(
     expense_sheet_data: dict[str, Any],
+    employee_number: str | None = None,
 ) -> dict[str, Any]:
-    print("In mapper")
+    print("In mapper:", employee_number)
     
 
     report_name = expense_sheet_data.get("name")
     report_id = expense_sheet_data.get("reportId")
     business_purpose = expense_sheet_data.get("businessPurpose")
     approval_status = expense_sheet_data.get("approvalStatus")
-    # print("report_name", report_name, "\n business_purpose:", business_purpose, "\n approval status:", approval_status)
 
     if not report_id or not report_name:
         raise ValueError("SAP Concur reportId and reportname are required")
@@ -19,6 +19,9 @@ def map_concur_expense_report_to_maconomy_expensesheet(
     return {
         "data": {
             "description": str(report_name),
+            "expensesheettext5": str(report_id),
+            "employeenumber": str(employee_number) if employee_number else "",
+            
             # "expensesheetnumber": str(report_id),
             # "purposedescriptionvar": str(business_purpose),
             # "approvalstatus": str(approval_status),
@@ -41,4 +44,6 @@ def map_expense_report_to_summary(
     """
     return {
         "description": str(expense_report.get("name", "")),
+        "paymentStatus": str(expense_report.get("paymentStatus", "")),
+
     }

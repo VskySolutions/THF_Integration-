@@ -35,11 +35,13 @@ class MaconomyService:
 
 
     async def create_expense_sheet(
-        self, expense_sheet_data: dict[str, Any]
+        self, expense_sheet_data: dict[str, Any], employee_number: str | None = None
     ) -> dict[str, Any]:
         print("=========== create_expense_sheet =============")
         try:
-            expensesheet_data = map_concur_expense_report_to_maconomy_expensesheet(expense_sheet_data)
+            expensesheet_data = map_concur_expense_report_to_maconomy_expensesheet(
+                expense_sheet_data, employee_number=employee_number
+            )
         except ValueError as exc:
             raise MaconomyServiceError(str(exc)) from exc
 
@@ -70,8 +72,8 @@ class MaconomyService:
 
                 try:
                     payload = response.json()
-                except (KeyError, TypeError, ValueError) as exc:
-                    raise MaconomyServiceError("Invalid Maconomy expense sheet response") from exc
+                except (KeyError, TypeError, ValueError) as json_exc:
+                    raise MaconomyServiceError("Invalid Maconomy expense sheet response") from json_exc
         
                 if not isinstance(payload, dict):
                     raise MaconomyServiceError(
@@ -212,7 +214,7 @@ class MaconomyService:
         ) -> tuple[str, str]:
             url = f"{self._expense_sheet_url()}/instances"
 
-            payload = {"panes":{"card":{"fields":["description"]},"table":{"fields":[]}}}
+            payload = {"panes":{"card":{"fields":["description","employeenumber","expensesheettext5"]},"table":{"fields":[]}}}
 
             print("======= _retrieve_expense_sheet_instance ==========")
             response = await client.post(
@@ -434,7 +436,7 @@ class MaconomyService:
         
         payload = {
             "restriction":"DateEmployed le currentDate() and (DateEndEmployment gt currentDate() or DateEndEmployment = date(nulldate))",
-            "fields":["companyname","companynumber","country","departmentnumber","electronicmailaddress","employeenumber","employeetype","instancekey","name1","position","superioremployee"],
+            "fields":["companyname","companynumber","country","vendornumber","departmentnumber","electronicmailaddress","employeenumber","employeetype","instancekey","name1","position","superioremployee"],
             "limit":500
         }
 
@@ -458,12 +460,13 @@ class MaconomyService:
             filtered_employees = [
                 {
                     "employeenumber": item["data"]["employeenumber"], 
+                    "vendornumber": item["data"]["vendornumber"],
                     "email": item["data"]["electronicmailaddress"],
                     "employeename": item["data"]["name1"],
                     "instancekey": item["data"]["instancekey"]
                 }
                 for item in employee_card
-                if item["data"]["electronicmailaddress"]
+                if item["data"]["electronicmailaddress"] # and item["data"]["vendornumber"]
             ]
 
 
@@ -474,3 +477,298 @@ class MaconomyService:
         #     raise MaconomyServiceError("Invalid Maconomy job response")
         print(len(filtered_employees))
         return filtered_employees
+
+
+    # Maconomy Expenses
+    async def _retrieve_expense_sheet_instance(
+        self,
+        client: httpx.AsyncClient,
+        reconnect_token: str,
+    ) -> tuple[str, str]:
+        url = f"{self._expense_sheet_url()}/instances"
+
+        payload = {"panes":{"card":{"fields":["description","employeenumber","expensesheettext5"]},"table":{"fields":[]}}}
+
+        print("======= _retrieve_expense_sheet_instance ==========")
+        response = await client.post(
+            url,
+            headers=self._container_headers(
+                reconnect_token
+            ),
+            json=payload,
+        )
+        response.raise_for_status()
+
+        try:
+            instance_id = response.json()["meta"][
+                "containerInstanceId"
+            ]
+            instance_id = str(uuid.UUID(instance_id))
+
+        except (KeyError, TypeError, ValueError) as exc:
+            raise MaconomyServiceError(
+                "Invalid Maconomy employee instance response"
+            ) from exc
+
+        concurrency_token = self._get_concurrency_token(
+            response
+        )
+
+        return instance_id, concurrency_token
+
+
+    # Expense Line Items
+    async def _retrieve_expenses_instance(
+        self,
+        client: httpx.AsyncClient,
+        reconnect_token: str,
+    ) -> tuple[str, str]:
+        url = f"{self._expense_sheet_url()}/instances"
+
+        payload = {"panes":{"card":{"fields":["description","employeenumber","expensesheettext5"]},"table":{"fields":["entrydate","expensesheetlinetext10","text","currency","linenumber","amountbase"]}}} # "specification4name","locationname","amountbase", "specification4name"
+
+        print("======= _retrieve_expense_instance ==========")
+        response = await client.post(
+            url,
+            headers=self._container_headers(
+                reconnect_token
+            ),
+            json=payload,
+        )
+        # print("Expense line response:", response.status_code, response.text)
+        response.raise_for_status()
+
+        try:
+            instance_id = response.json()["meta"][
+                "containerInstanceId"
+            ]
+            instance_id = str(uuid.UUID(instance_id))
+
+        except (KeyError, TypeError, ValueError) as exc:
+            raise MaconomyServiceError(
+                "Invalid Maconomy employee instance response"
+            ) from exc
+
+        concurrency_token = self._get_concurrency_token(
+            response
+        )
+
+        return instance_id, concurrency_token
+
+    
+    async def _initialize_expense_table(
+        self,
+        client: httpx.AsyncClient,
+        reconnect_token: str,
+        instance_id: str,
+        concurrency_token: str,
+        row: int,
+    ) -> tuple[dict[str, Any], str]:
+        print("instance_id:", instance_id)
+        url = (
+            f"{self._expense_sheet_url()}/instances/"
+            f"{instance_id}/data/panes/table/init"
+        )
+ 
+        headers = self._container_headers(
+            reconnect_token
+        )
+        headers["Maconomy-Concurrency-Control"] = (
+            concurrency_token
+        )
+        payload={"row":"end"}
+        print("========= _initialize_expense_table =========")
+        response = await client.post(
+            url,
+            headers=headers,
+            json=payload,
+        )
+        print("Expense line response:", response.status_code, response.text)
+ 
+        response.raise_for_status()
+ 
+        try:
+            initialized_data = response.json()["data"]
+ 
+        except (KeyError, TypeError, ValueError) as exc:
+            raise MaconomyServiceError(
+                "Invalid Maconomy Expense line initialization response"
+            ) from exc
+ 
+        if not isinstance(initialized_data, dict):
+            raise MaconomyServiceError(
+                "Invalid Maconomy Expense line initialization response"
+            )
+ 
+        # instance_key = response.json["meta"].get("containerInstanceId")
+ 
+        # if (
+        #     not isinstance(instance_key, str)
+        #     or not instance_key.strip()
+        # ):
+        #     raise MaconomyServiceError(
+        #         "Maconomy expense sheet instance key is missing"
+        #     )
+ 
+        new_concurrency_token = self._get_concurrency_token(
+            response
+        )
+        print("Table initialized!")
+        return dict(initialized_data), new_concurrency_token
+
+
+    async def create_expense_line_items(
+        self,
+        expense_sheet_number: str,
+        expense_data: list[dict[str, Any]],
+        employee_number: str | None = None,
+    ) -> list[dict[str, Any]]:
+        print("=========== create_expense_line_items =============")
+
+        try:
+            mapped_expenses = [
+                map_concur_expense_to_maconomy_expense(
+                    expense_item,
+                    expense_sheet_number=expense_sheet_number,
+                    employee_number=employee_number,
+                )
+                for expense_item in expense_data
+            ]
+        except ValueError as exc:
+            raise MaconomyServiceError(str(exc)) from exc
+
+        results: list[dict[str, Any]] = []
+
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                reconnect_token = await self._get_reconnect_token(client)
+
+                print("======== Expense Line Items Creation Started ========")
+
+                for index, expense_line_data in enumerate(mapped_expenses):
+                    print(f"---- Creating expense line {index} ----")
+
+                    instance_id, concurrency_token = await self._retrieve_expenses_instance(
+                        client=client,
+                        reconnect_token=reconnect_token,
+                    )
+
+                    # Load existing expense sheet into the container
+                    load_url = f"{self._expense_sheet_url()}/instances/{instance_id}/data;expensesheetnumber={quote(expense_sheet_number, safe='')}"
+                    load_headers = self._container_headers(reconnect_token)
+                    load_headers["Maconomy-Concurrency-Control"] = concurrency_token
+                    load_response = await client.post(load_url, headers=load_headers, json={})
+                    load_response.raise_for_status()
+                    concurrency_token = self._get_concurrency_token(load_response)
+
+                    _, concurrency_token = await self._initialize_expense_table(
+                        client=client,
+                        reconnect_token=reconnect_token,
+                        instance_id=instance_id,
+                        concurrency_token=concurrency_token,
+                        row=index + 1,
+
+                    )
+
+                    url = f"{self._expense_sheet_url()}/instances/{instance_id}/data/panes/table"
+                    headers = self._container_headers(reconnect_token)
+                    headers["Maconomy-Concurrency-Control"] = concurrency_token
+                    print("expense_line_data:", expense_line_data)
+                    response = await client.post(url, headers=headers, json=expense_line_data)
+                    print("Line response:", response.status_code, response.text)
+
+                    response.raise_for_status()
+
+                    try:
+                        payload = response.json()
+                    except (KeyError, TypeError, ValueError) as json_exc:
+                        raise MaconomyServiceError(
+                            f"Invalid Maconomy expense line response for line {index}"
+                        ) from json_exc
+
+                    if not isinstance(payload, dict):
+                        raise MaconomyServiceError(
+                            f"Invalid Maconomy expense line response for line {index}"
+                        )
+
+                    results.append(payload)
+
+                print("========= Expense Line Items creation completed ==========")
+                # line_number = str(results.get("panes", {}).get("table", {}).get("records", [{}])[0].get("data", {}).get("linenumber", ""))
+                # print("line_number:", line_number)
+                return results
+
+        except httpx.HTTPError as exc:
+            raise MaconomyServiceError("Maconomy request failed") from exc
+        
+
+
+
+# ==================== Get all expense sheets from Maconomy ====================
+    async def get_all_expense_sheets_from_maconomy(
+            self,
+        ) -> list[dict[str, Any]]:
+            try:
+                async with httpx.AsyncClient(timeout=self.timeout) as client:
+                    reconnect_token = await self._get_reconnect_token(client)
+                    return await self._get_maconomy_expense_sheets(
+                        client,
+                        reconnect_token,
+                    )
+            except httpx.HTTPError as exc:
+                raise MaconomyServiceError("Maconomy request failed") from exc
+
+
+    async def _get_maconomy_expense_sheets(
+        self,
+        client: httpx.AsyncClient,
+        reconnect_token: str,
+    )-> dict[str, Any] | None:
+        shortname = quote(self.settings.maconomy_shortname, safe="")
+        
+        url = f"{self.settings.maconomy_url}/maconomy-api/containers/{shortname}/expensesheets/filter"
+        
+        payload = {
+            "fields":["amountbase","approvaldate","approved","createddate","description","employeename","employeenumber","expensesheetnumber","expensesheettext5","fullyapproved","instancekey","submitted","vendorsettlementstatus"],
+            "limit":500,
+        }
+
+        response = await client.post(
+            url,
+            headers=self._container_headers(
+                reconnect_token
+            ),
+            json=payload,
+        )
+        response.raise_for_status()
+        print("response:",response)
+
+
+        try:
+            expensesheets = response.json()["panes"]["filter"]["records"]
+            # records = employee_card["records"]
+            # if employee_card["meta"]["rowCount"] != 1 or len(records) != 1:
+            #     return None
+            # job_data = records[0]["data"]
+
+            filtered_expensesheets = [
+                {
+                    "expensesheetnumber": item["data"]["expensesheetnumber"], 
+                    "employeenumber": item["data"]["employeenumber"],
+                    "instancekey": item["data"]["instancekey"],
+                    "sap_report_id": item["data"]["expensesheettext5"]
+                }
+                for item in expensesheets
+                if item["data"]["expensesheetnumber"] and item["data"]["expensesheettext5"]
+            ]
+
+
+        except (KeyError, TypeError, ValueError) as exc:
+            raise MaconomyServiceError("Invalid vendor response", exc) from exc
+
+        # if not isinstance(job_data, dict):
+        #     raise MaconomyServiceError("Invalid Maconomy job response")
+        print(len(filtered_expensesheets))
+        return filtered_expensesheets
+
+
