@@ -17,7 +17,7 @@ async def create_log(
     *,
     mapping_id: uuid.UUID | None,
     # job_number: str,
-    expensesheet_number: str,
+    report_id: str,
     status: IntegrationStatus,
     action: IntegrationAction,
     message: str,
@@ -34,7 +34,7 @@ async def create_log(
         message=message,
         action=action,
         # jobnumber=job_number,
-        expensesheet_number=expensesheet_number,
+        report_id=report_id,
     )
     session.add(integration_log)
     await session.commit()

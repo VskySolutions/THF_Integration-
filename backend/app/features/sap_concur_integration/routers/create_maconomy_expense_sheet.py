@@ -100,7 +100,6 @@ async def sync_todays_created_sap_concur_expense_reports_with_maconomy(
     }
 
     owner_employee_map = build_owner_employee_mapping(new_expense_reports, employees)
-    print("owner_employee_map:", owner_employee_map)
 
     for report in new_expense_reports:
         expense_report_id = report.get("ID")
@@ -112,7 +111,6 @@ async def sync_todays_created_sap_concur_expense_reports_with_maconomy(
             )
 
         matched_employee = owner_employee_map.get(expense_report_id)
-        print("matched_employee:", matched_employee)
 
         if matched_employee is None:
             skip_message = (
@@ -454,7 +452,7 @@ async def create_maconomy_expense_sheet(
     await integration_log_service.create_log(
         session,
         mapping_id=mapping.id,
-        expensesheet_number=expense_sheet_number,
+        report_id=report_id,
         status=IntegrationStatus.SUCCESS,
         action=IntegrationAction.CREATE,
         message=(
@@ -486,7 +484,7 @@ async def _save_integration_log(
     await integration_log_service.create_log(
         session,
         mapping_id=mapping_id,
-        expensesheet_number=report_id,
+        report_id=report_id,
         status=integration_status,
         action=action,
         message=message,
@@ -525,7 +523,6 @@ def map_owner_to_maconomy_employee(
     owner_login_id: str, employees: list[dict[str, Any]]
 ) -> dict[str, Any] | None:
     """Map a SAP Concur OwnerLoginID to a Maconomy employee by matching email."""
-    print("owner_login_id:",owner_login_id)
     if not owner_login_id:
         return None
     owner_login_id_lower = owner_login_id.lower()

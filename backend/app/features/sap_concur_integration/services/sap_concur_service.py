@@ -370,3 +370,65 @@ class SAPConcurService:
                 return user_id
         except httpx.HTTPError as exc:
             raise SAPConcurServiceError("SAP Concur request failed") from exc
+
+
+    # Retrieve List items - Custom data (Department, Location, Travel reason, client engagement)
+    async def get_list_items_by_id(
+        self,
+        report_id: str,
+        user_id: str,
+        context_type: str,
+        item_id: str
+    ) -> dict[str, Any] | None:
+        print(f"Fetching report details for report_id: {report_id}, user_id: {user_id}, context_type: {context_type}")
+        if not report_id.strip():
+            raise SAPConcurServiceError("Invalid Concur Expense report ID")
+
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                token = await self._get_token_from_refresh_token(client)
+                response = await client.get(
+                    f"https://us2.api.concursolutions.com/list/v4/items?id={item_id}",
+                    headers={
+                        "Authorization": f"Bearer {token}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                if response.status_code == httpx.codes.NOT_FOUND:
+                    return None
+                response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise SAPConcurServiceError(
+                "Unable to reconcile list item in Concur"
+            ) from exc
+
+        try:
+            items = response.json()
+        except (TypeError, ValueError) as exc:
+            raise SAPConcurServiceError(
+                "Invalid Concur list item response"
+            ) from exc
+
+        if not isinstance(items, list):
+            raise SAPConcurServiceError(
+                "Invalid Concur list item response"
+            )
+
+        item = items[0]
+        code = item["code"]
+        short_code = item["shortCode"]
+        value = item["value"]
+        if (
+            not isinstance(code, str)
+            or not isinstance(short_code, str)
+            or not isinstance(value, str)
+        ):
+            raise SAPConcurServiceError(
+                "Invalid Concur report response"
+            )
+
+        return {
+            "code": code,
+            "short_code": short_code,
+            "value": value
+        }

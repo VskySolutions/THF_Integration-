@@ -535,7 +535,7 @@ class MaconomyService:
             ),
             json=payload,
         )
-        print("Expense line response:", response.status_code, response.text)
+
         response.raise_for_status()
 
         try:
@@ -675,8 +675,6 @@ class MaconomyService:
                     headers["Maconomy-Concurrency-Control"] = concurrency_token
                     print("expense_line_data:", expense_line_data)
                     response = await client.post(url, headers=headers, json=expense_line_data)
-                    print("Line response:", response.status_code, response.text)
-
                     response.raise_for_status()
 
                     try:
@@ -694,8 +692,7 @@ class MaconomyService:
                     results.append(payload)
 
                 print("========= Expense Line Items creation completed ==========")
-                # line_number = str(results.get("panes", {}).get("table", {}).get("records", [{}])[0].get("data", {}).get("linenumber", ""))
-                # print("line_number:", line_number)
+
                 return results
 
         except httpx.HTTPError as exc:

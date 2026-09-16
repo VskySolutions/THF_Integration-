@@ -7,3 +7,5 @@ __pycache__/
 .ruff_cache/
 .coverage
 PATCH_ENTITY.md
+sdlc-processes
+.opencode

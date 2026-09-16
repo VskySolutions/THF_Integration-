@@ -40,8 +40,7 @@ class SAPConcurIntegrationLog(Base):
         Enum(IntegrationAction, name="sap_concur_integration_action"), nullable=False
     )
     # jobnumber: Mapped[str] = mapped_column(Text, nullable=False)
-    # sap_concur_expensereport_id
-    expensesheet_number: Mapped[str] = mapped_column(Text, nullable=False)
+    report_id: Mapped[str] = mapped_column(Text, nullable=False)
     created_on_utc: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
