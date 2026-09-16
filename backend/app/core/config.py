@@ -80,6 +80,9 @@ class Settings(BaseSettings):
     paycor_legal_entity_id: str = (
         "replace-with-your-legal-entity-id"
     )
+    paycor_tenant_id: str = (
+    "replace-with-your-tenant-id"
+    )
 
     @field_validator("api_v1_prefix")
     @classmethod

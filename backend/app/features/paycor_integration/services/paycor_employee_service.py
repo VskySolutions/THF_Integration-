@@ -1,6 +1,7 @@
 """Service for retrieving employees from Paycor."""
 
 import asyncio
+import uuid
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urljoin
@@ -82,16 +83,43 @@ class PaycorService:
             )
         )
 
+        employee_id = str(
+            uuid.UUID(str(employee.get("id")))
+        )
+
+        person_details_by_id = (
+            await self
+            .get_person_details_by_employee_ids(
+                [employee_id]
+            )
+        )
+
+        person_details = person_details_by_id.get(
+            employee_id,
+            {},
+        )
+
+        person_error = person_details.get("_error")
+
+        if person_error:
+            raise PaycorServiceError(person_error)
+
+        enriched_employee = {
+            **employee,
+            "prefix": person_details.get("prefix"),
+            "suffix": person_details.get("suffix"),
+        }
+
         try:
             return map_paycor_employee(
-                employee,
+                enriched_employee,
                 departments_by_id=departments_by_id,
             )
 
         except ValueError as exc:
             raise PaycorServiceError(
                 "Unable to map Paycor employee "
-                f"{paycor_employee_id}"
+                f"{employee_id}: {exc}"
             ) from exc
 
     async def get_all_employee_data(
@@ -275,6 +303,128 @@ class PaycorService:
             initial_params=None,
             resource_name="department",
         )
+        
+    async def get_person_details_by_employee_ids(
+        self,
+        employee_ids: list[str],
+    ) -> dict[str, dict[str, Any]]:
+        """Retrieve prefix and suffix from the Paycor persons API."""
+
+        results: dict[str, dict[str, Any]] = {}
+
+        if not employee_ids:
+            return results
+
+        async with httpx.AsyncClient(
+            timeout=self.timeout
+        ) as client:
+            access_token = await self._get_access_token(
+                client
+            )
+
+            headers = self._get_api_headers(
+                access_token
+            )
+
+            for employee_id in dict.fromkeys(
+                employee_ids
+            ):
+                try:
+                    normalized_id = str(
+                        uuid.UUID(str(employee_id))
+                    )
+
+                except (TypeError, ValueError):
+                    results[str(employee_id)] = {
+                        "_error": (
+                            "Invalid Paycor employee UUID: "
+                            f"{employee_id}"
+                        )
+                    }
+                    continue
+
+                url = (
+                    f"{self.settings.paycor_url.rstrip('/')}"
+                    f"/v1/employees/{normalized_id}/person"
+                )
+
+                try:
+                    response = await client.get(
+                        url,
+                        headers=headers,
+                    )
+                    response.raise_for_status()
+
+                    response_data = response.json()
+
+                    if not isinstance(
+                        response_data,
+                        dict,
+                    ):
+                        raise ValueError(
+                            "Invalid Paycor person response"
+                        )
+
+                    # Supports either a direct response or
+                    # {"data": {...}}.
+                    person_data = response_data.get(
+                        "data",
+                        response_data,
+                    )
+
+                    if not isinstance(person_data, dict):
+                        raise ValueError(
+                            "Invalid Paycor person response"
+                        )
+
+                    results[normalized_id] = {
+                        "prefix": person_data.get("prefix"),
+                        "suffix": person_data.get("suffix"),
+                    }
+
+                except httpx.HTTPStatusError as exc:
+                    if exc.response.status_code in {
+                        403,
+                        404,
+                    }:
+                        results[normalized_id] = {
+                            "prefix": None,
+                            "suffix": None,
+                            "_warning": (
+                                "Paycor person details are "
+                                "unavailable: "
+                                f"HTTP "
+                                f"{exc.response.status_code}"
+                            ),
+                        }
+                        continue
+
+                    response_body = exc.response.text.strip()
+
+                    message = (
+                        "Paycor person lookup failed "
+                        f"with HTTP {exc.response.status_code}"
+                    )
+
+                    if response_body:
+                        message = (
+                            f"{message}: "
+                            f"{response_body[:1000]}"
+                        )
+
+                    results[normalized_id] = {
+                        "_error": message,
+                    }
+
+                except (
+                    httpx.HTTPError,
+                    ValueError,
+                ) as exc:
+                    results[normalized_id] = {
+                        "_error": str(exc)
+                    }
+
+        return results
 
     async def _get_all_paginated_records(
         self,

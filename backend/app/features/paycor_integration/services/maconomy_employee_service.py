@@ -4,12 +4,16 @@ import base64
 import uuid
 from typing import Any
 from urllib.parse import quote
+from datetime import datetime,timezone
 
 import httpx
 
 from app.core.config import Settings, get_settings
+
+
 from app.features.paycor_integration.mappers import (
     map_paycor_employee_to_maconomy,
+    map_paycor_employee_to_maconomy_update,
 )
 
 AUTH_CONTENT_TYPE = (
@@ -28,6 +32,12 @@ CONTAINER_CONTENT_TYPE = (
 EMPLOYEE_FIELDS = (
     "employeenumber",
     "name1",
+    "firstname",
+    "middlename",
+    "lastname",
+    # "initials",
+    "specification4name",
+    "text9",
     "country",
     "dateemployed",
     "electronicmailaddress",
@@ -35,10 +45,38 @@ EMPLOYEE_FIELDS = (
     "superioremployee",
     "instancekey",
     "text10",
+    "personaltitle"
+    
 )
 
 EMPLOYEE_LOOKUP_FIELDS = (
     "employeenumber",
+)
+
+
+EMPLOYEE_REVISION_CARD_FIELDS = (
+    "selectioncriteriavar",
+    "selectionfromdatevar",
+    "selectiontodatevar",
+)
+
+EMPLOYEE_REVISION_TABLE_FIELDS = (
+    "employeenumber",
+    "name1",
+    "firstname",
+    "middlename",
+    "lastname",
+    "initials",
+    "country",
+    "dateemployed",
+    "electronicmailaddress",
+    "position",
+    "specification4name",
+    "text9",
+    "text10",
+    "date5",
+    "instancekey",
+    "personaltitle"
 )
 
 EMPLOYEE_FILTER_PAGE_SIZE = 1000
@@ -161,6 +199,185 @@ class MaconomyEmployeeService:
             raise MaconomyEmployeeServiceError(
                 "Unable to connect to Maconomy"
             ) from exc
+            
+            
+    #update employee
+    async def update_employee(
+        self,
+        *,
+        employee_number: str,
+        paycor_employee_data: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Update one current Maconomy employee revision."""
+
+        normalized_employee_number = (
+            str(employee_number).strip()
+        )
+
+        if not normalized_employee_number:
+            raise MaconomyEmployeeServiceError(
+                "Maconomy employee number is required"
+            )
+
+        try:
+            expected_paycor_employee_id = str(
+                uuid.UUID(
+                    str(
+                        paycor_employee_data.get(
+                            "paycorEmployeeId"
+                        )
+                    )
+                )
+            )
+
+            desired_data = (
+                map_paycor_employee_to_maconomy_update(
+                    paycor_employee_data
+                )
+            )
+
+        except (TypeError, ValueError) as exc:
+            raise MaconomyEmployeeServiceError(
+                str(exc)
+            ) from exc
+
+        try:
+            async with httpx.AsyncClient(
+                timeout=self.timeout
+            ) as client:
+                reconnect_token = (
+                    await self._get_reconnect_token(
+                        client
+                    )
+                )
+
+                instance_id, concurrency_token = (
+                    await self
+                    ._start_employee_revision_instance(
+                        client,
+                        reconnect_token,
+                    )
+                )
+
+                (
+                    current_employee,
+                    update_url,
+                    concurrency_token,
+                ) = await self._load_employee_revision(
+                    client,
+                    reconnect_token,
+                    instance_id,
+                    concurrency_token,
+                    normalized_employee_number,
+                )
+
+                loaded_employee_number = str(
+                    current_employee.get(
+                        "employeenumber",
+                        "",
+                    )
+                ).strip()
+
+                if (
+                    loaded_employee_number
+                    != normalized_employee_number
+                ):
+                    raise MaconomyEmployeeServiceError(
+                        "Maconomy returned a different "
+                        "employee number"
+                    )
+
+                current_paycor_employee_id = str(
+                    current_employee.get(
+                        "text9",
+                        "",
+                    )
+                ).strip()
+
+                if (
+                    current_paycor_employee_id
+                    and current_paycor_employee_id
+                    != expected_paycor_employee_id
+                ):
+                    raise MaconomyEmployeeServiceError(
+                        "Maconomy text10 does not match "
+                        "the Paycor employee UUID; manual "
+                        "reconciliation is required"
+                    )
+
+                changed_data = {
+                    field_name: desired_value
+                    for field_name, desired_value
+                    in desired_data.items()
+                    if self._values_differ(
+                        current_employee.get(
+                            field_name
+                        ),
+                        desired_value,
+                    )
+                }
+
+                if not changed_data:
+                    return {
+                        "updated": False,
+                        "changedFields": [],
+                        "employee": current_employee,
+                    }
+
+                changed_fields = sorted(
+                    changed_data
+                )
+
+                changed_data["date5"] = (
+                    datetime.now(timezone.utc)
+                    .date()
+                    .isoformat()
+                )
+
+                updated_employee = (
+                    await self
+                    ._submit_employee_revision_update(
+                        client,
+                        reconnect_token,
+                        update_url,
+                        concurrency_token,
+                        current_employee,
+                        changed_data,
+                    )
+                )
+
+                return {
+                    "updated": True,
+                    "changedFields": changed_fields,
+                    "employee": updated_employee,
+                }
+
+        except httpx.HTTPStatusError as exc:
+            response_body = (
+                exc.response.text.strip()
+            )
+
+            message = (
+                "Maconomy employee update failed "
+                f"with HTTP {exc.response.status_code}"
+            )
+
+            if response_body:
+                message = (
+                    f"{message}: "
+                    f"{response_body[:2000]}"
+                )
+
+            raise MaconomyEmployeeServiceError(
+                message
+            ) from exc
+
+        except httpx.HTTPError as exc:
+            raise MaconomyEmployeeServiceError(
+                "Maconomy employee update request failed"
+            ) from exc
+            
+    
 
     async def _get_reconnect_token(
         self,
@@ -218,21 +435,17 @@ class MaconomyEmployeeService:
         reconnect_token: str,
     ) -> set[str]:
         url = f"{self._employees_url()}/filter"
-
-        headers = self._container_headers(
-            reconnect_token
-        )
+        headers = self._container_headers(reconnect_token)
 
         employee_numbers: set[str] = set()
+        page_size = 100
         offset = 0
 
         for _ in range(self.max_filter_pages):
             payload = {
-                "fields": list(
-                    EMPLOYEE_LOOKUP_FIELDS
-                ),
+                "fields": list(EMPLOYEE_LOOKUP_FIELDS),
                 "offset": offset,
-                "limit": EMPLOYEE_FILTER_PAGE_SIZE,
+                "limit": page_size,
             }
 
             response = await client.post(
@@ -243,20 +456,13 @@ class MaconomyEmployeeService:
             response.raise_for_status()
 
             try:
-                filter_pane = (
-                    response.json()["panes"]["filter"]
-                )
+                filter_pane = response.json()["panes"]["filter"]
                 meta = filter_pane["meta"]
                 records = filter_pane["records"]
 
-            except (
-                KeyError,
-                TypeError,
-                ValueError,
-            ) as exc:
+            except (KeyError, TypeError, ValueError) as exc:
                 raise MaconomyEmployeeServiceError(
-                    "Invalid Maconomy employee "
-                    "filter response"
+                    "Invalid Maconomy employee filter response"
                 ) from exc
 
             if (
@@ -264,15 +470,12 @@ class MaconomyEmployeeService:
                 or not isinstance(records, list)
             ):
                 raise MaconomyEmployeeServiceError(
-                    "Invalid Maconomy employee "
-                    "filter response"
+                    "Invalid Maconomy employee filter response"
                 )
 
-            row_total_count = (
-                self._parse_optional_filter_count(
-                    meta.get("rowTotalCount"),
-                    "rowTotalCount",
-                )
+            row_total_count = self._parse_optional_filter_count(
+                meta.get("rowTotalCount"),
+                "rowTotalCount",
             )
 
             row_count = self._parse_filter_count(
@@ -289,6 +492,24 @@ class MaconomyEmployeeService:
                 raise MaconomyEmployeeServiceError(
                     "Maconomy employee filter returned "
                     "an inconsistent row count"
+                )
+
+            if row_count == 0:
+                if (
+                    row_total_count is None
+                    or offset >= row_total_count
+                ):
+                    return employee_numbers
+
+                raise MaconomyEmployeeServiceError(
+                    "Maconomy employee filter ended "
+                    "before all records were returned"
+                )
+
+            if row_offset != offset:
+                raise MaconomyEmployeeServiceError(
+                    "Maconomy employee filter returned "
+                    f"offset {row_offset}; expected {offset}"
                 )
 
             for record in records:
@@ -327,15 +548,6 @@ class MaconomyEmployeeService:
                 and next_offset >= row_total_count
             ):
                 return employee_numbers
-
-            if row_count == 0:
-                if row_total_count is None:
-                    return employee_numbers
-
-                raise MaconomyEmployeeServiceError(
-                    "Maconomy employee filter ended "
-                    "before all records were returned"
-                )
 
             if next_offset <= offset:
                 raise MaconomyEmployeeServiceError(
@@ -397,6 +609,169 @@ class MaconomyEmployeeService:
         )
 
         return instance_id, concurrency_token
+    
+    async def _start_employee_revision_instance(
+        self,
+        client: httpx.AsyncClient,
+        reconnect_token: str,
+    ) -> tuple[str, str]:
+        url = (
+            f"{self._employee_revisions_url()}"
+            "/instances"
+        )
+
+        payload = {
+            "panes": {
+                "card": {
+                    "fields": list(
+                        EMPLOYEE_REVISION_CARD_FIELDS
+                    ),
+                },
+                "table": {
+                    "fields": list(
+                        EMPLOYEE_REVISION_TABLE_FIELDS
+                    ),
+                },
+            }
+        }
+
+        response = await client.post(
+            url,
+            headers=self._container_headers(
+                reconnect_token
+            ),
+            json=payload,
+        )
+        response.raise_for_status()
+
+        try:
+            instance_id = response.json()["meta"][
+                "containerInstanceId"
+            ]
+
+            instance_id = str(
+                uuid.UUID(instance_id)
+            )
+
+        except (KeyError, TypeError, ValueError) as exc:
+            raise MaconomyEmployeeServiceError(
+                "Invalid Maconomy employee revision "
+                "instance response"
+            ) from exc
+
+        concurrency_token = (
+            self._get_concurrency_token(
+                response
+            )
+        )
+
+        return instance_id, concurrency_token
+    
+    async def _load_employee_revision(
+        self,
+        client: httpx.AsyncClient,
+        reconnect_token: str,
+        instance_id: str,
+        concurrency_token: str,
+        employee_number: str,
+    ) -> tuple[dict[str, Any], str, str]:
+        encoded_employee_number = quote(
+            employee_number,
+            safe="",
+        )
+
+        url = (
+            f"{self._employee_revisions_url()}"
+            f"/instances/{instance_id}/data;"
+            f"employeenumber={encoded_employee_number}"
+        )
+
+        headers = self._container_headers(
+            reconnect_token
+        )
+        headers["Maconomy-Concurrency-Control"] = (
+            concurrency_token
+        )
+
+        response = await client.post(
+            url,
+            headers=headers,
+            json={
+                "offset": 0,
+                "limit": 100,
+            },
+        )
+        response.raise_for_status()
+
+        try:
+            table = response.json()["panes"][
+                "table"
+            ]
+            records = table["records"]
+
+            if (
+                table["meta"]["rowCount"] != 1
+                or len(records) != 1
+            ):
+                raise MaconomyEmployeeServiceError(
+                    "Unexpected Maconomy employee "
+                    "revision record count"
+                )
+
+            employee_data = records[0]["data"]
+
+            update_link = table["links"][
+                "action:update"
+            ]
+
+            update_url = update_link.get("href")
+
+            if update_url is None:
+                update_template = update_link[
+                    "template"
+                ]
+                update_url = (
+                    update_template.replace(
+                        "{row}",
+                        "0",
+                    )
+                )
+
+        except MaconomyEmployeeServiceError:
+            raise
+
+        except (KeyError, TypeError, ValueError) as exc:
+            raise MaconomyEmployeeServiceError(
+                "Invalid Maconomy employee "
+                "revision response"
+            ) from exc
+
+        if not isinstance(employee_data, dict):
+            raise MaconomyEmployeeServiceError(
+                "Invalid Maconomy employee "
+                "revision data"
+            )
+
+        if (
+            not isinstance(update_url, str)
+            or not update_url.strip()
+        ):
+            raise MaconomyEmployeeServiceError(
+                "Maconomy employee revision "
+                "update URL is missing"
+            )
+
+        concurrency_token = (
+            self._get_concurrency_token(
+                response
+            )
+        )
+
+        return (
+            dict(employee_data),
+            update_url,
+            concurrency_token,
+        )
 
     async def _initialize_employee_card(
         self,
@@ -540,7 +915,39 @@ class MaconomyEmployeeService:
             )
 
         return created_employee
+    
+    async def _submit_employee_revision_update(
+        self,
+        client: httpx.AsyncClient,
+        reconnect_token: str,
+        update_url: str,
+        concurrency_token: str,
+        current_employee: dict[str, Any],
+        changed_data: dict[str, Any],
+    ) -> dict[str, Any]:
+        headers = self._container_headers(
+            reconnect_token
+        )
+        headers["Maconomy-Concurrency-Control"] = (
+            concurrency_token
+        )
 
+        response = await client.post(
+            update_url,
+            headers=headers,
+            json={
+                "data": changed_data,
+                "offset": 0,
+                "limit": 100,
+            },
+        )
+        response.raise_for_status()
+
+        return {
+            **current_employee,
+            **changed_data,
+        }
+        
     def _employees_url(self) -> str:
         shortname = quote(
             self.settings.maconomy_shortname,
@@ -551,6 +958,18 @@ class MaconomyEmployeeService:
             f"{self.settings.maconomy_url}"
             f"/maconomy-api/containers/"
             f"{shortname}/employees"
+        )
+        
+    def _employee_revisions_url(self) -> str:
+        shortname = quote(
+            self.settings.maconomy_shortname,
+            safe="",
+        )
+
+        return (
+            f"{self.settings.maconomy_url}"
+            "/maconomy-api/containers/"
+            f"{shortname}/showemployeerevisions"
         )
 
     @staticmethod
@@ -653,3 +1072,19 @@ class MaconomyEmployeeService:
             "Invalid Maconomy employee filter "
             f"{field_name}: {value!r}"
         )
+        
+    @staticmethod
+    def _values_differ(
+        current_value: Any,
+        desired_value: Any,
+    ) -> bool:
+        if (
+            isinstance(current_value, str)
+            and isinstance(desired_value, str)
+        ):
+            return (
+                current_value.strip()
+                != desired_value.strip()
+            )
+
+        return current_value != desired_value

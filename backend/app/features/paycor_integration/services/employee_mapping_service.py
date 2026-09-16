@@ -5,6 +5,7 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from datetime import datetime, timezone
 
 from app.features.paycor_integration.models.employee_mapping_log import (
     PaycorEmployeeMappingLog,
@@ -25,6 +26,23 @@ async def get_mapping_by_paycor_employee(
     )
 
     return await session.scalar(statement)
+
+async def get_completed_mappings(
+    session: AsyncSession,
+) -> list[PaycorEmployeeMappingLog]:
+    statement = select(
+        PaycorEmployeeMappingLog
+    ).where(
+        PaycorEmployeeMappingLog
+        .maconomy_employee_number
+        .is_not(None),
+        PaycorEmployeeMappingLog
+        .maconomy_employee_number
+        != "",
+    )
+
+    result = await session.scalars(statement)
+    return list(result.all())
 
 
 async def create_pending_mapping(
@@ -96,3 +114,34 @@ async def complete_mapping(
         paycor_employee_number=paycor_employee_number,
         maconomy_employee_number=maconomy_employee_number,
     )
+    
+
+async def list_complete_mappings(
+    session: AsyncSession,
+) -> list[PaycorEmployeeMappingLog]:
+    statement = (
+        select(PaycorEmployeeMappingLog)
+        .where(
+            PaycorEmployeeMappingLog
+            .maconomy_employee_number
+            .is_not(None)
+        )
+    )
+
+    result = await session.scalars(
+        statement
+    )
+
+    return list(result)
+
+
+async def mark_mapping_updated(
+    session: AsyncSession,
+    mapping: PaycorEmployeeMappingLog,
+) -> None:
+    mapping.updated_on_utc = (
+        datetime.now(timezone.utc)
+    )
+
+    session.add(mapping)
+    await session.commit()
