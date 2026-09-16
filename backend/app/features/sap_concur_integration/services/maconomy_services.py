@@ -525,7 +525,7 @@ class MaconomyService:
     ) -> tuple[str, str]:
         url = f"{self._expense_sheet_url()}/instances"
 
-        payload = {"panes":{"card":{"fields":["description","employeenumber","expensesheettext5"]},"table":{"fields":["entrydate","expensesheetlinetext10","text","currency","linenumber","amountbase"]}}} # "specification4name","locationname","amountbase", "specification4name"
+        payload = {"panes":{"card":{"fields":["description","employeenumber","expensesheettext5"]},"table":{"fields":["entrydate","expensesheetlinetext10","currency","linenumber","numberof","unitpricecurrency","specification4name","entityname"]}}} # "specification4name","locationname","amountbase", "specification4name"
 
         print("======= _retrieve_expense_instance ==========")
         response = await client.post(
@@ -535,7 +535,7 @@ class MaconomyService:
             ),
             json=payload,
         )
-        # print("Expense line response:", response.status_code, response.text)
+        print("Expense line response:", response.status_code, response.text)
         response.raise_for_status()
 
         try:

@@ -7,38 +7,36 @@ def map_concur_expense_to_maconomy_expense(
     employee_number: str | None = None,
 ) -> dict[str, Any]:
     expense_id = expense_data.get("expenseId")
-    expense_type = expense_data.get("expenseType", {}).get("name")
+    # expense_type = expense_data.get("expenseType", {}).get("name")
     transaction_date = expense_data.get("transactionDate")
-    business_purpose = expense_data.get("businessPurpose")
     amount = expense_data.get("transactionAmount", {}).get("value")
-    print("amount:",amount)
     currency = expense_data.get("transactionAmount", {}).get("currencyCode")
-    location = expense_data.get("location", {}).get("name")
-
-    department = expense_data.get("location") # Form Field
     
-    payment_type = expense_data.get("paymentType").get("name")
-    vendor_description = expense_data.get("vendor")
+    # exchangerate = expense_data.get("exchangerate", {}).get("value")
+    # location = expense_data.get("location", {}).get("city") if expense_data.get("location", {}).get("city") else ""
+    # business_purpose = expense_data.get("businessPurpose")
+    # payment_type = expense_data.get("paymentType", {}).get("name")
+    # vendor_description = expense_data.get("vendor", {}).get("description")
+
+    # department =
     # client_engagement = expense_data.get("jobnumber")
-    travel_reason = expense_data.get("travelreason")
+    # travel_reason = expense_data.get("travelreason")
     
 
     if not expense_id:
         raise ValueError("SAP Concur expense_id are required")
-
+    print("Done")
     return {
-        "data":{
-            # "purposename": str(business_purpose),
-            "text": str(expense_type),
-            # "specification4name": str(location),
+        "data":{     
+            "specification4name": "10",
             "entrydate": str(transaction_date),
-            # "locationname": str(department),
-            # "currency": str(currency),
-            "amountbase": float(amount),
+            "entityname": "ADM",
+            "currency": str(currency),
+            "unitpricecurrency": float(amount) if amount is not None else 0.0,
+            "numberof": 1 ,#float(exchangerate), # Exchange rate
             "expensesheetlinetext10": str(expense_id) if expense_id else "",
-            "currency": "USD", 
-            # "linenumber": ""
-            
+            # "taskname": "400",
+            # "description": str(vendor_description) if vendor_description else ""
         },
         "offset":0,"limit":100,"row":"end"    
     }

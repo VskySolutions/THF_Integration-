@@ -279,37 +279,6 @@ async def create_maconomy_expense_sheet(
     employee_number: str | None = None,
 ) -> dict[str, Any]:
     print("======= create_maconomy_expense_sheet ==========")
-    existing_mapping = await expensesheet_expensereport_mapping_service.get_mapping_by_report_id(
-        session, report_id
-    )
-    # existing_mapping = None
-
-    # If a mapping already exists for the given report_id, raise an HTTPException with a 400 status code and a message indicating that the mapping already exists.
-    if existing_mapping is not None:
-        message = (
-            "Maconomy expense sheet record is already created for this SAP Concur "
-            "expense report"
-        )
-        integration_status = (
-            IntegrationStatus.FAILED
-            if action_from == "CREATEAPI"
-            else IntegrationStatus.SKIPPED
-        )
-        await integration_log_service.create_log(
-            session,
-            mapping_id=existing_mapping.id,
-            expensesheet_number=report_id,
-            status=integration_status,
-            action=IntegrationAction.CREATE,
-            message=message,
-            employeeemail=employee_email,
-        )
-        if action_from == "CREATEAPI":
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=message,
-            )
-        return None
 
     try:
         user_id = await SAPConcurService().get_user_id_by_login_id(owner_login_id=login_id)
@@ -345,8 +314,8 @@ async def create_maconomy_expense_sheet(
 
     # Maconomy Service initiates
     maconomy_service = MaconomyService()
-    mapping = existing_mapping
-    is_new_expensesheet = mapping is None
+    mapping = None
+    is_new_expensesheet = True
     expensesheet_was_reconciled = False
 
     print("======== Maconomy service initiated =========")
@@ -442,7 +411,7 @@ async def create_maconomy_expense_sheet(
                 expense_data=concur_expenses,
                 employee_number=employee_number,
             )
-            print("line_item_results:",line_item_results)
+            
         except MaconomyServiceError as exc:
             message = f"Failed to create Maconomy expense line items: {str(exc)}"
             await _save_integration_log(
@@ -462,7 +431,12 @@ async def create_maconomy_expense_sheet(
         for idx, result in enumerate(line_item_results):
             try:
                 expense_id = str(concur_expenses[idx].get("expenseId", ""))
-                line_number = str(result.get("panes", {}).get("table", {}).get("records", [{}])[0].get("data", {}).get("linenumber", ""))
+                # line_number = str(result.get("panes", {}).get("table", {}).get("records", [{}])[0].get("data", {}).get("linenumber", ""))
+                records = result.get("panes", {}).get("table", {}).get("records", [])
+                if records:
+                    line_number = str(records[-1].get("data", {}).get("linenumber", ""))
+                else:
+                    line_number = ""
                 print("expense_id:", expense_id,"line_number:",line_number)
                 if expense_id and line_number:
                     expense_line_metadata[expense_id] = line_number
