@@ -1,13 +1,9 @@
-import logging
-
 import httpx
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from app.core.config import Settings
-from app.features.schedular_services.constants import CASEWARE_SYNC_SEQUENCE_JOB_ID
-from app.features.schedular_services.services import run_caseware_sync_sequence
-
-logger = logging.getLogger(__name__)
+from app.features.schedular_services.constants import MACONOMY_CASEWARE_SYNC_JOB_ID
+from app.features.schedular_services.services import run_maconomy_caseware_sync
 
 
 class SchedulerService:
@@ -18,7 +14,6 @@ class SchedulerService:
 
     async def start(self) -> None:
         if not self._settings.scheduler_enabled:
-            logger.info("Scheduled integration services are disabled")
             return
 
         client = httpx.AsyncClient(
@@ -32,12 +27,12 @@ class SchedulerService:
         )
         scheduler = AsyncIOScheduler(timezone="UTC")
         scheduler.add_job(
-            run_caseware_sync_sequence,
+            run_maconomy_caseware_sync,
             trigger="interval",
             minutes=self._settings.scheduler_interval_minutes,
             args=[client],
-            id=CASEWARE_SYNC_SEQUENCE_JOB_ID,
-            name="CaseWare created-engagement then updated-engagement sync",
+            id=MACONOMY_CASEWARE_SYNC_JOB_ID,
+            name="Maconomy to CaseWare Cloud sync",
             replace_existing=True,
             max_instances=1,
             coalesce=True,
@@ -52,15 +47,10 @@ class SchedulerService:
 
         self._client = client
         self._scheduler = scheduler
-        logger.info(
-            "Scheduled integration services started with interval_minutes=%s",
-            self._settings.scheduler_interval_minutes,
-        )
 
     async def shutdown(self) -> None:
         if self._scheduler is not None and self._scheduler.running:
             self._scheduler.shutdown(wait=False)
-            logger.info("Scheduled integration services stopped")
 
         if self._client is not None:
             await self._client.aclose()
