@@ -1,10 +1,48 @@
 # Maconomy to CaseWare Cloud Integration
 
-## Client guide
+## Integration scope and field coverage
 
-This guide explains how an open Maconomy job is synchronized with CaseWare
-Cloud, how the two systems remain connected, and what happens when a job is
-created or changed.
+This delivery synchronizes open Maconomy jobs with their corresponding CaseWare
+Cloud client entity and one business address. It supports scheduled processing
+of recently created or changed jobs and a manual, single-job retry. Maconomy is
+the source of truth; the local database only controls service activation and
+stores execution status for support.
+
+### Maconomy fields in scope
+
+| Maconomy field | Purpose in the integration |
+| --- | --- |
+| `jobnumber` | Finds the CaseWare entity using `VSKY-{jobnumber}`. |
+| `jobname` | Sets the CaseWare entity name and operating name. |
+| `name1` | Sets the address name. |
+| `name2`, `name3`, `name4` | Set address lines 1, 2, and 3. |
+| `postaldistrict` | Sets the address city. |
+| `country` | Sets the address country. |
+| `template`, `closed` | Exclude template and closed jobs. |
+| `createddate`, `changeddate` | Select recent jobs for the scheduled run. |
+| `versionnumber` | Determines whether CaseWare needs a newer version. |
+| `text19` | Stores CaseWare IDs, numbers, synchronized version, and UTC timestamp. |
+
+The integration applies the following standard CaseWare values: entity owner
+`Client`, entity type `A`, organization type `Corporation`, entity country code
+`US`, and address category `Business`.
+
+### Scope boundaries
+
+This delivery includes entity creation and updates, creation or updates of the
+single associated business address, Maconomy `text19` write-back, scheduled and
+manual triggers, version checks, token reuse, rate-limit handling, and status
+logging. It does not include other Maconomy record types, additional CaseWare
+modules or related records such as contacts, phones, emails, documents,
+workflow, or billing, changes to unrelated Maconomy business data, or changes to
+CaseWare screens. Any additional data or process can be assessed separately so
+that it receives clear requirements and delivery timing.
+
+## Integration workflow and behavior
+
+This section explains how an in-scope Maconomy job is synchronized with
+CaseWare Cloud, how the two systems remain connected, and what happens when a
+job is created or changed.
 
 The integration uses Maconomy as the source of truth. Maconomy owns the job
 information and stores the CaseWare entity and address identifiers in the
