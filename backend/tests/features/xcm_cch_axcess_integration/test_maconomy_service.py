@@ -189,6 +189,11 @@ def test_job_filter_excludes_project_fields() -> None:
     assert "projectname" not in SYNCABLE_JOB_FIELDS
 
 
+def test_job_filter_includes_cch_task_mapping_fields() -> None:
+    assert "specification2" in SYNCABLE_JOB_FIELDS
+    assert "date5" in SYNCABLE_JOB_FIELDS
+
+
 def test_period_end_date_accepts_maconomy_month_name() -> None:
     assert MaconomyService._calculate_period_end_date(2026, "december") == (
         "12/31/2026"

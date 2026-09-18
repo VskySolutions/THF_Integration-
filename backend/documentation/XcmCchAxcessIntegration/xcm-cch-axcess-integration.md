@@ -75,8 +75,10 @@ fields:
 | `jobnumber` | Identifies the Maconomy engagement |
 | `locationname` | Determines whether the engagement belongs to TAX |
 | `customernumber` | Used to retrieve customer information |
+| `specification2` | Provides the CCH task type for later task matching or creation |
 | `theyear` | Used to calculate the period-end date |
 | `text20` | Holds the existing XCM task identifier, when present |
+| `date5` | Holds the existing stored Period End Date, when present |
 | `createddate` | Used by the current discovery date restriction |
 | `changeddate` | Returned for future changed-engagement processing |
 | `closed` | Excludes closed jobs |
@@ -150,8 +152,10 @@ Example structure:
     "jobnumber": "12345",
     "locationname": "TAX",
     "customernumber": "C-100",
+    "specification2": "1040",
     "theyear": 2026,
     "text20": "",
+    "date5": null,
     "closed": false,
     "template": false,
     "fiscalyearendmonth": 12,
@@ -170,6 +174,8 @@ The following work is complete for Part 1:
 - Secured FastAPI endpoint
 - Maconomy authentication and reconnect-token handling
 - Retrieval of open, non-template, unsynced job candidates
+- Retrieval of the job-level CCH task type from `specification2`
+- Retrieval of the job-level stored Period End Date from `date5`
 - Case-insensitive TAX-location validation
 - Distinct-customer lookup
 - Fiscal-year-end-month enrichment

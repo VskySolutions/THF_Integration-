@@ -38,9 +38,11 @@ flowchart TD
 | `JobNumber` | Unique Maconomy engagement identifier |
 | `LocationName` | Determines whether the engagement is TAX |
 | `CustomerNumber` | Passed to Block 2 for CCH client/task matching |
+| `Specification2` | CCH task type used for task matching or creation |
 | `TheYear` | Used later to calculate Period End Date |
 | Customer `FiscalYearEndMonth` | Used later to calculate Period End Date |
 | `Text20` or middleware mapping | Existing XCM `TaskInternalId`, if any |
+| `Date5` | Existing stored Period End Date, if any |
 | Last-modified value | Detects records changed after the previous run |
 
 ## How to identify an unsynced job
@@ -60,10 +62,12 @@ Block 1 outputs a queue/list of syncable tax engagements containing the data req
 ```text
 JobNumber
 CustomerNumber
+Specification2
 TheYear
 FiscalYearEndMonth
 PeriodEndDate
 Existing TaskInternalId, if any
+Existing Date5, if any
 ```
 
 Block 2 is responsible for searching, linking, or creating the CCH/XCM task.
