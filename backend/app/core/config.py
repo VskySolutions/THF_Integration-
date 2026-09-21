@@ -55,10 +55,9 @@ class Settings(BaseSettings):
     sap_concur_refresh_token: str = "replace-with-your-refresh-token"
 
     cch_axcess_url: AnyHttpUrl = AnyHttpUrl("https://sandboxworkflow.cchaxcess.com")
-    cch_axcess_client_id: str = "replace-with-your-client-id"
-    cch_axcess_client_secret: SecretStr = SecretStr(
-        "replace-with-your-client-secret"    
-    )
+    cch_axcess_api_key: SecretStr
+    cch_axcess_user_name: str
+    cch_axcess_password: SecretStr
 
 
     @field_validator("api_v1_prefix")

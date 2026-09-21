@@ -3,6 +3,7 @@ from calendar import month_abbr, month_name, monthrange
 from datetime import date, timedelta
 from typing import Any
 from urllib.parse import quote
+from uuid import UUID
 
 import httpx
 
@@ -37,6 +38,13 @@ CUSTOMER_FIELDS = [
     "customernumber",
     "fiscalyearendmonth",
 ]
+
+SPECIFICATION2_FIELDS = [
+    "specification2name",
+    "description",
+]
+
+DEFAULT_TASK_TYPE = "Tax - 1041 Fiduciary"
 
 MONTH_NAME_TO_NUMBER = {
     name.casefold(): month_number
@@ -78,6 +86,217 @@ class MaconomyService:
         except httpx.HTTPError as exc:
             raise MaconomyServiceError("Maconomy request failed") from exc
 
+    async def update_cch_task_mappings(
+        self,
+        jobs: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Write resolved CCH task IDs and period-end dates to Maconomy jobs."""
+        if not jobs:
+            return []
+
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                reconnect_token = await self._get_reconnect_token(client)
+                updated_jobs: list[dict[str, Any]] = []
+                for job in jobs:
+                    updated_job = dict(job)
+                    resolution = job.get("cchtaskresolution")
+                    print("-"*50)
+                    print(resolution)
+                    if isinstance(resolution, dict) and resolution.get(
+                        "status"
+                    ) in {"failed", "manual_review"}:
+                        updated_job["maconomywritebackstatus"] = "skipped"
+                        updated_jobs.append(updated_job)
+                        continue
+
+                    try:
+                        if (
+                            not isinstance(resolution, dict)
+                            or resolution.get("status")
+                            not in {"existing", "created"}
+                        ):
+                            raise MaconomyServiceError(
+                                "Invalid CCH task resolution status"
+                            )
+
+                        job_number = self._required_string(
+                            job.get("jobnumber"),
+                            "jobnumber",
+                        )
+                        task_id = self._required_string(
+                            resolution.get("taskid"),
+                            "CCH task ID",
+                        )
+                        period_end_date = self._required_string(
+                            job.get("periodenddate"),
+                            "periodenddate",
+                        )
+                        source_version = self._parse_version(
+                            job.get("versionnumber")
+                        )
+                        print("-"*50)
+                        print(job_number, task_id, period_end_date, source_version)
+                        saved_version = await self._update_job_task_mapping(
+                            client,
+                            reconnect_token,
+                            job_number=job_number,
+                            source_version=source_version,
+                            task_id=task_id,
+                            period_end_date=period_end_date,
+                        )
+                        updated_job["text20"] = task_id
+                        updated_job["date5"] = period_end_date
+                        updated_job["versionnumber"] = saved_version
+                        updated_job["maconomywritebackstatus"] = "updated"
+                    except Exception as exc:
+                        updated_job["maconomywritebackstatus"] = "failed"
+                        updated_job["maconomywritebackerror"] = (
+                            self._safe_update_error_message(exc)
+                        )
+                    updated_jobs.append(updated_job)
+
+                return updated_jobs
+        except httpx.HTTPError as exc:
+            raise MaconomyServiceError("Maconomy update request failed") from exc
+
+    async def _update_job_task_mapping(
+        self,
+        client: httpx.AsyncClient,
+        reconnect_token: str,
+        *,
+        job_number: str,
+        source_version: int,
+        task_id: str,
+        period_end_date: str,
+    ) -> int:
+        job, instance_id, concurrency_token = await self._bind_job(
+            client,
+            reconnect_token,
+            job_number,
+        )
+        current_version = self._parse_version(job.get("versionnumber"))
+        if current_version != source_version:
+            raise MaconomyServiceError(
+                f"Maconomy job {job_number} changed before its CCH mapping could be saved"
+            )
+
+        current_task_id = job.get("text20")
+        if current_task_id is not None and (
+            not isinstance(current_task_id, str) or current_task_id.strip()
+        ):
+            raise MaconomyServiceError(
+                f"Maconomy job {job_number} already has a text20 mapping"
+            )
+
+        import datetime
+        # period_end_date is expected in yyyy-mm-dd format
+        period_end_date = datetime.datetime.strptime(
+            period_end_date, "%m/%d/%Y"
+        ).strftime("%Y-%m-%d")
+        print(f"Updating Maconomy job {job_number} with task ID {task_id} and period end date {period_end_date}")
+        await self._post_job_request(
+            client,
+            reconnect_token,
+            f"/instances/{instance_id}/data/panes/card/0",
+            {"data": {"text20": task_id, "date5": period_end_date}},
+            concurrency_token=concurrency_token,
+        )
+
+        saved_job, _, _ = await self._bind_job(
+            client,
+            reconnect_token,
+            job_number,
+        )
+        saved_version = self._parse_version(saved_job.get("versionnumber"))
+        if saved_version != source_version + 1:
+            raise MaconomyServiceError(
+                f"Maconomy job {job_number} version did not increase by one"
+            )
+        if str(saved_job.get("text20", "")).strip() != task_id:
+            raise MaconomyServiceError(
+                f"Maconomy job {job_number} text20 write could not be verified"
+            )
+        if str(saved_job.get("date5", "")).strip() != period_end_date:
+            raise MaconomyServiceError(
+                f"Maconomy job {job_number} date5 write could not be verified"
+            )
+        return saved_version
+
+    async def _bind_job(
+        self,
+        client: httpx.AsyncClient,
+        reconnect_token: str,
+        job_number: str,
+    ) -> tuple[dict[str, Any], str, str]:
+        instance_response = await self._post_job_request(
+            client,
+            reconnect_token,
+            "/instances",
+            {
+                "panes": {
+                    "card": {
+                        "fields": [
+                            "jobnumber",
+                            "versionnumber",
+                            "text20",
+                            "date5",
+                        ]
+                    }
+                }
+            },
+        )
+        try:
+            instance_id_value = instance_response.json()["meta"][
+                "containerInstanceId"
+            ]
+        except (KeyError, TypeError, ValueError) as exc:
+            raise MaconomyServiceError("Invalid Maconomy instance response") from exc
+
+        instance_id = self._response_uuid(
+            instance_id_value,
+            "containerInstanceId",
+        )
+        concurrency_token = self._response_uuid(
+            instance_response.headers.get("Maconomy-Concurrency-Control"),
+            "Maconomy-Concurrency-Control",
+        )
+        bind_response = await self._post_job_request(
+            client,
+            reconnect_token,
+            f"/instances/{instance_id}/data;jobnumber={quote(job_number, safe='')}",
+            {},
+            concurrency_token=concurrency_token,
+        )
+        bound_token = self._response_uuid(
+            bind_response.headers.get("Maconomy-Concurrency-Control"),
+            "Maconomy-Concurrency-Control",
+        )
+        records = self._read_pane_records(bind_response, "card")
+        if len(records) != 1 or str(records[0].get("jobnumber")) != job_number:
+            raise MaconomyServiceError(f"Maconomy job {job_number} was not found")
+        return records[0], instance_id, bound_token
+
+    async def _post_job_request(
+        self,
+        client: httpx.AsyncClient,
+        reconnect_token: str,
+        path: str,
+        payload: dict[str, Any],
+        *,
+        concurrency_token: str | None = None,
+    ) -> httpx.Response:
+        headers = self._container_headers(reconnect_token)
+        if concurrency_token is not None:
+            headers["Maconomy-Concurrency-Control"] = concurrency_token
+        response = await client.post(
+            f"{self._jobs_url()}{path}",
+            headers=headers,
+            json=payload,
+        )
+        response.raise_for_status()
+        return response
+
     async def _get_syncable_tax_job_records(
         self,
         client: httpx.AsyncClient,
@@ -95,7 +314,7 @@ class MaconomyService:
                     "template=false "
                     "and closed=false "
                     "and createddate>="
-                    f"date({start_date.year},{start_date.month - 5},{start_date.day}) "
+                    f"date({start_date.year},{start_date.month - 1},{start_date.day}) "
                     "and createddate<="
                     f"date({current_date.year},{current_date.month},{current_date.day}) "
                     "and text20=''"
@@ -115,6 +334,28 @@ class MaconomyService:
         reconnect_token: str,
         jobs: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
+        specification2_names = {
+            str(job["specification2name"]).strip()
+            for job in jobs
+            if job.get("specification2name") is not None
+            and str(job["specification2name"]).strip()
+        }
+        specification2_records = (
+            await self._get_specification2_records(client, reconnect_token)
+            if specification2_names
+            else []
+        )
+        task_types_by_specification2_name = {
+            str(record["specification2name"]).strip(): str(
+                record["description"]
+            ).strip()
+            for record in specification2_records
+            if record.get("specification2name") is not None
+            and str(record["specification2name"]).strip()
+            and record.get("description") is not None
+            and str(record["description"]).strip()
+        }
+
         customer_numbers = list(
             dict.fromkeys(
                 str(job["customernumber"])
@@ -136,6 +377,16 @@ class MaconomyService:
         enriched_jobs: list[dict[str, Any]] = []
         for job in jobs:
             enriched_job = dict(job)
+            task_type = self._resolve_task_type(
+                job.get("specification2name"),
+                task_types_by_specification2_name,
+            )
+            enriched_job["tasktype"] = task_type
+            if task_type is None:
+                enriched_job["tasktypeerror"] = (
+                    "No active Specification2 description was found for "
+                    f"code {job.get('specification2name')}"
+                )
             customer = customers_by_number.get(str(job.get("customernumber")))
             fiscal_year_end_month = (
                 customer.get("fiscalyearendmonth") if customer is not None else None
@@ -148,6 +399,34 @@ class MaconomyService:
             enriched_jobs.append(enriched_job)
 
         return enriched_jobs
+
+    @staticmethod
+    def _resolve_task_type(
+        specification2_name: Any,
+        task_types_by_specification2_name: dict[str, str],
+    ) -> str | None:
+        if specification2_name is None or not str(specification2_name).strip():
+            return DEFAULT_TASK_TYPE
+        return task_types_by_specification2_name.get(
+            str(specification2_name).strip()
+        )
+
+    async def _get_specification2_records(
+        self,
+        client: httpx.AsyncClient,
+        reconnect_token: str,
+    ) -> list[dict[str, Any]]:
+        response = await client.post(
+            f"{self._specification2_url()}/filter",
+            headers=self._container_headers(reconnect_token),
+            json={
+                "restriction": "blocked=false",
+                "fields": SPECIFICATION2_FIELDS,
+                "limit": 2000,
+            },
+        )
+        response.raise_for_status()
+        return self._read_filter_records(response)
 
     async def _get_customer_records(
         self,
@@ -219,18 +498,58 @@ class MaconomyService:
 
     @staticmethod
     def _read_filter_records(response: httpx.Response) -> list[dict[str, Any]]:
+        return MaconomyService._read_pane_records(response, "filter")
+
+    @staticmethod
+    def _read_pane_records(
+        response: httpx.Response,
+        pane_name: str,
+    ) -> list[dict[str, Any]]:
         try:
-            filter_pane = response.json()["panes"]["filter"]
-            raw_records = filter_pane["records"]
-            if filter_pane["meta"]["rowCount"] == 0:
+            pane = response.json()["panes"][pane_name]
+            raw_records = pane["records"]
+            if pane["meta"]["rowCount"] == 0:
                 return []
             records = [record["data"] for record in raw_records]
         except (KeyError, TypeError, ValueError) as exc:
-            raise MaconomyServiceError("Invalid Maconomy job response") from exc
+            raise MaconomyServiceError(
+                f"Invalid Maconomy {pane_name} response"
+            ) from exc
 
         if not all(isinstance(record, dict) for record in records):
-            raise MaconomyServiceError("Invalid Maconomy job response")
+            raise MaconomyServiceError(f"Invalid Maconomy {pane_name} response")
         return records
+
+    @staticmethod
+    def _response_uuid(value: Any, field_name: str) -> str:
+        try:
+            return str(UUID(value))
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise MaconomyServiceError(
+                f"Invalid Maconomy {field_name} response"
+            ) from exc
+
+    @staticmethod
+    def _parse_version(value: Any) -> int:
+        if isinstance(value, str) and value.strip().isdigit():
+            value = int(value.strip())
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise MaconomyServiceError("Invalid Maconomy versionnumber")
+        return value
+
+    @staticmethod
+    def _required_string(value: Any, field_name: str) -> str:
+        if value is None or not str(value).strip():
+            raise MaconomyServiceError(f"Maconomy {field_name} is required")
+        return str(value).strip()
+
+    @staticmethod
+    def _safe_update_error_message(exc: Exception) -> str:
+        if isinstance(exc, httpx.HTTPStatusError):
+            return f"Maconomy update failed with HTTP {exc.response.status_code}"
+        if isinstance(exc, httpx.RequestError):
+            return "Maconomy update failed or timed out"
+        return str(exc)
 
     @staticmethod
     def _is_syncable_tax_job(record: dict[str, Any]) -> bool:
@@ -253,6 +572,13 @@ class MaconomyService:
         return (
             f"{self.settings.maconomy_url}/maconomy-api/containers/"
             f"{shortname}/customercard"
+        )
+
+    def _specification2_url(self) -> str:
+        shortname = quote(self.settings.maconomy_shortname, safe="")
+        return (
+            f"{self.settings.maconomy_url}/maconomy-api/containers/"
+            f"{shortname}/specification2"
         )
 
     @staticmethod

@@ -23,6 +23,9 @@ from app.features.integration_services.models import IntegrationService  # noqa:
 from app.features.maconomy_caseware_cloud_intergration.models import (  # noqa: F401
     MaconomyCasewareRequestLog,
 )
+from app.features.xcm_cch_axcess_integration.models import (  # noqa: F401
+    XCMCCHIntegrationRunLog,
+)
 
 config = context.config
 
