@@ -12,6 +12,7 @@ from app.features.sap_concur_integration.mappers import (
     map_concur_expense_report_to_maconomy_expensesheet,
     map_concur_expense_to_maconomy_expense
 )
+from app.features.sap_concur_integration.services.sap_concur_service import SAPConcurService
 
 AUTH_CONTENT_TYPE = (
     "application/vnd.deltek.maconomy.authentication+json; charset=utf-8; version=3.0"
@@ -32,6 +33,17 @@ class MaconomyService:
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or get_settings()
         self.timeout = 60.0
+
+    def extract_job_number_from_client_engagement(self, value: str) -> str:
+        """
+        Extract job number from Client Engagement value.
+        Example: "(75674.T0) 1130 SUCCESS AVE LLC" -> "75674"
+        """
+        import re
+        match = re.search(r'\(([^.]+)\.', value)
+        if match:
+            return match.group(1)
+        return value
 
 
     async def create_expense_sheet(
@@ -480,42 +492,6 @@ class MaconomyService:
 
 
     # Maconomy Expenses
-    async def _retrieve_expense_sheet_instance(
-        self,
-        client: httpx.AsyncClient,
-        reconnect_token: str,
-    ) -> tuple[str, str]:
-        url = f"{self._expense_sheet_url()}/instances"
-
-        payload = {"panes":{"card":{"fields":["description","employeenumber","expensesheettext5"]},"table":{"fields":[]}}}
-
-        print("======= _retrieve_expense_sheet_instance ==========")
-        response = await client.post(
-            url,
-            headers=self._container_headers(
-                reconnect_token
-            ),
-            json=payload,
-        )
-        response.raise_for_status()
-
-        try:
-            instance_id = response.json()["meta"][
-                "containerInstanceId"
-            ]
-            instance_id = str(uuid.UUID(instance_id))
-
-        except (KeyError, TypeError, ValueError) as exc:
-            raise MaconomyServiceError(
-                "Invalid Maconomy employee instance response"
-            ) from exc
-
-        concurrency_token = self._get_concurrency_token(
-            response
-        )
-
-        return instance_id, concurrency_token
-
 
     # Expense Line Items
     async def _retrieve_expenses_instance(
@@ -525,7 +501,7 @@ class MaconomyService:
     ) -> tuple[str, str]:
         url = f"{self._expense_sheet_url()}/instances"
 
-        payload = {"panes":{"card":{"fields":["description","employeenumber","expensesheettext5"]},"table":{"fields":["entrydate","expensesheetlinetext10","currency","linenumber","numberof","unitpricecurrency","specification4name","entityname"]}}} # "specification4name","locationname","amountbase", "specification4name"
+        payload = {"panes":{"card":{"fields":["description","employeenumber","expensesheettext5"]},"table":{"fields":["entrydate","expensesheetlinetext10","currency","linenumber","numberof","unitpricecurrency","specification4name","entityname","text","jobnumber","taskname"]}}} # "specification4name","locationname","amountbase", "specification4name"
 
         print("======= _retrieve_expense_instance ==========")
         response = await client.post(
@@ -622,8 +598,92 @@ class MaconomyService:
         expense_sheet_number: str,
         expense_data: list[dict[str, Any]],
         employee_number: str | None = None,
+        report_id: str | None = None,
+        user_id: str | None = None,
+        context_type: str | None = None,
     ) -> list[dict[str, Any]]:
         print("=========== create_expense_line_items =============")
+
+        # Get detailed expense data for each expense (includes customData)
+        processed_expense_data: list[dict[str, Any]] = []
+        sap_concur_service = SAPConcurService()
+
+        for expense_item in expense_data:
+            expense_id = expense_item.get("expenseId")
+            if not expense_id:
+                print(f"Skipping expense: missing expenseId")
+                continue
+
+            # Get complete detailed expense data from SAP Concur
+            detailed_expense = await sap_concur_service.get_expenses_by_expense_id(
+                expense_id=expense_id,
+                report_id=report_id or "",
+                user_id=user_id or "",
+                context_type=context_type or "",
+            )
+
+            if detailed_expense is None:
+                print(f"Skipping expense: could not retrieve detailed data for expense_id={expense_id}")
+                continue
+
+            # Extract customData from detailed expense response
+            custom_data = detailed_expense.get("customData", [])
+            print("=== custom_data ===:", custom_data)
+            custom_data_values: dict[str, Any] = {}
+            skip_expense = False
+
+            if custom_data:
+                for custom_entry in custom_data:
+                    print("custom_entry:", custom_entry)
+                    entry_id = custom_entry.get("id")
+                    entry_value = custom_entry.get("value", "")
+
+                    if not entry_id:
+                        continue
+
+                    # Only process custom1, custom2, custom5, custom6
+                    if entry_id not in ("custom1", "custom2", "custom5", "custom6"):
+                        continue
+
+                    # Call get_list_items_by_id to retrieve the list item details
+                    list_item = await sap_concur_service.get_list_items_by_id(
+                        report_id=report_id or "",
+                        user_id=user_id or "",
+                        context_type=context_type or "",
+                        item_id=entry_value,
+                    )
+
+                    if list_item is None:
+                        print(f"Skipping expense: get_list_items_by_id returned None for {entry_id}={entry_value}")
+                        skip_expense = True
+                        break
+
+                    # Store the retrieved value
+                    if entry_id == "custom1":
+                        # Location
+                        custom_data_values["location"] = list_item.get("value", "")
+                    elif entry_id == "custom2":
+                        # Department
+                        custom_data_values["department"] = list_item.get("value", "")
+                    elif entry_id == "custom5":
+                        # Travel Reason
+                        custom_data_values["travel_reason"] = list_item.get("value", "")
+                    elif entry_id == "custom6":
+                        # Client Engagement - extract job number
+                        client_engagement = list_item.get("value", "")
+                        custom_data_values["client_engagement"] = client_engagement
+                        custom_data_values["job_number"] = self.extract_job_number_from_client_engagement(client_engagement)
+
+            if skip_expense:
+                continue
+
+            # Store custom data values in the detailed expense for the mapper
+            detailed_expense["_custom_data_values"] = custom_data_values
+            processed_expense_data.append(detailed_expense)
+
+        if not processed_expense_data:
+            print("No expenses to process after customData filtering")
+            return []
 
         try:
             mapped_expenses = [
@@ -631,8 +691,9 @@ class MaconomyService:
                     expense_item,
                     expense_sheet_number=expense_sheet_number,
                     employee_number=employee_number,
+                    custom_data_values=expense_item.get("_custom_data_values"),
                 )
-                for expense_item in expense_data
+                for expense_item in processed_expense_data
             ]
         except ValueError as exc:
             raise MaconomyServiceError(str(exc)) from exc
@@ -675,6 +736,7 @@ class MaconomyService:
                     headers["Maconomy-Concurrency-Control"] = concurrency_token
                     print("expense_line_data:", expense_line_data)
                     response = await client.post(url, headers=headers, json=expense_line_data)
+                    print("response:",response.status_code, response.text)
                     response.raise_for_status()
 
                     try:

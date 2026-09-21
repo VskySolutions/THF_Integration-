@@ -56,7 +56,7 @@ async def get_employee(
 
 
 @router.post(
-    "/sync-todays-created-sap-concur-expense-reports-with-maconomy",
+    "/sync-sap-concur-expense-reports-with-maconomy",
     response_model=list[dict[str, Any]],
 )
 async def sync_todays_created_sap_concur_expense_reports_with_maconomy(
@@ -69,6 +69,25 @@ async def sync_todays_created_sap_concur_expense_reports_with_maconomy(
         new_expense_reports = (
             await SAPConcurService().get_yesterday_and_todays_new_expense_reports_from_sap_concur()
         )
+            # Guard: no new expense reports found — log and return early
+        if not new_expense_reports:
+            no_reports_message = "No new expense reports found in SAP Concur for the current sync window"
+            print(no_reports_message)
+            await _save_integration_log(
+                session,
+                report_id="N/A",
+                action=IntegrationAction.CREATE,
+                integration_status=IntegrationStatus.SKIPPED,
+                message=no_reports_message,
+            )
+            return [
+                {
+                    "report_id": "N/A",
+                    "status": "SKIPPED",
+                    "message": no_reports_message,
+                }
+            ]
+
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -76,6 +95,7 @@ async def sync_todays_created_sap_concur_expense_reports_with_maconomy(
         ) from exc
 
     try:
+        print("Retrieving employees")
         employees = await MaconomyService().get_all_employees_from_maconomy()
     except Exception as exc:
         raise HTTPException(
@@ -85,6 +105,7 @@ async def sync_todays_created_sap_concur_expense_reports_with_maconomy(
 
     # Fetch all existing expense sheets from Maconomy for duplicate detection
     try:
+        print("Retrieving expense sheets")
         maconomy_expense_sheets = await MaconomyService().get_all_expense_sheets_from_maconomy()
     except Exception as exc:
         raise HTTPException(
@@ -100,8 +121,10 @@ async def sync_todays_created_sap_concur_expense_reports_with_maconomy(
     }
 
     owner_employee_map = build_owner_employee_mapping(new_expense_reports, employees)
-
+    print("For Loop")
+    print("new_expense_reports:", new_expense_reports)
     for report in new_expense_reports:
+        print("For Loop")
         expense_report_id = report.get("ID")
         expense_report_login_id = report.get("OwnerLoginID")
         if not expense_report_id:
@@ -111,6 +134,7 @@ async def sync_todays_created_sap_concur_expense_reports_with_maconomy(
             )
 
         matched_employee = owner_employee_map.get(expense_report_id)
+        print("matched_employee:", matched_employee)
 
         if matched_employee is None:
             skip_message = (
@@ -156,6 +180,7 @@ async def sync_todays_created_sap_concur_expense_reports_with_maconomy(
         employee_number = matched_employee["employeenumber"]
 
         try:
+            print("create_maconomy_expense_sheets")
             result = await create_maconomy_expense_sheet(
                 report_id=expense_report_id,
                 login_id=expense_report_login_id,
@@ -325,6 +350,7 @@ async def create_maconomy_expense_sheet(
             )
         except MaconomyServiceError as exc:
             message = f"Failed to create Maconomy expense sheet: {str(e)}"
+            await _raise_expense_sheet_creation_error(session, report_id, exc)
             # if not exc.reconciliation_allowed: 
             #     await _raise_expense_sheet_creation_error( session, report_id, exc, )
 
@@ -408,7 +434,11 @@ async def create_maconomy_expense_sheet(
                 expense_sheet_number=expense_sheet_number,
                 expense_data=concur_expenses,
                 employee_number=employee_number,
+                report_id=report_id,
+                user_id=user_id,
+                context_type="TRAVELER",
             )
+            print("line_item_results:", line_item_results)
             
         except MaconomyServiceError as exc:
             message = f"Failed to create Maconomy expense line items: {str(exc)}"

@@ -38,7 +38,7 @@ class SAPConcurService:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 token = await self._get_token_from_refresh_token(client)
                 response = await client.get(
-                    f"https://us2.api.concursolutions.com/expensereports/v4/users/{user_id}/context/{context_type}/reports/{report_id}",
+                    f"{self.settings.sap_concur_api_base_url}/expensereports/v4/users/{user_id}/context/{context_type}/reports/{report_id}",
                     headers={
                         "Authorization": f"Bearer {token}",
                         "Content-Type": "application/json",
@@ -92,7 +92,7 @@ class SAPConcurService:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 token = await self._get_token_from_refresh_token(client)
                 response = await client.get(
-                    f"https://us2.api.concursolutions.com/expensereports/v4/users/{user_id}/context/{context_type}/reports/{report_id}/expenses",
+                    f"{self.settings.sap_concur_api_base_url}/expensereports/v4/users/{user_id}/context/{context_type}/reports/{report_id}/expenses",
                     headers={
                         "Authorization": f"Bearer {token}",
                         "Content-Type": "application/json",
@@ -138,10 +138,75 @@ class SAPConcurService:
         return expenses
 
 
+    # Get detailed expense data by expense_id (includes customData)
+    async def get_expenses_by_expense_id(
+        self,
+        expense_id: str,
+        report_id: str,
+        user_id: str,
+        context_type: str,
+    ) -> dict[str, Any] | None:
+        """
+        Retrieve complete detailed expense data for a specific expense by expense_id.
+        
+        This endpoint returns ALL expense details including:
+        - All standard expense fields (expenseType, transactionDate, amount, etc.)
+        - customData array with custom1, custom2, custom5, custom6
+        
+        This data should be used for:
+        - Expense mapping to Maconomy format
+        - Custom data processing (Location, Department, Travel Reason, Client Engagement)
+        
+        Args:
+            expense_id: The unique identifier for the expense
+            report_id: The report ID containing this expense
+            user_id: The SAP Concur user ID
+            context_type: The context type (e.g., "TRAVELER")
+            
+        Returns:
+            Complete detailed expense dict, or None if not found
+        """
+        print(f"Fetching detailed expense data for expense_id: {expense_id}, report_id: {report_id}")
+        if not expense_id.strip():
+            raise SAPConcurServiceError("Invalid expense ID")
+
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                token = await self._get_token_from_refresh_token(client)
+                response = await client.get(
+                    f"{self.settings.sap_concur_api_base_url}/expensereports/v4/users/{user_id}/context/{context_type}/reports/{report_id}/expenses/{expense_id}",
+                    headers={
+                        "Authorization": f"Bearer {token}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                if response.status_code == httpx.codes.NOT_FOUND:
+                    return None
+                response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise SAPConcurServiceError(
+                "Unable to retrieve detailed expense from Concur"
+            ) from exc
+
+        try:
+            expense = response.json()
+        except (TypeError, ValueError) as exc:
+            raise SAPConcurServiceError(
+                "Invalid Concur expense response"
+            ) from exc
+
+        if not isinstance(expense, dict):
+            raise SAPConcurServiceError(
+                "Invalid Concur expense response"
+            )
+
+        return expense
+
+
     # Get Token from Concur API
     async def _get_token(self, client: httpx.AsyncClient) -> str:
         response = await client.post(
-            f"{self.settings.sap_concur_url}/oauth2/v0/token",
+            f"{self.settings.sap_concur_api_base_url}/oauth2/v0/token",
             headers={"Content-Type": "application/x-www-form-urlencoded"},
             # json={
             #     "client_id": self.settings.sap_concur_client_id,
@@ -175,7 +240,7 @@ class SAPConcurService:
     async def _get_token_from_refresh_token(self, client: httpx.AsyncClient) -> str:
 
         response = await client.post(
-            f"https://us.api.concursolutions.com/oauth2/v0/token",
+            f"{self.settings.sap_concur_api_base_url}/oauth2/v0/token",
             headers={"Content-Type": "application/x-www-form-urlencoded"},
             data={
                 "client_id": self.settings.sap_concur_client_id,
@@ -236,7 +301,7 @@ class SAPConcurService:
 
         token = await self._get_token_from_refresh_token(client)
         print(f"Using token fetch reports from {yesterday} to {tomorrow}")
-        url = f"https://us.api.concursolutions.com/api/v3.0/expense/reports"
+        url = f"{self.settings.sap_concur_api_base_url}/api/v3.0/expense/reports"
         headers = {
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/x-www-form-urlencoded",
@@ -244,12 +309,15 @@ class SAPConcurService:
         }
         params = {
             "user": "ALL",
-            "createdDateAfter": yesterday.isoformat(),
-            "createdDateBefore": tomorrow.isoformat(),
+            # "createdDateAfter": yesterday.isoformat(),
+            # "createdDateBefore": tomorrow.isoformat(),
+            "approvalStatusCode": "A_APPR ",
+            # "paymentStatusCode": "P_NOTP",
             "limit": 100,
         }
 
         response = await client.get(url, headers=headers, params=params)
+        # print("Response:", response.status_code, response.text)
         response.raise_for_status()
 
         try:
@@ -304,7 +372,7 @@ class SAPConcurService:
 
         token = await self._get_token_from_refresh_token(client)
         print(f"Using token to fetch reports for user: {email_id}")
-        url = f"https://us.api.concursolutions.com/api/v3.0/expense/reports"
+        url = f"{self.settings.sap_concur_api_base_url}/api/v3.0/expense/reports"
         headers = {
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/x-www-form-urlencoded",
@@ -341,7 +409,7 @@ class SAPConcurService:
             print(f"Fetching user ID for owner_login_id: {owner_login_id}")
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 token = await self._get_token_from_refresh_token(client)
-                url = f"https://us.api.concursolutions.com/profile/identity/v4/Users"
+                url = f"{self.settings.sap_concur_api_base_url}/profile/identity/v4/Users"
                 headers = {
                     "Authorization": f"Bearer {token}",
                     "Accept": "application/json",
@@ -380,7 +448,7 @@ class SAPConcurService:
         context_type: str,
         item_id: str
     ) -> dict[str, Any] | None:
-        print(f"Fetching report details for report_id: {report_id}, user_id: {user_id}, context_type: {context_type}")
+        print(f"========= get_list_items_by_id ========")
         if not report_id.strip():
             raise SAPConcurServiceError("Invalid Concur Expense report ID")
 
@@ -388,7 +456,7 @@ class SAPConcurService:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 token = await self._get_token_from_refresh_token(client)
                 response = await client.get(
-                    f"https://us2.api.concursolutions.com/list/v4/items?id={item_id}",
+                    f"{self.settings.sap_concur_api_base_url}/list/v4/items?id={item_id}",
                     headers={
                         "Authorization": f"Bearer {token}",
                         "Content-Type": "application/json",
