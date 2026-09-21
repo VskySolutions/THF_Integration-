@@ -6,7 +6,6 @@ Create Date: 2026-08-31
 """
 
 from collections.abc import Sequence
-import uuid
 
 import sqlalchemy as sa
 
@@ -51,49 +50,6 @@ def upgrade() -> None:
             name=op.f("uq_integration_service_identifier_unique_name"),
         ),
     )
-
-    op.bulk_insert(
-        integration_service,
-        [
-            {
-                "id": uuid.UUID("f583bc82-1ab5-4b54-aef7-bc30da975b56"),
-                "identifier_unique_name": "CASEWARE_CREATE_ENGAGEMENT",
-                "display_name": "Create CaseWare engagement",
-                "is_active": False,
-                "source_system": "Maconomy",
-                "target_system": "CaseWare Cloud",
-                "is_deleted": False,
-            },
-            {
-                "id": uuid.UUID("2f5f715c-0163-4a40-861e-ee6605dc2d3e"),
-                "identifier_unique_name": "CASEWARE_SYNC_CREATED_ENGAGEMENTS",
-                "display_name": "Sync created Maconomy engagements with CaseWare",
-                "is_active": False,
-                "source_system": "Maconomy",
-                "target_system": "CaseWare Cloud",
-                "is_deleted": False,
-            },
-            {
-                "id": uuid.UUID("355162c2-ce62-4637-8985-f637b8070c06"),
-                "identifier_unique_name": "CASEWARE_UPDATE_ENGAGEMENT",
-                "display_name": "Update CaseWare engagement",
-                "is_active": False,
-                "source_system": "Maconomy",
-                "target_system": "CaseWare Cloud",
-                "is_deleted": False,
-            },
-            {
-                "id": uuid.UUID("21a3769b-4389-4c3a-a5f1-9b093396f59f"),
-                "identifier_unique_name": "CASEWARE_SYNC_UPDATED_ENGAGEMENTS",
-                "display_name": "Sync updated Maconomy engagements with CaseWare",
-                "is_active": False,
-                "source_system": "Maconomy",
-                "target_system": "CaseWare Cloud",
-                "is_deleted": False,
-            },
-        ],
-    )
-
 
 def downgrade() -> None:
     op.drop_table("integration_service")

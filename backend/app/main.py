@@ -8,12 +8,6 @@ from app.features.maconomy_caseware_cloud_intergration.routers import (
     job_sync_router,
     router as maconomy_caseware_cloud_router,
 )
-from app.features.caseware_cloud_intergration.routers import (
-    create_caseware_router,
-    entity_engagement_mapping_router,
-    integration_log_router,
-    update_caseware_router,
-)
 from app.features.sap_concur_integration.routers.create_maconomy_expense_sheet import (
     router as sap_concur_router,
 )
@@ -56,10 +50,6 @@ async def health_check() -> dict[str, str]:
 app.include_router(auth_router, prefix=settings.api_v1_prefix)
 app.include_router(maconomy_caseware_cloud_router, prefix=settings.api_v1_prefix)
 app.include_router(job_sync_router, prefix=settings.api_v1_prefix)
-app.include_router(create_caseware_router, prefix=settings.api_v1_prefix)
-app.include_router(update_caseware_router, prefix=settings.api_v1_prefix)
-app.include_router(entity_engagement_mapping_router, prefix=settings.api_v1_prefix)
-app.include_router(integration_log_router, prefix=settings.api_v1_prefix)
 app.include_router(sap_concur_router, prefix=settings.api_v1_prefix)
 
 app.include_router(pending_cch_task_mapping_router, prefix=settings.api_v1_prefix)
