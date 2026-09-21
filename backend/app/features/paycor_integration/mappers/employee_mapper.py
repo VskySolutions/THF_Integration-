@@ -97,35 +97,47 @@ def _parse_legal_entity_id(
 
 def _build_full_name(
     employee_data: dict[str, Any],
-) -> str | None:
-    full_name = _normalize_optional_string(
-        employee_data.get("fullName")
-    )
+) -> str:
+    """Build Maconomy name1 as LastName,FirstName M."""
 
-    if full_name is not None:
-        return full_name
-
-    name_parts = [
-        name
-        for name in (
-            _normalize_optional_string(
-                employee_data.get("firstName")
-            ),
-            _normalize_optional_string(
-                employee_data.get("middleName")
-            ),
-            _normalize_optional_string(
-                employee_data.get("lastName")
-            ),
+    first_name = (
+        _normalize_optional_string(
+            employee_data.get("firstName")
         )
-        if name is not None
-    ]
-
-    return (
-        " ".join(name_parts)
-        if name_parts
-        else None
+        or ""
     )
+
+    middle_name = (
+        _normalize_optional_string(
+            employee_data.get("middleName")
+        )
+        or ""
+    )
+
+    last_name = (
+        _normalize_optional_string(
+            employee_data.get("lastName")
+        )
+        or ""
+    )
+
+    middle_initial = (
+        middle_name[0]
+        if middle_name
+        else ""
+    )
+
+    given_name = first_name
+
+    if middle_initial:
+        given_name = (
+            f"{given_name} {middle_initial}".strip()
+        )
+
+    if last_name and given_name:
+        return f"{last_name},{given_name}"
+
+    return last_name or given_name
 
 def _build_maconomy_name1(
     employee_data: dict[str, Any],
@@ -217,9 +229,7 @@ def map_paycor_employee(
         employee_data.get("lastName")
     )
 
-    full_name = _normalize_optional_string(
-        employee_data.get("fullName")
-    )
+    full_name = _build_full_name(employee_data)
 
     # Build full name only when Paycor did not provide it.
     if full_name is None:
@@ -593,7 +603,7 @@ def map_paycor_employee_to_maconomy(
         "suffix": "text10",
     }
     
-    name1 = _build_maconomy_name1(
+    name1 = _build_full_name(
         employee_data
     )
 
