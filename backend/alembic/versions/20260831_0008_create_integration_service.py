@@ -1,7 +1,7 @@
 """Create integration service master table and seed service switches.
 
 Revision ID: 20260831_0008
-Revises: 20260822_0007
+Revises: a8c4bafd2f52
 Create Date: 2026-08-31
 """
 
@@ -13,7 +13,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "20260831_0008"
-down_revision: str | None = "20260822_0007"
+down_revision: str | None = 'a8c4bafd2f52'
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

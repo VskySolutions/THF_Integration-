@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="420" viewBox="0 0 1100 420" role="img" aria-labelledby="title desc">
+  <title id="title">Maconomy-first CaseWare Cloud integration architecture</title>
+  <desc id="desc">The scheduler calls the API. The API reads Maconomy, writes CaseWare, and stores the checkpoint back in Maconomy. The database only controls activation and stores logs.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#334155"/></marker>
+    <style>
+      .box { stroke: #334155; stroke-width: 2; rx: 14; }
+      .label { font: 600 18px Arial, sans-serif; fill: #0f172a; }
+      .small { font: 14px Arial, sans-serif; fill: #334155; }
+      .arrow { stroke: #334155; stroke-width: 2.5; fill: none; marker-end: url(#arrow); }
+    </style>
+  </defs>
+  <rect x="35" y="160" width="190" height="90" class="box" fill="#dbeafe"/>
+  <text x="130" y="198" text-anchor="middle" class="label">Scheduler</text>
+  <text x="130" y="223" text-anchor="middle" class="small">every 5 minutes</text>
+  <rect x="300" y="120" width="250" height="170" class="box" fill="#ede9fe"/>
+  <text x="425" y="163" text-anchor="middle" class="label">New integration API</text>
+  <text x="425" y="191" text-anchor="middle" class="small">candidate selection</text>
+  <text x="425" y="214" text-anchor="middle" class="small">create / update flow</text>
+  <text x="425" y="237" text-anchor="middle" class="small">checkpoint write-back</text>
+  <rect x="650" y="45" width="190" height="90" class="box" fill="#dcfce7"/>
+  <text x="745" y="83" text-anchor="middle" class="label">Maconomy</text>
+  <text x="745" y="108" text-anchor="middle" class="small">jobs + text19</text>
+  <rect x="650" y="180" width="190" height="90" class="box" fill="#fef3c7"/>
+  <text x="745" y="218" text-anchor="middle" class="label">CaseWare Cloud</text>
+  <text x="745" y="243" text-anchor="middle" class="small">entities + addresses</text>
+  <rect x="650" y="315" width="190" height="70" class="box" fill="#f1f5f9"/>
+  <text x="745" y="344" text-anchor="middle" class="label">Local database</text>
+  <text x="745" y="366" text-anchor="middle" class="small">switch + logs only</text>
+  <path d="M225 205 H300" class="arrow"/>
+  <path d="M550 175 C590 145 610 115 650 100" class="arrow"/>
+  <path d="M550 235 C590 240 610 235 650 225" class="arrow"/>
+  <path d="M745 135 V180" class="arrow"/>
+  <path d="M650 350 C590 330 570 295 520 285" class="arrow"/>
+  <text x="580" y="325" text-anchor="middle" class="small">status tracking / active gate</text>
+</svg>

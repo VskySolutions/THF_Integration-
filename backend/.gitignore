@@ -7,3 +7,4 @@ __pycache__/
 .ruff_cache/
 .coverage
 PATCH_ENTITY.md
+code_ref
