@@ -86,6 +86,32 @@ class MaconomyService:
         except httpx.HTTPError as exc:
             raise MaconomyServiceError("Maconomy request failed") from exc
 
+    async def get_syncable_tax_job_by_number(
+        self,
+        job_number: str,
+    ) -> dict[str, Any] | None:
+        """Return one syncable TAX job matching the supplied job number."""
+        normalized_job_number = self._required_string(job_number, "jobnumber")
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                reconnect_token = await self._get_reconnect_token(client)
+                jobs = await self._get_syncable_tax_job_records(
+                    client,
+                    reconnect_token,
+                    job_number=normalized_job_number,
+                )
+                if not jobs:
+                    return None
+
+                enriched_jobs = await self._add_customer_fiscal_year_end_month(
+                    client,
+                    reconnect_token,
+                    jobs,
+                )
+                return enriched_jobs[0]
+        except httpx.HTTPError as exc:
+            raise MaconomyServiceError("Maconomy request failed") from exc
+
     async def update_cch_task_mappings(
         self,
         jobs: list[dict[str, Any]],
@@ -303,22 +329,28 @@ class MaconomyService:
         reconnect_token: str,
         *,
         today: date | None = None,
+        job_number: str | None = None,
     ) -> list[dict[str, Any]]:
         current_date = today or date.today()
         start_date = current_date - timedelta(days=1)
+        restriction = (
+            "template=false "
+            "and closed=false "
+            "and createddate>="
+            f"date({start_date.year},{start_date.month - 1},{start_date.day}) "
+            "and createddate<="
+            f"date({current_date.year},{current_date.month},{current_date.day}) "
+            "and text20=''"
+        )
+        if job_number is not None:
+            escaped_job_number = job_number.replace("'", "''")
+            restriction += f" and jobnumber='{escaped_job_number}'"
+
         response = await client.post(
             f"{self._jobs_url()}/filter",
             headers=self._container_headers(reconnect_token),
             json={
-                "restriction": (
-                    "template=false "
-                    "and closed=false "
-                    "and createddate>="
-                    f"date({start_date.year},{start_date.month - 1},{start_date.day}) "
-                    "and createddate<="
-                    f"date({current_date.year},{current_date.month},{current_date.day}) "
-                    "and text20=''"
-                ),
+                "restriction": restriction,
                 "fields": SYNCABLE_JOB_FIELDS,
                 "limit": 2000,
             },

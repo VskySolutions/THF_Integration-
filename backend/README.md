@@ -68,10 +68,11 @@ If database logging fails, the original API response is still returned.
 
 ## Caseware Cloud integration
 
-The `app/features/caseware_cloud_intergration` feature owns the Caseware Cloud
-entity-engagement mapping and integration-log models and schemas. Integration
-status is constrained to `SUCCESS` or `FAILED`, and action is constrained to
-`CREATE` or `UPDATE` at both the API-schema and PostgreSQL levels.
+The `app/features/maconomy_caseware_cloud_intergration` feature synchronizes
+Maconomy jobs with CaseWare Cloud. Maconomy `text19` stores the CaseWare
+entity/address mapping and synchronized version; the local request-log table
+stores execution status and troubleshooting details. The legacy CaseWare
+mapping feature is no longer registered by the application.
 
 ## Integration service availability
 
