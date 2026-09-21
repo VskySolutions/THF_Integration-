@@ -14,6 +14,7 @@ from app.features.sap_concur_integration.routers.create_maconomy_expense_sheet i
 from app.features.exception_logs import install_exception_logging
 from app.features.schedular_services import SchedulerService
 from app.features.xcm_cch_axcess_integration.routers import (
+    manual_cch_task_mapping_router,
     pending_cch_task_mapping_router,
 )
 
@@ -53,3 +54,4 @@ app.include_router(job_sync_router, prefix=settings.api_v1_prefix)
 app.include_router(sap_concur_router, prefix=settings.api_v1_prefix)
 
 app.include_router(pending_cch_task_mapping_router, prefix=settings.api_v1_prefix)
+app.include_router(manual_cch_task_mapping_router, prefix=settings.api_v1_prefix)
