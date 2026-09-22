@@ -3,10 +3,6 @@ from logging.config import fileConfig
 from sqlalchemy import engine_from_config, pool
 
 from alembic import context
-from app.features.caseware_cloud_intergration.models import (  # noqa: F401
-    CasewareCloudEntityEngagementMapping,
-    CasewareCloudIntegrationLog,
-)
 from app.features.sap_concur_integration.models import (  #noqa: F401
         SAPConcurIntegrationLog,
         SAPConcurExpensesheetExpenseReportMapping,
@@ -16,6 +12,12 @@ from app.core.config import get_settings
 from app.db.base import Base
 from app.features.exception_logs.models import ExceptionLog  # noqa: F401
 from app.features.integration_services.models import IntegrationService  # noqa: F401
+from app.features.maconomy_caseware_cloud_intergration.models import (  # noqa: F401
+    MaconomyCasewareRequestLog,
+)
+from app.features.xcm_cch_axcess_integration.models import (  # noqa: F401
+    XCMCCHIntegrationRunLog,
+)
 
 config = context.config
 

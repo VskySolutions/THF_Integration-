@@ -55,6 +55,12 @@ class Settings(BaseSettings):
     )
     sap_concur_refresh_token: str = "qlf4dtv1l6m53n5dy9pyysfwvio"
 
+    cch_axcess_url: AnyHttpUrl = AnyHttpUrl("https://sandboxworkflow.cchaxcess.com")
+    cch_axcess_api_key: SecretStr
+    cch_axcess_user_name: str
+    cch_axcess_password: SecretStr
+
+
     @field_validator("api_v1_prefix")
     @classmethod
     def validate_api_prefix(cls, value: str) -> str:
