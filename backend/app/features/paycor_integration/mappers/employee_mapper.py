@@ -269,7 +269,7 @@ def map_paycor_employee(
     # temporarily
     
     # if email_address:
-        email_address = f"{email_address}.test"
+        # email_address = f"{email_address}.test"
 
     # Employment date is optional.
     employment_date_data = employee_data.get(
