@@ -8,6 +8,11 @@ from app.features.sap_concur_integration.models import (  #noqa: F401
         SAPConcurExpensesheetExpenseReportMapping,
     )
 
+#paycor model imort
+from app.features.paycor_integration.models import (  # noqa: F401
+    PaycorEmployeeMappingLog,
+    PaycorIntegrationLog,
+)
 from app.core.config import get_settings
 from app.db.base import Base
 from app.features.exception_logs.models import ExceptionLog  # noqa: F401

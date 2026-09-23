@@ -1,0 +1,11 @@
+﻿paycor_integration_logs,datatype,,,,paycor_employee_mapping_log,datatype,
+id,uuid,PK,,,id,uuid,PK
+paycor_employee_mapping_log_id,uuid,"FK, nullable",,,paycor_employee_id,uuid,not null
+paycor_employee_id,uuid,not null,,,paycor_legal_entity_id,INTEGER,not null
+paycor_employee_number,text,Nullable,,,paycor_employee_number,text,not null
+instance,text,not null,,,maconomy_employee_number,text,Nullable until Maconomy creation succeeds
+base_url,text,not null,,,created_on_utc,datetime,current timestamp
+status,enum,"SUCCESS/FAILED,not null",,,updated_on_utc,datetime,nullable
+message,text,nullable,,,unique_constraint,UNIQUE,"(paycor_legal_entity_id,paycor_employee_id)"
+action,enum,"CREATE/UPDATE,not null",,,,,
+created_on_utc,DATETIME,current datetime,,,,,

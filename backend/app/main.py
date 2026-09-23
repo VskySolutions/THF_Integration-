@@ -18,6 +18,10 @@ from app.features.xcm_cch_axcess_integration.routers import (
     pending_cch_task_mapping_router,
 )
 
+#paycor imports 
+#from app.features.paycor_integration.routers import get_new_employees_router
+from app.features.paycor_integration.routers import paycor_router,paycor_testing_router,paycor_update_router
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     # Database connections are created lazily by SQLAlchemy and disposed on exit.
@@ -55,3 +59,8 @@ app.include_router(sap_concur_router, prefix=settings.api_v1_prefix)
 
 app.include_router(pending_cch_task_mapping_router, prefix=settings.api_v1_prefix)
 app.include_router(manual_cch_task_mapping_router, prefix=settings.api_v1_prefix)
+
+#paycor router
+app.include_router(paycor_router, prefix=settings.api_v1_prefix)
+app.include_router(paycor_testing_router, prefix=settings.api_v1_prefix)
+app.include_router(paycor_update_router, prefix=settings.api_v1_prefix)

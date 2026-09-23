@@ -4,3 +4,6 @@ from enum import Enum
 class IntegrationServiceIdentifier(str, Enum):
     MACONOMY_CASEWARE_CLOUD_SYNC = "MACONOMY_CASEWARE_CLOUD_SYNC"
     MACONOMY_CCH_XCM_TASK_MAPPING = "MACONOMY_CCH_XCM_TASK_MAPPING"
+
+    #paycor constants
+    PAYCOR_SYNC_EMPLOYEES = "PAYCOR_SYNC_EMPLOYEES"

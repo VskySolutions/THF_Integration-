@@ -1,6 +1,12 @@
 from functools import lru_cache
 
-from pydantic import AnyHttpUrl, Field, SecretStr, computed_field, field_validator
+from pydantic import (
+    AnyHttpUrl,
+    Field,
+    SecretStr,
+    computed_field,
+    field_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy import URL
 
@@ -22,7 +28,11 @@ class Settings(BaseSettings):
     postgres_user: str = "postgres"
     postgres_password: SecretStr = SecretStr("postgres")
     postgres_host: str = "localhost"
-    postgres_port: int = Field(default=5432, ge=1, le=65535)
+    postgres_port: int = Field(
+        default=5432,
+        ge=1,
+        le=65535,
+    )
     postgres_db: str = "falcon_thf"
     database_echo: bool = False
 
@@ -35,13 +45,19 @@ class Settings(BaseSettings):
     scheduler_interval_minutes: int = Field(default=5, ge=1)
     scheduler_request_timeout_seconds: float = Field(default=600, gt=0)
 
-    maconomy_base_url: AnyHttpUrl = AnyHttpUrl("http://localhost:8080")
+    maconomy_base_url: AnyHttpUrl = AnyHttpUrl(
+        "http://localhost:8080"
+    )
     maconomy_shortname: str = "d104p"
     maconomy_username: str = "admin"
     maconomy_password: SecretStr = SecretStr("admin")
 
-    caseware_cloud_base_url: AnyHttpUrl = AnyHttpUrl("https://api.casewarecloud.com")
-    caseware_cloud_client_id: str = "replace-with-your-client-id"
+    caseware_cloud_base_url: AnyHttpUrl = AnyHttpUrl(
+        "https://api.casewarecloud.com"
+    )
+    caseware_cloud_client_id: str = (
+        "replace-with-your-client-id"
+    )
     caseware_cloud_client_secret: SecretStr = SecretStr(
         "replace-with-your-client-secret"
     )
@@ -61,12 +77,37 @@ class Settings(BaseSettings):
     cch_axcess_password: SecretStr
 
 
+    # ----------------Paycor integration settings------------------
+    paycor_base_url: AnyHttpUrl = AnyHttpUrl(
+        "https://apis-sandbox.paycor.com"
+    )
+    paycor_client_id: str = "replace-with-your-client-id"
+    paycor_client_secret: SecretStr = SecretStr(
+        "replace-with-your-client-secret"
+    )
+    paycor_refresh_token: SecretStr = SecretStr(
+        "replace-with-your-refresh-token"
+    )
+    paycor_subscription_key: SecretStr = SecretStr(
+        "replace-with-your-subscription-key"
+    )
+    paycor_legal_entity_id: str = (
+        "replace-with-your-legal-entity-id"
+    )
+    paycor_tenant_id: str = (
+    "replace-with-your-tenant-id"
+    )
+
     @field_validator("api_v1_prefix")
     @classmethod
     def validate_api_prefix(cls, value: str) -> str:
         normalized = value.rstrip("/") or "/"
+
         if not normalized.startswith("/"):
-            raise ValueError("API_V1_PREFIX must start with '/'")
+            raise ValueError(
+                "API_V1_PREFIX must start with '/'"
+            )
+
         return normalized
 
     @computed_field
@@ -75,7 +116,9 @@ class Settings(BaseSettings):
         return URL.create(
             drivername="postgresql+asyncpg",
             username=self.postgres_user,
-            password=self.postgres_password.get_secret_value(),
+            password=(
+                self.postgres_password.get_secret_value()
+            ),
             host=self.postgres_host,
             port=self.postgres_port,
             database=self.postgres_db,
@@ -84,12 +127,20 @@ class Settings(BaseSettings):
     @computed_field
     @property
     def maconomy_url(self) -> str:
-        return str(self.maconomy_base_url).rstrip("/")
+        return str(
+            self.maconomy_base_url
+        ).rstrip("/")
 
     @computed_field
     @property
     def caseware_cloud_url(self) -> str:
         return str(self.caseware_cloud_base_url).rstrip("/")
+
+    
+    @computed_field
+    @property
+    def paycor_url(self) -> str:
+        return str(self.paycor_base_url).rstrip("/")
 
     @property
     def scheduler_api_url(self) -> str:
@@ -99,7 +150,11 @@ class Settings(BaseSettings):
     def accepted_api_keys(self) -> tuple[str, ...]:
         return tuple(
             key.strip()
-            for key in self.api_keys.get_secret_value().split(",")
+            for key in (
+                self.api_keys
+                .get_secret_value()
+                .split(",")
+            )
             if key.strip()
         )
 
