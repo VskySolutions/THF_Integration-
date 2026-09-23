@@ -301,6 +301,53 @@ async def create_maconomy_expense_sheet(
     employee_email: str | None = None,
     employee_number: str | None = None,
 ) -> dict[str, Any]:
+    """Create Maconomy expense sheet + lines for a SAP Concur report.
+
+    Guarantees at most ONE integration-log row per report:
+    - Inner failure paths log exactly one FAILED/SKIPPED row, then raise
+      HTTPException (outer handlers stay log-free).
+    - Success/partial/all-lines-failed paths write one consolidated final row.
+    - Defensive outer catch writes a single FAILED row only if an unexpected
+      error escapes without any prior log.
+    """
+    try:
+        return await _run_create_maconomy_expense_sheet(
+            report_id=report_id,
+            login_id=login_id,
+            session=session,
+            action_from=action_from,
+            employee_email=employee_email,
+            employee_number=employee_number,
+        )
+    except HTTPException:
+        # Inner failure paths already wrote their single log row before raising.
+        raise
+    except Exception as exc:
+        # Gap protection: unexpected error that bypassed all inner log paths.
+        try:
+            await _save_integration_log(
+                session,
+                report_id=report_id,
+                action=IntegrationAction.CREATE,
+                integration_status=IntegrationStatus.FAILED,
+                message=f"Expense sheet processing failed: {exc}",
+                employeeemail=employee_email,
+            )
+        except Exception as log_exc:
+            print(
+                f"Failed to write integration log for report {report_id}: {log_exc}"
+            )
+        raise
+
+
+async def _run_create_maconomy_expense_sheet(
+    report_id: str,
+    login_id: str,
+    session: AsyncSession,
+    action_from: str = "CREATEAPI",
+    employee_email: str | None = None,
+    employee_number: str | None = None,
+) -> dict[str, Any]:
     print("======= create_maconomy_expense_sheet ==========")
 
     try:
@@ -349,7 +396,7 @@ async def create_maconomy_expense_sheet(
                 report_detail, employee_number=employee_number
             )
         except MaconomyServiceError as exc:
-            message = f"Failed to create Maconomy expense sheet: {str(e)}"
+            message = f"Failed to create Maconomy expense sheet: {str(exc)}"
             await _raise_expense_sheet_creation_error(session, report_id, exc)
             # if not exc.reconciliation_allowed: 
             #     await _raise_expense_sheet_creation_error( session, report_id, exc, )
@@ -428,9 +475,18 @@ async def create_maconomy_expense_sheet(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=message
         )
 
+    # --- Expense Line Items Creation (fault-tolerant; structured results) ---
+    line_results: dict[str, Any] = {
+        "succeeded": [],
+        "failed": [],
+        "total": 0,
+        "success_count": 0,
+        "failure_count": 0,
+    }
+
     if concur_expenses:
         try:
-            line_item_results = await maconomy_service.create_expense_line_items(
+            line_results = await maconomy_service.create_expense_line_items(
                 expense_sheet_number=expense_sheet_number,
                 expense_data=concur_expenses,
                 employee_number=employee_number,
@@ -438,9 +494,11 @@ async def create_maconomy_expense_sheet(
                 user_id=user_id,
                 context_type="TRAVELER",
             )
-            print("line_item_results:", line_item_results)
-            
+            print("line_item_results:", line_results)
+
         except MaconomyServiceError as exc:
+            # Report-level: shared setup failed before any line was processed.
+            # Single FAILED row for this report, then raise (no second row).
             message = f"Failed to create Maconomy expense line items: {str(exc)}"
             await _save_integration_log(
                 session,
@@ -454,48 +512,102 @@ async def create_maconomy_expense_sheet(
                 status_code=status.HTTP_502_BAD_GATEWAY, detail=message
             )
 
-        # Build metadata: {expenseId: linenumber}
+        # Metadata from SUCCESSES only — expense_id-keyed (no positional
+        # concur_expenses[idx] assumption).
         expense_line_metadata: dict[str, str] = {}
-        for idx, result in enumerate(line_item_results):
-            try:
-                expense_id = str(concur_expenses[idx].get("expenseId", ""))
-                # line_number = str(result.get("panes", {}).get("table", {}).get("records", [{}])[0].get("data", {}).get("linenumber", ""))
-                records = result.get("panes", {}).get("table", {}).get("records", [])
-                if records:
-                    line_number = str(records[-1].get("data", {}).get("linenumber", ""))
-                else:
-                    line_number = ""
-                print("expense_id:", expense_id,"line_number:",line_number)
-                if expense_id and line_number:
-                    expense_line_metadata[expense_id] = line_number
-            except (KeyError, TypeError, IndexError):
-                # Skip this entry if response structure is unexpected
-                continue
+        for entry in line_results.get("succeeded", []):
+            expense_id = str(entry.get("expense_id", ""))
+            line_number = str(entry.get("line_number", ""))
+            print("expense_id:", expense_id, "line_number:", line_number)
+            if expense_id and line_number:
+                expense_line_metadata[expense_id] = line_number
 
         if expense_line_metadata:
-            await expensesheet_expensereport_mapping_service.update_mapping_metadata(
-                session,
-                mapping_id=mapping.id,
-                expense_line_metadata=expense_line_metadata,
-            )
+            try:
+                await expensesheet_expensereport_mapping_service.update_mapping_metadata(
+                    session,
+                    mapping_id=mapping.id,
+                    expense_line_metadata=expense_line_metadata,
+                )
+            except Exception as meta_exc:
+                # Non-fatal: metadata failure must not fail a processed report
+                # or create/duplicate a log row.
+                print(
+                    f"Failed to update expense line metadata for report "
+                    f"{report_id} (non-fatal): {meta_exc}"
+                )
 
-    await integration_log_service.create_log(
-        session,
-        mapping_id=mapping.id,
-        report_id=report_id,
-        status=IntegrationStatus.SUCCESS,
-        action=IntegrationAction.CREATE,
-        message=(
-            "SAP Concur Expense sheet and line items reconciled and synchronized successfully"
-            if expensesheet_was_reconciled
-            else "SAP Concur Expense Sheet and line items created successfully"
-            if is_new_expensesheet
-            else "Incomplete SAP Concur create workflow resumed successfully"
-        ),
-        employeeemail=employee_email,
+    # --- Exactly ONE consolidated report-level log (Option B statuses) ---
+    total = int(line_results.get("total", 0))
+    success_count = int(line_results.get("success_count", 0))
+    failure_count = int(line_results.get("failure_count", 0))
+
+    base_message = (
+        "SAP Concur Expense sheet and line items reconciled and synchronized successfully"
+        if expensesheet_was_reconciled
+        else "SAP Concur Expense Sheet and line items created successfully"
+        if is_new_expensesheet
+        else "Incomplete SAP Concur create workflow resumed successfully"
     )
 
+    if total == 0 or failure_count == 0:
+        # No lines, or all lines succeeded — preserve existing success behavior.
+        final_status = IntegrationStatus.SUCCESS
+        detail = f" ({success_count}/{total} lines succeeded)" if total else ""
+        final_message = f"{base_message}{detail}"
+    elif success_count == 0:
+        # Sheet created but ALL expense lines failed.
+        final_status = IntegrationStatus.FAILED
+        final_message = (
+            f"Expense sheet {expense_sheet_number} created but ALL "
+            f"{total} expense lines failed.\n"
+            f"{_format_line_results(line_results)}"
+        )
+    else:
+        # Option B fallback: partial outcome → SUCCESS + PARTIAL: prefix
+        # (no PARTIAL_SUCCESS enum; distinguishable via message text).
+        final_status = IntegrationStatus.SUCCESS
+        final_message = (
+            f"PARTIAL: Expense sheet {expense_sheet_number} created; "
+            f"{success_count}/{total} lines succeeded, "
+            f"{failure_count} failed.\n"
+            f"{_format_line_results(line_results)}"
+        )
+
+    try:
+        await integration_log_service.create_log(
+            session,
+            mapping_id=mapping.id,
+            report_id=report_id,
+            status=final_status,
+            action=IntegrationAction.CREATE,
+            message=final_message,
+            employeeemail=employee_email,
+        )
+    except Exception as log_exc:
+        # Safe logging: a logging failure must not mask the processing outcome.
+        print(
+            f"Failed to write integration log for report {report_id}: {log_exc}"
+        )
+
     return maconomy_expense_sheet_result
+
+
+def _format_line_results(line_results: dict[str, Any]) -> str:
+    """Render per-line success/failure detail for the consolidated log message,
+    preserving original exception text for failed lines."""
+    parts: list[str] = []
+    for entry in line_results.get("succeeded", []):
+        parts.append(
+            f"[SUCCESS] {entry.get('expense_id', '')} -> Maconomy line "
+            f"{entry.get('line_number', '')}"
+        )
+    for entry in line_results.get("failed", []):
+        parts.append(
+            f"[FAILED] {entry.get('expense_id', '')} -> "
+            f"{entry.get('message', '')} ({entry.get('error_type', '')})"
+        )
+    return "\n".join(parts)
 
 
 async def _save_integration_log(
@@ -582,3 +694,44 @@ def build_owner_employee_mapping(
             )
     return mapping
 
+
+
+# @router.post(
+#     "/sync-sap-concur-report-into-maconomy-by-report-id",
+#     response_model=list[dict[str, Any]],
+# )
+# async def s(
+#     report_id: str,
+# ) -> list[dict[str, Any]]:
+
+    # # Check if the report is present in the sap concur or not
+    # try:
+    #     expense_reports = await SAPConcurService().get_yesterday_and_todays_new_expense_reports_from_sap_concur()
+    # except Exception as exc:
+    #     raise HTTPException(
+    #         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+    #         detail=f"Failed to fetch expense reports from SAP Concur: {str(exc)}",
+    #     ) from exc
+
+
+
+    # Check if report is present in the retrieved report
+    # for report in expense_reports:
+    #     existing_report_id = report.get("reportId")
+
+    return None
+
+
+    # If no then stop the process and return that report does not exist in the sap concur
+
+    # If yes then retrieve owner login id and check if employee matches with the maconomy email and it has vendor or not
+
+    # If no then stop the process and return that employee not found
+
+    # If yes then check if expense sheet is created for that report
+
+        # If yes then check if all expense lines are created or not
+        # If yes then then check if the expense line item in maconomy are present in the sap concur,stop the process and return that already sync
+        # If not then create all the expense lines in maconomy
+
+    # If no then create the expense sheet and expense line items

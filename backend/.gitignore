@@ -10,3 +10,5 @@ PATCH_ENTITY.md
 sdlc-processes
 .opencode
 code_ref
+./backend/sdlc-processes
+../sdlc-processes

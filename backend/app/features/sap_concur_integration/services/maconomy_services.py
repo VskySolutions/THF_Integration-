@@ -601,164 +601,296 @@ class MaconomyService:
         report_id: str | None = None,
         user_id: str | None = None,
         context_type: str | None = None,
-    ) -> list[dict[str, Any]]:
+    ) -> dict[str, Any]:
+        """Create Maconomy expense lines fault-tolerantly.
+
+        Each expense line is processed independently through its own
+        fetch -> resolve customData -> map -> create pipeline. A failure on
+        one line is captured (original exception text retained) and
+        processing CONTINUES with the remaining lines — a single failed
+        line never terminates the report.
+
+        Shared Maconomy session setup (client + reconnect token) is a
+        report-level concern: if setup fails, MaconomyServiceError is
+        raised as before.
+
+        Returns:
+            {
+                "succeeded": [{"expense_id", "line_number", "response"}, ...],
+                "failed": [{"expense_id", "error_type", "message"}, ...],
+                "total": int,
+                "success_count": int,
+                "failure_count": int,
+            }
+            Skips (missing expenseId / detail not found / list item not
+            found) are recorded in "failed" with error_type "SKIPPED".
+        """
         print("=========== create_expense_line_items =============")
 
-        # Get detailed expense data for each expense (includes customData)
-        processed_expense_data: list[dict[str, Any]] = []
         sap_concur_service = SAPConcurService()
+        succeeded: list[dict[str, Any]] = []
+        failed: list[dict[str, Any]] = []
 
-        for expense_item in expense_data:
-            expense_id = expense_item.get("expenseId")
-            if not expense_id:
-                print(f"Skipping expense: missing expenseId")
-                continue
-
-            # Get complete detailed expense data from SAP Concur
-            detailed_expense = await sap_concur_service.get_expenses_by_expense_id(
-                expense_id=expense_id,
-                report_id=report_id or "",
-                user_id=user_id or "",
-                context_type=context_type or "",
+        def _record_skip(expense_id: str | None, reason: str) -> None:
+            print(f"Skipping expense: {reason}")
+            failed.append(
+                {
+                    "expense_id": expense_id or "",
+                    "error_type": "SKIPPED",
+                    "message": reason,
+                }
             )
-
-            if detailed_expense is None:
-                print(f"Skipping expense: could not retrieve detailed data for expense_id={expense_id}")
-                continue
-
-            # Extract customData from detailed expense response
-            custom_data = detailed_expense.get("customData", [])
-            print("=== custom_data ===:", custom_data)
-            custom_data_values: dict[str, Any] = {}
-            skip_expense = False
-
-            if custom_data:
-                for custom_entry in custom_data:
-                    print("custom_entry:", custom_entry)
-                    entry_id = custom_entry.get("id")
-                    entry_value = custom_entry.get("value", "")
-
-                    if not entry_id:
-                        continue
-
-                    # Only process custom1, custom2, custom5, custom6
-                    if entry_id not in ("custom1", "custom2", "custom5", "custom6"):
-                        continue
-
-                    # Call get_list_items_by_id to retrieve the list item details
-                    list_item = await sap_concur_service.get_list_items_by_id(
-                        report_id=report_id or "",
-                        user_id=user_id or "",
-                        context_type=context_type or "",
-                        item_id=entry_value,
-                    )
-
-                    if list_item is None:
-                        print(f"Skipping expense: get_list_items_by_id returned None for {entry_id}={entry_value}")
-                        skip_expense = True
-                        break
-
-                    # Store the retrieved value
-                    if entry_id == "custom1":
-                        # Location
-                        custom_data_values["location"] = list_item.get("value", "")
-                    elif entry_id == "custom2":
-                        # Department
-                        custom_data_values["department"] = list_item.get("value", "")
-                    elif entry_id == "custom5":
-                        # Travel Reason
-                        custom_data_values["travel_reason"] = list_item.get("value", "")
-                    elif entry_id == "custom6":
-                        # Client Engagement - extract job number
-                        client_engagement = list_item.get("value", "")
-                        custom_data_values["client_engagement"] = client_engagement
-                        custom_data_values["job_number"] = self.extract_job_number_from_client_engagement(client_engagement)
-
-            if skip_expense:
-                continue
-
-            # Store custom data values in the detailed expense for the mapper
-            detailed_expense["_custom_data_values"] = custom_data_values
-            processed_expense_data.append(detailed_expense)
-
-        if not processed_expense_data:
-            print("No expenses to process after customData filtering")
-            return []
-
-        try:
-            mapped_expenses = [
-                map_concur_expense_to_maconomy_expense(
-                    expense_item,
-                    expense_sheet_number=expense_sheet_number,
-                    employee_number=employee_number,
-                    custom_data_values=expense_item.get("_custom_data_values"),
-                )
-                for expense_item in processed_expense_data
-            ]
-        except ValueError as exc:
-            raise MaconomyServiceError(str(exc)) from exc
-
-        results: list[dict[str, Any]] = []
 
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
-                reconnect_token = await self._get_reconnect_token(client)
+                # --- Report-level setup (raises on failure, as today) ---
+                try:
+                    reconnect_token = await self._get_reconnect_token(client)
+                except httpx.HTTPError as exc:
+                    raise MaconomyServiceError("Maconomy request failed") from exc
 
                 print("======== Expense Line Items Creation Started ========")
 
-                for index, expense_line_data in enumerate(mapped_expenses):
-                    print(f"---- Creating expense line {index} ----")
-
-                    instance_id, concurrency_token = await self._retrieve_expenses_instance(
-                        client=client,
-                        reconnect_token=reconnect_token,
-                    )
-
-                    # Load existing expense sheet into the container
-                    load_url = f"{self._expense_sheet_url()}/instances/{instance_id}/data;expensesheetnumber={quote(expense_sheet_number, safe='')}"
-                    load_headers = self._container_headers(reconnect_token)
-                    load_headers["Maconomy-Concurrency-Control"] = concurrency_token
-                    load_response = await client.post(load_url, headers=load_headers, json={})
-                    load_response.raise_for_status()
-                    concurrency_token = self._get_concurrency_token(load_response)
-
-                    _, concurrency_token = await self._initialize_expense_table(
-                        client=client,
-                        reconnect_token=reconnect_token,
-                        instance_id=instance_id,
-                        concurrency_token=concurrency_token,
-                        row=index + 1,
-
-                    )
-
-                    url = f"{self._expense_sheet_url()}/instances/{instance_id}/data/panes/table"
-                    headers = self._container_headers(reconnect_token)
-                    headers["Maconomy-Concurrency-Control"] = concurrency_token
-                    print("expense_line_data:", expense_line_data)
-                    response = await client.post(url, headers=headers, json=expense_line_data)
-                    print("response:",response.status_code, response.text)
-                    response.raise_for_status()
-
+                # --- Per-line pipeline: one failure never stops the rest ---
+                for index, expense_item in enumerate(expense_data):
+                    expense_id = expense_item.get("expenseId")
                     try:
-                        payload = response.json()
-                    except (KeyError, TypeError, ValueError) as json_exc:
-                        raise MaconomyServiceError(
-                            f"Invalid Maconomy expense line response for line {index}"
-                        ) from json_exc
+                        if not expense_id:
+                            _record_skip(None, "missing expenseId")
+                            continue
 
-                    if not isinstance(payload, dict):
-                        raise MaconomyServiceError(
-                            f"Invalid Maconomy expense line response for line {index}"
+                        print(
+                            f"---- Processing expense line {index} "
+                            f"(expense_id={expense_id}) ----"
                         )
 
-                    results.append(payload)
+                        # 1) Fetch detailed expense data from SAP Concur
+                        detailed_expense = (
+                            await sap_concur_service.get_expenses_by_expense_id(
+                                expense_id=expense_id,
+                                report_id=report_id or "",
+                                user_id=user_id or "",
+                                context_type=context_type or "",
+                            )
+                        )
+                        if detailed_expense is None:
+                            _record_skip(
+                                str(expense_id),
+                                "could not retrieve detailed data for "
+                                f"expense_id={expense_id}",
+                            )
+                            continue
+
+                        # 2) Resolve customData list items
+                        custom_data = detailed_expense.get("customData", [])
+                        print("=== custom_data ===:", custom_data)
+                        custom_data_values: dict[str, Any] = {}
+                        skip_expense = False
+                        skip_reason = ""
+
+                        if custom_data:
+                            for custom_entry in custom_data:
+                                print("custom_entry:", custom_entry)
+                                entry_id = custom_entry.get("id")
+                                entry_value = custom_entry.get("value", "")
+
+                                if not entry_id:
+                                    continue
+
+                                # Only process custom1, custom2, custom5, custom6
+                                if entry_id not in (
+                                    "custom1",
+                                    "custom2",
+                                    "custom5",
+                                    "custom6",
+                                ):
+                                    continue
+
+                                list_item = (
+                                    await sap_concur_service.get_list_items_by_id(
+                                        report_id=report_id or "",
+                                        user_id=user_id or "",
+                                        context_type=context_type or "",
+                                        item_id=entry_value,
+                                    )
+                                )
+
+                                if list_item is None:
+                                    skip_reason = (
+                                        "get_list_items_by_id returned None "
+                                        f"for {entry_id}={entry_value}"
+                                    )
+                                    skip_expense = True
+                                    break
+
+                                if entry_id == "custom1":
+                                    # Location
+                                    custom_data_values["location"] = (
+                                        list_item.get("value", "")
+                                    )
+                                elif entry_id == "custom2":
+                                    # Department
+                                    custom_data_values["department"] = (
+                                        list_item.get("value", "")
+                                    )
+                                elif entry_id == "custom5":
+                                    # Travel Reason
+                                    custom_data_values["travel_reason"] = (
+                                        list_item.get("value", "")
+                                    )
+                                elif entry_id == "custom6":
+                                    # Client Engagement - extract job number
+                                    client_engagement = list_item.get("value", "")
+                                    custom_data_values["client_engagement"] = (
+                                        client_engagement
+                                    )
+                                    custom_data_values["job_number"] = (
+                                        self.extract_job_number_from_client_engagement(
+                                            client_engagement
+                                        )
+                                    )
+
+                        if skip_expense:
+                            _record_skip(str(expense_id), skip_reason)
+                            continue
+
+                        detailed_expense["_custom_data_values"] = (
+                            custom_data_values
+                        )
+
+                        # 3) Map THIS line only — one ValueError no longer
+                        #    aborts the batch
+                        expense_line_data = map_concur_expense_to_maconomy_expense(
+                            detailed_expense,
+                            expense_sheet_number=expense_sheet_number,
+                            employee_number=employee_number,
+                            custom_data_values=custom_data_values,
+                        )
+
+                        # 4) Create the line in Maconomy — exact existing
+                        #    per-line call sequence preserved
+                        instance_id, concurrency_token = (
+                            await self._retrieve_expenses_instance(
+                                client=client,
+                                reconnect_token=reconnect_token,
+                            )
+                        )
+
+                        # Load existing expense sheet into the container
+                        load_url = (
+                            f"{self._expense_sheet_url()}/instances/"
+                            f"{instance_id}/data;expensesheetnumber="
+                            f"{quote(expense_sheet_number, safe='')}"
+                        )
+                        load_headers = self._container_headers(reconnect_token)
+                        load_headers["Maconomy-Concurrency-Control"] = (
+                            concurrency_token
+                        )
+                        load_response = await client.post(
+                            load_url, headers=load_headers, json={}
+                        )
+                        load_response.raise_for_status()
+                        concurrency_token = self._get_concurrency_token(
+                            load_response
+                        )
+
+                        _, concurrency_token = (
+                            await self._initialize_expense_table(
+                                client=client,
+                                reconnect_token=reconnect_token,
+                                instance_id=instance_id,
+                                concurrency_token=concurrency_token,
+                                row=index + 1,
+                            )
+                        )
+
+                        url = (
+                            f"{self._expense_sheet_url()}/instances/"
+                            f"{instance_id}/data/panes/table"
+                        )
+                        headers = self._container_headers(reconnect_token)
+                        headers["Maconomy-Concurrency-Control"] = (
+                            concurrency_token
+                        )
+                        print("expense_line_data:", expense_line_data)
+                        response = await client.post(
+                            url, headers=headers, json=expense_line_data
+                        )
+                        print("response:", response.status_code, response.text)
+                        response.raise_for_status()
+
+                        try:
+                            payload = response.json()
+                        except (KeyError, TypeError, ValueError) as json_exc:
+                            raise MaconomyServiceError(
+                                f"Invalid Maconomy expense line response "
+                                f"for line {index}"
+                            ) from json_exc
+
+                        if not isinstance(payload, dict):
+                            raise MaconomyServiceError(
+                                f"Invalid Maconomy expense line response "
+                                f"for line {index}"
+                            )
+
+                        # Extract line number (same shape the router uses)
+                        line_number = ""
+                        try:
+                            records = (
+                                payload.get("panes", {})
+                                .get("table", {})
+                                .get("records", [])
+                            )
+                            if records:
+                                line_number = str(
+                                    records[-1]
+                                    .get("data", {})
+                                    .get("linenumber", "")
+                                )
+                        except (KeyError, TypeError, IndexError):
+                            line_number = ""
+
+                        succeeded.append(
+                            {
+                                "expense_id": str(expense_id),
+                                "line_number": line_number,
+                                "response": payload,
+                            }
+                        )
+
+                    except Exception as exc:
+                        # Line-scoped failure: capture original exception and
+                        # CONTINUE with the next line. Never re-raise here.
+                        print(
+                            f"Expense line failed "
+                            f"(expense_id={expense_id}): {exc}"
+                        )
+                        failed.append(
+                            {
+                                "expense_id": str(expense_id)
+                                if expense_id
+                                else "",
+                                "error_type": type(exc).__name__,
+                                "message": str(exc),
+                            }
+                        )
+                        continue
 
                 print("========= Expense Line Items creation completed ==========")
 
-                return results
-
+        except MaconomyServiceError:
+            raise
         except httpx.HTTPError as exc:
+            # Only reachable from report-level setup outside the per-line guard
             raise MaconomyServiceError("Maconomy request failed") from exc
+
+        return {
+            "succeeded": succeeded,
+            "failed": failed,
+            "total": len(expense_data),
+            "success_count": len(succeeded),
+            "failure_count": len(failed),
+        }
         
 
 
