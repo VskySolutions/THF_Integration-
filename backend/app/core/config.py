@@ -20,83 +20,81 @@ class Settings(BaseSettings):
         validate_default=True,
     )
 
+    # App settings
     app_name: str = "Falcon THF Integration Services"
-    app_env: str = "development"
+    app_env: str
     api_v1_prefix: str = "/api/v1"
     docs_enabled: bool = True
 
-    postgres_user: str = "postgres"
-    postgres_password: SecretStr = SecretStr("postgres")
-    postgres_host: str = "localhost"
+    # Database settings
+    postgres_user: str
+    postgres_password: SecretStr
+    postgres_host: str
     postgres_port: int = Field(
         default=5432,
         ge=1,
         le=65535,
     )
-    postgres_db: str = "falcon_thf"
+    postgres_db: str
     database_echo: bool = False
 
     # Comma-separated values allow key rotation without downtime.
-    api_keys: SecretStr = Field(default=SecretStr("change-me"))
-
-    scheduler_enabled: bool = False
-    scheduler_api_base_url: AnyHttpUrl = AnyHttpUrl("http://127.0.0.1:8000")
-    scheduler_api_key: SecretStr = SecretStr("change-me")
-    scheduler_interval_minutes: int = Field(default=5, ge=1)
-    scheduler_request_timeout_seconds: float = Field(default=600, gt=0)
-
+    api_keys: SecretStr
+   
+    # Maconomy integration settings
     maconomy_base_url: AnyHttpUrl = AnyHttpUrl(
         "http://localhost:8080"
     )
-    maconomy_shortname: str = "d104p"
-    maconomy_username: str = "admin"
-    maconomy_password: SecretStr = SecretStr("admin")
+    maconomy_shortname: str
+    maconomy_username: str
+    maconomy_password: SecretStr
 
+    # Caseware Cloud integration settings
     caseware_cloud_base_url: AnyHttpUrl = AnyHttpUrl(
         "https://api.casewarecloud.com"
     )
-    caseware_cloud_client_id: str = (
-        "replace-with-your-client-id"
-    )
-    caseware_cloud_client_secret: SecretStr = SecretStr(
-        "replace-with-your-client-secret"
-    )
+    caseware_cloud_client_id: SecretStr
+    caseware_cloud_client_secret: SecretStr
     caseware_cloud_language: str = "en"
 
-    sap_concur_url: AnyHttpUrl = AnyHttpUrl("https://us2concursolutions.com")
-    sap_concur_api_base_url: AnyHttpUrl = AnyHttpUrl("https://us.api.concursolutions.com")
-    sap_concur_client_id: str = "cddce98b-2b01-403d-84c6-685afe69c3c5"
-    sap_concur_client_secret: SecretStr = SecretStr(
-        "5acfaf42-41e9-473c-bf83-d2198d872262"
+    # CCH
+    cch_axcess_url: AnyHttpUrl = AnyHttpUrl(
+        "https://sandboxworkflow.cchaxcess.com"
     )
-    sap_concur_refresh_token: str = "qlf4dtv1l6m53n5dy9pyysfwvio"
-
-    cch_axcess_url: AnyHttpUrl = AnyHttpUrl("https://sandboxworkflow.cchaxcess.com")
     cch_axcess_api_key: SecretStr
     cch_axcess_user_name: str
     cch_axcess_password: SecretStr
 
-
-    # ----------------Paycor integration settings------------------
+    # Paycor integration settings
     paycor_base_url: AnyHttpUrl = AnyHttpUrl(
         "https://apis-sandbox.paycor.com"
     )
-    paycor_client_id: str = "replace-with-your-client-id"
-    paycor_client_secret: SecretStr = SecretStr(
-        "replace-with-your-client-secret"
+    paycor_client_id: SecretStr
+    paycor_client_secret: SecretStr
+    paycor_refresh_token: SecretStr
+    paycor_subscription_key: SecretStr
+    paycor_legal_entity_id: str 
+    paycor_tenant_id: str
+    
+    # SAP Concur integration settings
+    sap_concur_url: AnyHttpUrl = AnyHttpUrl(
+        "https://us2concursolutions.com"
     )
-    paycor_refresh_token: SecretStr = SecretStr(
-        "replace-with-your-refresh-token"
+    sap_concur_api_base_url: AnyHttpUrl = AnyHttpUrl(
+        "https://us.api.concursolutions.com"
     )
-    paycor_subscription_key: SecretStr = SecretStr(
-        "replace-with-your-subscription-key"
+    sap_concur_client_id: SecretStr
+    sap_concur_client_secret: SecretStr
+    sap_concur_refresh_token: SecretStr    
+
+    # Schedular settings
+    scheduler_enabled: bool = False
+    scheduler_api_base_url: AnyHttpUrl = AnyHttpUrl(
+        "http://127.0.0.1:8000"
     )
-    paycor_legal_entity_id: str = (
-        "replace-with-your-legal-entity-id"
-    )
-    paycor_tenant_id: str = (
-    "replace-with-your-tenant-id"
-    )
+    scheduler_api_key: SecretStr
+    scheduler_interval_minutes: int = Field(default=5, ge=1)
+    scheduler_request_timeout_seconds: float = Field(default=600, gt=0)
 
     @field_validator("api_v1_prefix")
     @classmethod
