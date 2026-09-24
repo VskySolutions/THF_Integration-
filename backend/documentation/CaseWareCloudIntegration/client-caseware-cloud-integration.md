@@ -17,15 +17,16 @@ stores execution status for support.
 | `name1` | Sets the address name. |
 | `name2`, `name3`, `name4` | Set address lines 1, 2, and 3. |
 | `postaldistrict` | Sets the address city. |
-| `country` | Sets the address country. |
+| `country` | Sets the address country name and is matched to Maconomy's ISO code for the CaseWare entity and address. |
 | `template`, `closed` | Exclude template and closed jobs. |
 | `createddate`, `changeddate` | Select recent jobs for the scheduled run. |
 | `versionnumber` | Determines whether CaseWare needs a newer version. |
 | `text19` | Stores CaseWare IDs, numbers, synchronized version, and UTC timestamp. |
 
 The integration applies the following standard CaseWare values: entity owner
-`Client`, entity type `A`, organization type `Corporation`, entity country code
-`US`, and address category `Business`.
+`Client`, entity type `A`, organization type `Corporation`, and address category
+`Business`. The entity and address country code comes from the ISO code assigned
+to the Maconomy country name.
 
 ### Scope boundaries
 
@@ -107,6 +108,11 @@ The integration asks Maconomy for jobs that meet all of these conditions:
 The response includes the job details needed to update CaseWare, including the
 job name, address fields, Maconomy version, and `text19`.
 
+When at least one job requires creation or update, the integration reads the
+Maconomy country list once for that request. It matches each job's country name
+to the corresponding two-letter ISO code and reuses the list for all jobs in
+the batch. No country-list request is made when there is no work to synchronize.
+
 ![Filled Maconomy New Job form](assets/new-job-creation-filled-form.png)
 
 The job is created in Maconomy from the completed New Job form. The job name,
@@ -142,7 +148,7 @@ The entity is the organization or client record in CaseWare Cloud.
 | — | `OwnerType = Client` | Identifies the CaseWare entity as a client. |
 | — | `Type = A` | Sets the CaseWare entity type required by the integration. |
 | — | `OrganizationType = Corporation` | Sets the standard organization classification during creation. |
-| — | `CountryCode = US` | Sets the standard country code during entity creation. |
+| Country (`country`) matched with the Maconomy country list | `CountryCode` | Sets the two-letter ISO country code during entity creation and updates. |
 
 The job number is the link between the two systems. For example, Maconomy job
 `10105` is searched in CaseWare as entity number `VSKY-10105`.
@@ -159,7 +165,8 @@ address shown on the Maconomy Customer tab.
 | Address line 2 (`name3`) | `Address2` | The second address line, when provided. |
 | Address line 3 (`name4`) | `Address3` | The third address line, when provided. |
 | City or postal district (`postaldistrict`) | `City` | The city or locality. |
-| Country (`country`) | `Country` | The country value from Maconomy. |
+| Country (`country`) | `Country` | The country name from the Maconomy job. |
+| Country (`country`) matched with the Maconomy country list | `CountryCode` | The corresponding two-letter ISO country code. |
 | — | `AddressCategory = Business` | Identifies the address as a business address. |
 
 When an address is created, CaseWare returns an address number (`Id`) and a

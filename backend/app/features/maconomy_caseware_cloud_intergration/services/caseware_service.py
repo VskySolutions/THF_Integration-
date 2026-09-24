@@ -238,6 +238,7 @@ class CasewareService:
                 "OperatingName": str(job_name),
                 "OwnerType": "Client",
                 "Type": "A",
+                "CountryCode": self._country_code(job),
                 # "ExDescription": str(job.get("description1", "")),
                 # "StartDate": job.get("startingdate", None),
             },
@@ -259,7 +260,7 @@ class CasewareService:
                 "EntityNo": f"{job_number}" if self.settings.app_env == "production" else f"VSKY-{job_number}",
                 "Name": str(job_name),
                 "OwnerType": "Client",
-                "CountryCode": "US",
+                "CountryCode": self._country_code(job),
                 "OperatingName": str(job_name),
                 "OrganizationType": "Corporation",
                 "Type": "A",
@@ -420,8 +421,21 @@ class CasewareService:
             "AddressCategory": "Business",
             "City": job.get("postaldistrict", ""),
             "Country": job.get("country", ""),
+            "CountryCode": CasewareService._country_code(job),
             "Name": job.get("name1", ""),
             "PostalCode": job.get("zipcode", ""),
-            # "CountryCode":"ZZ",
             "PhoneNumber": job.get("telephone", ""),
         }
+
+    @staticmethod
+    def _country_code(job: dict[str, Any]) -> str:
+        country_code = job.get("countryCode")
+        if (
+            not isinstance(country_code, str)
+            or len(country_code.strip()) != 2
+            or not country_code.strip().isalpha()
+        ):
+            raise CasewareServiceError(
+                "Maconomy country could not be mapped to a valid ISO code"
+            )
+        return country_code.strip().upper()
