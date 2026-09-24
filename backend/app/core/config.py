@@ -48,6 +48,7 @@ class Settings(BaseSettings):
     maconomy_shortname: str
     maconomy_username: str
     maconomy_password: SecretStr
+    maconomy_send_name_components: bool = False
 
     # Caseware Cloud integration settings
     caseware_cloud_base_url: AnyHttpUrl = AnyHttpUrl(

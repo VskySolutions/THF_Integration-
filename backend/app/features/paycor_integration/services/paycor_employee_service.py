@@ -196,6 +196,7 @@ class PaycorService:
                 "grant_type": "refresh_token",
                 "client_id": (
                     self.settings.paycor_client_id
+                    .get_secret_value()
                 ),
                 "client_secret": (
                     self.settings
@@ -211,10 +212,20 @@ class PaycorService:
         )
 
         if response.is_error:
-            raise PaycorServiceError(
+            response_body = response.text.strip()
+
+            message = (
                 "Paycor authentication failed with "
                 f"HTTP {response.status_code}"
             )
+
+            if response_body:
+                message = (
+                    f"{message}: "
+                    f"{response_body[:2000]}"
+                )
+
+            raise PaycorServiceError(message)
 
         try:
             response_data = response.json()

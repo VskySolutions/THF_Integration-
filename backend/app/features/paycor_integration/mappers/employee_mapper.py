@@ -535,6 +535,8 @@ def map_paycor_employee(
 
 def map_paycor_employee_to_maconomy(
     employee_data: dict[str, Any],
+    *,
+    include_name_components: bool = False,
 ) -> dict[str, Any]:
     """Map normalized Paycor employee data to Maconomy fields."""
 
@@ -589,9 +591,7 @@ def map_paycor_employee_to_maconomy(
 
     # Optional string fields. Blank values are omitted.
     optional_field_mapping = {
-        "firstName": "firstname",
-        "middleName": "middlename",
-        "lastName": "lastname",
+        
         "emailAddress": (
             "electronicmailaddress"
         ),
@@ -602,6 +602,14 @@ def map_paycor_employee_to_maconomy(
         "prefix": "personaltitle",
         "suffix": "text10",
     }
+    if include_name_components:
+        optional_field_mapping.update(
+            {
+                "firstName": "firstname",
+                "middleName": "middlename",
+                "lastName": "lastname",
+            }
+        )
     
     name1 = _build_full_name(
         employee_data

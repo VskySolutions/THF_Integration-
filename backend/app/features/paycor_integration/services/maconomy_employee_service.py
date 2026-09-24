@@ -131,7 +131,11 @@ class MaconomyEmployeeService:
         try:
             employee_payload = (
                 map_paycor_employee_to_maconomy(
-                    paycor_employee_data
+                    paycor_employee_data,
+                    include_name_components=(
+                        self.settings
+                        .maconomy_send_name_components
+                    ),
                 )
             )
 

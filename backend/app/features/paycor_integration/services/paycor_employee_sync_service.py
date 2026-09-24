@@ -1066,12 +1066,52 @@ class PaycorEmployeeSyncService:
             )
 
         try:
-            created_employee = await (
-                self.maconomy_service
-                .create_employee(
-                    employee_to_create
+            try:
+                created_employee = await (
+                    self.maconomy_service
+                    .create_employee(
+                        employee_to_create
+                    )
                 )
-            )
+
+            except MaconomyEmployeeServiceError as exc:
+                error_message = str(exc)
+
+                invalid_specification4 = (
+                    "HTTP 422" in error_message
+                    and "Specification 4"
+                    in error_message
+                    and "specification4name"
+                    in error_message
+                    and "does not exist"
+                    in error_message
+                )
+
+                if not invalid_specification4:
+                    raise
+
+                skipped_specification4_name = str(
+                    employee_to_create.get(
+                        "workLocationName"
+                    )
+                    or ""
+                ).strip() or None
+
+                employee_without_specification4 = {
+                    **employee_to_create
+                }
+
+                employee_without_specification4.pop(
+                    "workLocationName",
+                    None,
+                )
+
+                created_employee = await (
+                    self.maconomy_service
+                    .create_employee(
+                        employee_without_specification4
+                    )
+                )
 
             maconomy_employee_number = (
                 self._get_maconomy_number(
@@ -1139,22 +1179,49 @@ class PaycorEmployeeSyncService:
                 message,
             )
 
+        message_notes: list[str] = []
+
+        if not (
+            self.maconomy_service.settings
+            .maconomy_send_name_components
+        ):
+            message_notes.append(
+                "firstname, middlename and lastname "
+                "were omitted because separate employee "
+                "name fields are disabled in Maconomy"
+            )
+
         if (
             skipped_manager_employee_number
             is not None
         ):
-            message = (
-                "Maconomy employee created and mapping "
-                "saved; superior employee "
-                f"{skipped_manager_employee_number} was "
-                "not assigned because it does not exist "
-                "in Maconomy"
+            message_notes.append(
+                "superior employee "
+                f"{skipped_manager_employee_number} "
+                "was not assigned because it does "
+                "not exist in Maconomy"
             )
 
-        else:
+        if (
+            skipped_specification4_name
+            is not None
+        ):
+            message_notes.append(
+                "Specification 4 "
+                f"'{skipped_specification4_name}' "
+                "was not assigned because it does "
+                "not exist in Maconomy"
+            )
+
+        message = (
+            "Maconomy employee created "
+            "and mapping saved"
+        )
+
+        if message_notes:
             message = (
-                "Maconomy employee created "
-                "and mapping saved"
+                f"{message}; "
+                f"{'; '.join(message_notes)}"
             )
 
         await self._write_log(
