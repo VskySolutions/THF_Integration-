@@ -27,7 +27,7 @@ class CasewareService:
     async def _get_access_token(self) -> str:
         cache_key = (
             self.settings.caseware_cloud_url,
-            self.settings.caseware_cloud_client_id,
+            self.settings.caseware_cloud_client_id.get_secret_value(),
             self.settings.caseware_cloud_language,
         )
         if (
