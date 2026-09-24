@@ -100,8 +100,9 @@ When this produces at least one candidate, the endpoint calls the Maconomy
 `countries/filter` API once with the `name` and `isocode` fields. Country names
 are matched case-insensitively after trimming whitespace. The resulting map is
 reused for every candidate in that request and is not fetched when the candidate
-list is empty. A job whose country cannot be mapped fails independently without
-stopping the remaining jobs.
+list is empty. The manual endpoint follows the same rule: it fetches the list
+once only when the supplied job requires creation or update. A job whose country
+cannot be mapped fails independently without stopping the remaining jobs.
 
 ## `text19` checkpoint contract
 

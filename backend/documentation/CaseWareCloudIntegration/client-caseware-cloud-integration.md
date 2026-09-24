@@ -111,7 +111,9 @@ job name, address fields, Maconomy version, and `text19`.
 When at least one job requires creation or update, the integration reads the
 Maconomy country list once for that request. It matches each job's country name
 to the corresponding two-letter ISO code and reuses the list for all jobs in
-the batch. No country-list request is made when there is no work to synchronize.
+the batch. The manual endpoint also reads the list once, and only when the
+requested job requires synchronization. No country-list request is made when
+there is no work to synchronize.
 
 ![Filled Maconomy New Job form](assets/new-job-creation-filled-form.png)
 
