@@ -440,57 +440,50 @@ def map_paycor_employee(
         "department"
     )
 
+    department_id: str | None = None
+    department_name: str | None = None
+    department_number: str | None = None
+
     if isinstance(department_reference, dict):
-        department_id = (
-            _normalize_optional_string(
-                department_reference.get("id")
-            )
-        )
-    else:
-        department_id = (
-            _normalize_optional_string(
-                employee_data.get("departmentId")
-            )
+        department_id = _normalize_optional_string(
+            department_reference.get("id")
         )
 
-    if department_id is not None:
-        department_data = departments_by_id.get(
-            department_id
-        )
-
-        if isinstance(department_data, dict):
-            department_name = (
-                _normalize_optional_string(
-                    department_data.get(
-                        "description"
-                    )
-                )
-            )
-
-            department_number = (
-                _normalize_optional_string(
-                    department_data.get("code")
-                )
-            )
-
-    # Supports already normalized department values.
-    if department_name is None:
+        # Use a name directly from the employee response,
+        # when Paycor provides one.
         department_name = (
             _normalize_optional_string(
-                employee_data.get(
-                    "departmentName"
+                department_reference.get(
+                    "description"
                 )
+            )
+            or _normalize_optional_string(
+                department_reference.get("name")
             )
         )
 
-    if department_number is None:
-        department_number = (
-            _normalize_optional_string(
-                employee_data.get(
-                    "departmentNumber"
-                )
+        if department_id is not None:
+            department_data = departments_by_id.get(
+                department_id
             )
-        )
+
+            if isinstance(department_data, dict):
+                department_name = (
+                    _normalize_optional_string(
+                        department_data.get(
+                            "description"
+                        )
+                    )
+                    or department_name
+                )
+
+                # Keep this only for diagnostics.
+                # Do not send it to Maconomy.
+                department_number = (
+                    _normalize_optional_string(
+                        department_data.get("code")
+                    )
+                )
 
     # Prefix and suffix come from:
     # /v1/tenants/{tenantId}/persons/{employeeUuid}
@@ -601,6 +594,7 @@ def map_paycor_employee_to_maconomy(
         ),
         "prefix": "personaltitle",
         "suffix": "text10",
+        "department": "entityname",
     }
     if include_name_components:
         optional_field_mapping.update(

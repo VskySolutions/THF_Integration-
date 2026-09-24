@@ -453,10 +453,12 @@ class PaycorEmployeeSyncService:
                 # Create or recover the local mapping for
                 # migrated employees already in Maconomy.
                 mapping = await (
-                    self
-                    ._reconcile_existing_employee_mapping(
+                    self._reconcile_existing_employee_mapping(
                         session,
                         employee,
+                        maconomy_employee_numbers=(
+                            maconomy_employee_numbers
+                        ),
                     )
                 )
 
@@ -616,8 +618,27 @@ class PaycorEmployeeSyncService:
             )
         )
 
-        mapping = (
-            await employee_mapping_service
+        # Normalize the Maconomy numbers before doing
+        # any existence checks.
+        normalized_maconomy_numbers = {
+            normalized_number
+            for employee_number
+            in maconomy_employee_numbers
+            if (
+                normalized_number
+                := self._normalize_employee_number(
+                    employee_number
+                )
+            )
+        }
+
+        maconomy_employee_exists = (
+            paycor_employee_number
+            in normalized_maconomy_numbers
+        )
+
+        mapping = await (
+            employee_mapping_service
             .get_mapping_by_paycor_employee(
                 session,
                 legal_entity_id=legal_entity_id,
@@ -627,19 +648,10 @@ class PaycorEmployeeSyncService:
             )
         )
 
-        # Employee is already fully mapped.
-        if (
-            mapping is not None
-            and mapping.maconomy_employee_number
-        ):
-            mapping_id = mapping.id
-
-            mapped_paycor_number = (
-                self._normalize_employee_number(
-                    mapping.paycor_employee_number
-                )
-            )
-
+        # If the existing mapping points to another
+        # Maconomy employee that really exists, this is a
+        # genuine conflict and needs reconciliation.
+        if mapping is not None:
             mapped_maconomy_number = (
                 self._normalize_employee_number(
                     mapping.maconomy_employee_number
@@ -647,47 +659,17 @@ class PaycorEmployeeSyncService:
             )
 
             if (
-                mapped_paycor_number
+                mapped_maconomy_number is not None
+                and mapped_maconomy_number
                 != paycor_employee_number
-                or mapped_maconomy_number
-                != paycor_employee_number
+                and mapped_maconomy_number
+                in normalized_maconomy_numbers
             ):
                 message = (
-                    "Existing mapping has different "
-                    "employee numbers; manual "
-                    "reconciliation is required"
-                )
-
-                await self._write_log(
-                    session,
-                    mapping_id=mapping_id,
-                    paycor_employee_id=(
-                        paycor_employee_id
-                    ),
-                    paycor_employee_number=(
-                        paycor_employee_number
-                    ),
-                    legal_entity_id=legal_entity_id,
-                    status=IntegrationStatus.FAILED,
-                    message=message,
-                )
-
-                return self._result(
-                    paycor_employee_id,
-                    paycor_employee_number,
-                    "FAILED",
-                    mapped_maconomy_number,
-                    message,
-                )
-            
-            if (
-                mapped_maconomy_number
-                not in maconomy_employee_numbers
-                ):
-                message = (
-                    "Employee mapping exists, but the "
-                    "Maconomy employee was not found; "
-                    "manual reconciliation is required"
+                    "Existing mapping points to a "
+                    "different Maconomy employee that "
+                    "still exists; manual reconciliation "
+                    "is required"
                 )
 
                 await self._write_log(
@@ -712,39 +694,9 @@ class PaycorEmployeeSyncService:
                     message,
                 )
 
-            message = (
-                "Employee already mapped; "
-                "creation skipped"
-            )
-
-            await self._write_log(
-                session,
-                mapping_id=mapping_id,
-                paycor_employee_id=(
-                    paycor_employee_id
-                ),
-                paycor_employee_number=(
-                    paycor_employee_number
-                ),
-                legal_entity_id=legal_entity_id,
-                status=IntegrationStatus.SUCCESS,
-                message=message,
-            )
-
-            return self._result(
-                paycor_employee_id,
-                paycor_employee_number,
-                "SKIPPED",
-                mapped_maconomy_number,
-                message,
-            )
-
-        # Employee already exists in Maconomy, but
-        # its mapping is absent or incomplete.
-        if (
-            paycor_employee_number
-            in maconomy_employee_numbers
-        ):
+        # Maconomy is the authority for determining
+        # whether this employee already exists.
+        if maconomy_employee_exists:
             if mapping is None:
                 (
                     mapping,
@@ -763,59 +715,6 @@ class PaycorEmployeeSyncService:
                             paycor_employee_number
                         ),
                     )
-                )
-
-            mapping_id = mapping.id
-
-            existing_paycor_number = (
-                self._normalize_employee_number(
-                    mapping.paycor_employee_number
-                )
-            )
-
-            existing_maconomy_number = (
-                self._normalize_employee_number(
-                    mapping.maconomy_employee_number
-                )
-            )
-
-            has_conflicting_mapping = (
-                existing_paycor_number is not None
-                and existing_paycor_number
-                != paycor_employee_number
-            ) or (
-                existing_maconomy_number is not None
-                and existing_maconomy_number
-                != paycor_employee_number
-            )
-
-            if has_conflicting_mapping:
-                message = (
-                    "Existing mapping has different "
-                    "employee numbers; manual "
-                    "reconciliation is required"
-                )
-
-                await self._write_log(
-                    session,
-                    mapping_id=mapping_id,
-                    paycor_employee_id=(
-                        paycor_employee_id
-                    ),
-                    paycor_employee_number=(
-                        paycor_employee_number
-                    ),
-                    legal_entity_id=legal_entity_id,
-                    status=IntegrationStatus.FAILED,
-                    message=message,
-                )
-
-                return self._result(
-                    paycor_employee_id,
-                    paycor_employee_number,
-                    "FAILED",
-                    existing_maconomy_number,
-                    message,
                 )
 
             await (
@@ -839,7 +738,7 @@ class PaycorEmployeeSyncService:
 
             await self._write_log(
                 session,
-                mapping_id=mapping_id,
+                mapping_id=mapping.id,
                 paycor_employee_id=(
                     paycor_employee_id
                 ),
@@ -859,51 +758,11 @@ class PaycorEmployeeSyncService:
                 message,
             )
 
-        # Reuse a pending mapping from an earlier
-        # failed attempt when Maconomy confirms that
-        # the employee does not exist.
-        if mapping is not None:
-            mapping_id = mapping.id
-
-            existing_paycor_number = (
-                self._normalize_employee_number(
-                    mapping.paycor_employee_number
-                )
-            )
-
-            if (
-                existing_paycor_number
-                != paycor_employee_number
-            ):
-                message = (
-                    "Pending mapping has a different "
-                    "Paycor employee number; manual "
-                    "reconciliation is required"
-                )
-
-                await self._write_log(
-                    session,
-                    mapping_id=mapping_id,
-                    paycor_employee_id=(
-                        paycor_employee_id
-                    ),
-                    paycor_employee_number=(
-                        paycor_employee_number
-                    ),
-                    legal_entity_id=legal_entity_id,
-                    status=IntegrationStatus.FAILED,
-                    message=message,
-                )
-
-                return self._result(
-                    paycor_employee_id,
-                    paycor_employee_number,
-                    "FAILED",
-                    None,
-                    message,
-                )
-
-        else:
+        # The employee does not exist in Maconomy.
+        # Reuse a mapping that existed before this call,
+        # even if it was previously completed. It will
+        # be repaired after successful creation.
+        if mapping is None:
             (
                 mapping,
                 mapping_was_created,
@@ -921,70 +780,26 @@ class PaycorEmployeeSyncService:
                 )
             )
 
-            mapping_id = mapping.id
-
+            # If this method did not create the mapping,
+            # another synchronization run may currently
+            # own it.
             if not mapping_was_created:
-                mapped_paycor_number = (
-                    self._normalize_employee_number(
-                        mapping.paycor_employee_number
-                    )
-                )
-
-                mapped_maconomy_number = (
+                concurrent_maconomy_number = (
                     self._normalize_employee_number(
                         mapping.maconomy_employee_number
                     )
                 )
 
-                if mapped_maconomy_number is not None:
-                    if (
-                        mapped_paycor_number
-                        != paycor_employee_number
-                        or mapped_maconomy_number
-                        != paycor_employee_number
-                    ):
-                        message = (
-                            "Employee was mapped by another "
-                            "synchronization run with "
-                            "different employee numbers; "
-                            "manual reconciliation is required"
-                        )
-
-                        await self._write_log(
-                            session,
-                            mapping_id=mapping_id,
-                            paycor_employee_id=(
-                                paycor_employee_id
-                            ),
-                            paycor_employee_number=(
-                                paycor_employee_number
-                            ),
-                            legal_entity_id=(
-                                legal_entity_id
-                            ),
-                            status=(
-                                IntegrationStatus.FAILED
-                            ),
-                            message=message,
-                        )
-
-                        return self._result(
-                            paycor_employee_id,
-                            paycor_employee_number,
-                            "FAILED",
-                            mapped_maconomy_number,
-                            message,
-                        )
-
+                if concurrent_maconomy_number is not None:
                     message = (
                         "Employee was mapped by another "
-                        "synchronization run; "
-                        "creation skipped"
+                        "synchronization run; creation "
+                        "skipped"
                     )
 
                     await self._write_log(
                         session,
-                        mapping_id=mapping_id,
+                        mapping_id=mapping.id,
                         paycor_employee_id=(
                             paycor_employee_id
                         ),
@@ -992,9 +807,7 @@ class PaycorEmployeeSyncService:
                             paycor_employee_number
                         ),
                         legal_entity_id=legal_entity_id,
-                        status=(
-                            IntegrationStatus.SUCCESS
-                        ),
+                        status=IntegrationStatus.SUCCESS,
                         message=message,
                     )
 
@@ -1002,18 +815,18 @@ class PaycorEmployeeSyncService:
                         paycor_employee_id,
                         paycor_employee_number,
                         "SKIPPED",
-                        mapped_maconomy_number,
+                        concurrent_maconomy_number,
                         message,
                     )
 
                 message = (
-                    "Another synchronization run has "
-                    "a pending mapping; creation skipped"
+                    "Another synchronization run has a "
+                    "pending mapping; creation skipped"
                 )
 
                 await self._write_log(
                     session,
-                    mapping_id=mapping_id,
+                    mapping_id=mapping.id,
                     paycor_employee_id=(
                         paycor_employee_id
                     ),
@@ -1035,9 +848,6 @@ class PaycorEmployeeSyncService:
 
         mapping_id = mapping.id
 
-        # Keep Paycor manager data in the normalized
-        # record, but omit it from creation when the
-        # manager does not exist in Maconomy.
         employee_to_create = dict(employee)
 
         manager_employee_number = (
@@ -1052,10 +862,17 @@ class PaycorEmployeeSyncService:
             str | None
         ) = None
 
+        skipped_specification4_name: (
+            str | None
+        ) = None
+
+        omitted_department_name: str | None = None
+
+        # The manager must already exist in Maconomy.
         if (
             manager_employee_number is not None
             and manager_employee_number
-            not in maconomy_employee_numbers
+            not in normalized_maconomy_numbers
         ):
             employee_to_create[
                 "managerEmployeeNumber"
@@ -1066,63 +883,86 @@ class PaycorEmployeeSyncService:
             )
 
         try:
-            try:
-                created_employee = await (
-                    self.maconomy_service
-                    .create_employee(
-                        employee_to_create
+            # A maximum of three attempts supports:
+            # 1. Original request
+            # 2. Retry without Specification 4
+            # 3. Retry without department/Entity
+            for _ in range(3):
+                try:
+                    created_employee = await (
+                        self.maconomy_service
+                        .create_employee(
+                            employee_to_create
+                        )
                     )
-                )
 
-            except MaconomyEmployeeServiceError as exc:
-                error_message = str(exc)
+                    break
 
-                invalid_specification4 = (
-                    "HTTP 422" in error_message
-                    and "Specification 4"
-                    in error_message
-                    and "specification4name"
-                    in error_message
-                    and "does not exist"
-                    in error_message
-                )
+                except MaconomyEmployeeServiceError as exc:
+                    error_message = str(exc)
+                    normalized_error = (
+                        error_message.lower()
+                    )
 
-                if not invalid_specification4:
+                    invalid_specification4 = (
+                        "http 422"
+                        in normalized_error
+                        and (
+                            "specification 4"
+                            in normalized_error
+                            or "specification4name"
+                            in normalized_error
+                        )
+                        and "does not exist"
+                        in normalized_error
+                        and employee_to_create.get(
+                            "workLocationName"
+                        )
+                    )
+
+                    if invalid_specification4:
+                        skipped_specification4_name = (
+                            str(
+                                employee_to_create.pop(
+                                    "workLocationName"
+                                )
+                            ).strip()
+                        )
+
+                        continue
+
+                    invalid_entity = (
+                        self
+                        ._is_missing_maconomy_entity_error(
+                            exc
+                        )
+                        and employee_to_create.get(
+                            "department"
+                        )
+                    )
+
+                    if invalid_entity:
+                        omitted_department_name = str(
+                            employee_to_create.pop(
+                                "department"
+                            )
+                        ).strip()
+
+                        continue
+
                     raise
 
-                skipped_specification4_name = str(
-                    employee_to_create.get(
-                        "workLocationName"
-                    )
-                    or ""
-                ).strip() or None
-
-                employee_without_specification4 = {
-                    **employee_to_create
-                }
-
-                employee_without_specification4.pop(
-                    "workLocationName",
-                    None,
-                )
-
-                created_employee = await (
-                    self.maconomy_service
-                    .create_employee(
-                        employee_without_specification4
-                    )
+            else:
+                raise MaconomyEmployeeServiceError(
+                    "Maconomy employee creation "
+                    "exceeded the optional-field "
+                    "retry limit"
                 )
 
             maconomy_employee_number = (
                 self._get_maconomy_number(
                     created_employee
                 )
-            )
-
-            # Update the in-memory collection so another
-            # record in the same run cannot recreate it.
-            maconomy_employee_numbers.add(
-                maconomy_employee_number
             )
 
             if (
@@ -1135,6 +975,18 @@ class PaycorEmployeeSyncService:
                     "employee number"
                 )
 
+            # Update both the caller's set and our
+            # normalized local set.
+            maconomy_employee_numbers.add(
+                maconomy_employee_number
+            )
+
+            normalized_maconomy_numbers.add(
+                maconomy_employee_number
+            )
+
+            # Complete or repair the existing mapping only
+            # after Maconomy creation succeeds.
             await (
                 employee_mapping_service
                 .complete_mapping(
@@ -1181,6 +1033,14 @@ class PaycorEmployeeSyncService:
 
         message_notes: list[str] = []
 
+        if omitted_department_name is not None:
+            message_notes.append(
+                "Paycor department "
+                f"'{omitted_department_name}' was "
+                "omitted because the matching "
+                "Maconomy Entity does not exist"
+            )
+
         if not (
             self.maconomy_service.settings
             .maconomy_send_name_components
@@ -1202,10 +1062,7 @@ class PaycorEmployeeSyncService:
                 "not exist in Maconomy"
             )
 
-        if (
-            skipped_specification4_name
-            is not None
-        ):
+        if skipped_specification4_name is not None:
             message_notes.append(
                 "Specification 4 "
                 f"'{skipped_specification4_name}' "
@@ -1484,16 +1341,52 @@ class PaycorEmployeeSyncService:
                 message,
             )
 
+        employee_for_update = dict(employee)
+
+        omitted_department_name: str | None = None
+
         try:
-            update_result = (
-                await self.maconomy_service
-                .update_employee(
-                    employee_number=(
-                        maconomy_employee_number
-                    ),
-                    paycor_employee_data=employee,
+            try:
+                update_result = await (
+                    self.maconomy_service
+                    .update_employee(
+                        employee_number=(
+                            maconomy_employee_number
+                        ),
+                        paycor_employee_data=(
+                            employee_for_update
+                        ),
+                    )
                 )
-            )
+
+            except MaconomyEmployeeServiceError as exc:
+                if not (
+                    self._is_missing_maconomy_entity_error(
+                        exc
+                    )
+                    and employee_for_update.get(
+                        "department"
+                    )
+                ):
+                    raise
+
+                omitted_department_name = str(
+                    employee_for_update.pop(
+                        "department"
+                    )
+                ).strip()
+
+                update_result = await (
+                    self.maconomy_service
+                    .update_employee(
+                        employee_number=(
+                            maconomy_employee_number
+                        ),
+                        paycor_employee_data=(
+                            employee_for_update
+                        ),
+                    )
+                )
 
         except MaconomyEmployeeServiceError as exc:
             await session.rollback()
@@ -1528,6 +1421,14 @@ class PaycorEmployeeSyncService:
                 "Employee is already up to date; "
                 "update skipped"
             )
+
+            if omitted_department_name is not None:
+                message = (
+                    f"{message}; Paycor department "
+                    f"'{omitted_department_name}' was "
+                    "omitted because the matching "
+                    "Maconomy Entity does not exist"
+                )
 
             await self._write_log(
                 session,
@@ -1569,6 +1470,14 @@ class PaycorEmployeeSyncService:
             f"changed fields: {changed_fields}; "
             "date5 updated"
         )
+
+        if omitted_department_name is not None:
+            message = (
+                f"{message}; Paycor department "
+                f"'{omitted_department_name}' was "
+                "omitted because the matching "
+                "Maconomy Entity does not exist"
+            )
 
         await self._write_log(
             session,
@@ -1788,7 +1697,23 @@ class PaycorEmployeeSyncService:
             today - timedelta(days=1),
         }
 
-    
+    @staticmethod
+    def _is_missing_maconomy_entity_error(
+        exc: Exception,
+    ) -> bool:
+        message = str(exc).lower()
+
+        return (
+            "http 422" in message
+            and (
+                "entityname" in message
+                or "entity " in message
+            )
+            and (
+                "does not exist" in message
+                or "not found" in message
+            )
+        )
 
     @staticmethod
     def _parse_uuid(
@@ -1925,3 +1850,21 @@ class PaycorEmployeeSyncService:
             "maconomyEmployeeNumber": None,
             "message": message,
         }
+        
+    @staticmethod
+    def _is_missing_maconomy_entity_error(
+        exc: Exception,
+    ) -> bool:
+        message = str(exc).lower()
+
+        return (
+            "http 422" in message
+            and (
+                "entityname" in message
+                or "entity " in message
+            )
+            and (
+                "does not exist" in message
+                or "not found" in message
+            )
+        )

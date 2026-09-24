@@ -45,7 +45,8 @@ EMPLOYEE_FIELDS = (
     "superioremployee",
     "instancekey",
     "text10",
-    "personaltitle"
+    "personaltitle",
+    "entityname",
     
 )
 
@@ -76,7 +77,8 @@ EMPLOYEE_REVISION_TABLE_FIELDS = (
     "text10",
     "date5",
     "instancekey",
-    "personaltitle"
+    "personaltitle",
+    "entityname"
 )
 
 EMPLOYEE_FILTER_PAGE_SIZE = 1000
