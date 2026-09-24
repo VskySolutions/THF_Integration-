@@ -14,6 +14,7 @@ from app.features.integration_services import (
     require_active_integration_service,
 )
 from app.features.maconomy_caseware_cloud_intergration.routers.sync_router import (
+    _apply_country_code,
     _checkpoint_for_existing_entity,
     _create_caseware_job,
     _mark_failed,
@@ -86,6 +87,9 @@ async def sync_job_by_number(
                         status_code=404,
                         detail=f"Maconomy job {job_number} was not found",
                     )
+                if candidate["syncAction"] != "ALREADY_SYNCED":
+                    country_codes = await maconomy.get_country_codes()
+                    _apply_country_code(candidate, country_codes)
                 caseware = CasewareService(caseware_client, settings)
                 await _sync_candidate(candidate, maconomy, caseware)
                 await _write_logs(request, session, settings, [candidate])

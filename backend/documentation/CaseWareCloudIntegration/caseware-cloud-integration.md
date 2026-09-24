@@ -96,6 +96,14 @@ country, customernumber, template, closed, versionnumber,
 createddate, changeddate, text19
 ```
 
+When this produces at least one candidate, the endpoint calls the Maconomy
+`countries/filter` API once with the `name` and `isocode` fields. Country names
+are matched case-insensitively after trimming whitespace. The resulting map is
+reused for every candidate in that request and is not fetched when the candidate
+list is empty. The manual endpoint follows the same rule: it fetches the list
+once only when the supplied job requires creation or update. A job whose country
+cannot be mapped fails independently without stopping the remaining jobs.
+
 ## `text19` checkpoint contract
 
 Maconomy stores `text19` as a string containing compact JSON. The endpoint
@@ -177,7 +185,7 @@ The entity payload follows the established CaseWare rules:
   "EntityNo": "VSKY-{jobnumber}",
   "Name": "{jobname}",
   "OwnerType": "Client",
-  "CountryCode": "US",
+  "CountryCode": "{Maconomy country ISO code}",
   "OperatingName": "{jobname}",
   "OrganizationType": "Corporation",
   "Type": "A"
@@ -185,7 +193,8 @@ The entity payload follows the established CaseWare rules:
 ```
 
 The address is created below the entity using `name1` through `name4`,
-`postaldistrict`, `country`, and `AddressCategory = Business`. The created
+`postaldistrict`, the Maconomy country name in `Country`, the matching ISO code
+in `CountryCode`, and `AddressCategory = Business`. The created
 numeric address `Id` is resolved back to its `CWGuid` by reading the entity's
 addresses. Only after both operations succeed is `text19` written. Since the
 CaseWare data is already current, the checkpoint stores `syncedVersion` as the
@@ -201,8 +210,8 @@ full update-and-checkpoint path.
 For a valid mapping with a newer Maconomy version, the endpoint:
 
 1. Reads the mapped CaseWare entity by `entityId`.
-2. PATCHes `Name`, `OperatingName`, `OwnerType`, and `Type` from the Maconomy
-   job.
+2. PATCHes `Name`, `OperatingName`, `OwnerType`, `Type`, and the resolved
+   `CountryCode` from the Maconomy job.
 3. Reads the entity's addresses.
 4. If `addressId` is mapped, PATCHes that exact address. If it is empty and an
    address exists, PATCHes and adopts the first address. If no address exists,

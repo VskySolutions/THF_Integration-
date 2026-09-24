@@ -67,8 +67,17 @@ async def get_job_candidates(
             try:
                 maconomy = MaconomyService(maconomy_client, settings)
                 candidates = await maconomy.get_recent_jobs()
+                country_codes = (
+                    await maconomy.get_country_codes() if candidates else {}
+                )
                 caseware = CasewareService(caseware_client, settings)
                 for candidate in candidates:
+                    try:
+                        _apply_country_code(candidate, country_codes)
+                    except MaconomyServiceError as exc:
+                        _mark_failed(candidate, str(exc))
+                        continue
+
                     if candidate["syncAction"] == "TOUPDATE":
                         try:
                             checkpoint = await _update_caseware_job(
@@ -351,6 +360,22 @@ def _mark_failed(candidate: dict[str, Any], message: str) -> None:
     candidate["existingCasewareEntity"] = None
     candidate["syncAction"] = "FAILED"
     candidate["syncError"] = message
+
+
+def _apply_country_code(
+    candidate: dict[str, Any],
+    country_codes: dict[str, str],
+) -> None:
+    country_name = candidate.get("country")
+    if not isinstance(country_name, str) or not country_name.strip():
+        raise MaconomyServiceError("Maconomy country is required")
+
+    country_code = country_codes.get(country_name.strip().casefold())
+    if country_code is None:
+        raise MaconomyServiceError(
+            f"Maconomy country {country_name!r} was not found in the country list"
+        )
+    candidate["countryCode"] = country_code
 
 
 def _same_guid(first: str, second: str) -> bool:

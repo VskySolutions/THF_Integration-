@@ -50,7 +50,9 @@ class CasewareService:
                     f"{self.settings.caseware_cloud_url}/api/v2/auth/token",
                     headers={"Content-Type": "application/json"},
                     json={
-                        "ClientId": self.settings.caseware_cloud_client_id,
+                        "ClientId": (
+                            self.settings.caseware_cloud_client_id.get_secret_value()
+                        ),
                         "ClientSecret": (
                             self.settings.caseware_cloud_client_secret.get_secret_value()
                         ),
@@ -104,7 +106,7 @@ class CasewareService:
         matches: dict[str, dict[str, Any] | None] = {}
 
         for job_number in unique_job_numbers:
-            entity_number = f"VSKY-{job_number.strip()}"
+            entity_number = f"{job_number.strip()}" if self.settings.app_env == "production" else f"VSKY-{job_number.strip()}"
             try:
                 response, token = await self._search_entity(
                     url=url,
@@ -236,6 +238,9 @@ class CasewareService:
                 "OperatingName": str(job_name),
                 "OwnerType": "Client",
                 "Type": "A",
+                "CountryCode": self._country_code(job),
+                # "ExDescription": str(job.get("description1", "")),
+                # "StartDate": job.get("startingdate", None),
             },
         )
         return current_entity
@@ -252,13 +257,15 @@ class CasewareService:
             "/api/v2/entities",
             json={
                 "Id": 0,
-                "EntityNo": f"VSKY-{job_number}",
+                "EntityNo": f"{job_number}" if self.settings.app_env == "production" else f"VSKY-{job_number}",
                 "Name": str(job_name),
                 "OwnerType": "Client",
-                "CountryCode": "US",
+                "CountryCode": self._country_code(job),
                 "OperatingName": str(job_name),
                 "OrganizationType": "Corporation",
                 "Type": "A",
+                #"ExDescription": str(job.get("description1", "")),
+                #"StartDate": job.get("startingdate", None),
             },
         )
         try:
@@ -406,6 +413,7 @@ class CasewareService:
 
     @staticmethod
     def _address_update_payload(job: dict[str, Any]) -> dict[str, Any]:
+        print(job)
         return {
             "Address1": job.get("name2", ""),
             "Address2": job.get("name3", ""),
@@ -413,5 +421,21 @@ class CasewareService:
             "AddressCategory": "Business",
             "City": job.get("postaldistrict", ""),
             "Country": job.get("country", ""),
+            "CountryCode": CasewareService._country_code(job),
             "Name": job.get("name1", ""),
+            "PostalCode": job.get("zipcode", ""),
+            "PhoneNumber": job.get("telephone", ""),
         }
+
+    @staticmethod
+    def _country_code(job: dict[str, Any]) -> str:
+        country_code = job.get("countryCode")
+        if (
+            not isinstance(country_code, str)
+            or len(country_code.strip()) != 2
+            or not country_code.strip().isalpha()
+        ):
+            raise CasewareServiceError(
+                "Maconomy country could not be mapped to a valid ISO code"
+            )
+        return country_code.strip().upper()

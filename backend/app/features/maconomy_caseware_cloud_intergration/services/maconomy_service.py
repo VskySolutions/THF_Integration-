@@ -27,6 +27,7 @@ JOB_FIELDS = [
     "name2",
     "name3",
     "name4",
+    "description1",
     "postaldistrict",
     "country",
     "customernumber",
@@ -36,6 +37,11 @@ JOB_FIELDS = [
     "createddate",
     "changeddate",
     "text19",
+    "telephone",
+    "workcompleteddate",
+    "startingdate",
+    "zipcode",
+    "electronicmailaddress",
 ]
 
 
@@ -54,6 +60,9 @@ class MaconomyService:
         self.settings = settings
         shortname = quote(settings.maconomy_shortname, safe="")
         self.jobs_url = f"{settings.maconomy_url}/maconomy-api/containers/{shortname}/jobs"
+        self.countries_url = (
+            f"{settings.maconomy_url}/maconomy-api/containers/{shortname}/countries"
+        )
 
     async def _headers(self) -> dict[str, str]:
         reconnect_token = await self._get_reconnect_token()
@@ -126,12 +135,29 @@ class MaconomyService:
         payload: dict[str, Any],
         concurrency_token: str | None = None,
     ) -> httpx.Response:
+        return await self._post_container(
+            self.jobs_url,
+            path,
+            payload,
+            concurrency_token=concurrency_token,
+            resource_name="job",
+        )
+
+    async def _post_container(
+        self,
+        container_url: str,
+        path: str,
+        payload: dict[str, Any],
+        *,
+        concurrency_token: str | None = None,
+        resource_name: str,
+    ) -> httpx.Response:
         headers = await self._headers()
         if concurrency_token is not None:
             headers["Maconomy-Concurrency-Control"] = concurrency_token
         try:
             response = await self.client.post(
-                f"{self.jobs_url}{path}", headers=headers, json=payload
+                f"{container_url}{path}", headers=headers, json=payload
             )
             if response.status_code in (401, 403):
                 self._clear_cached_token()
@@ -139,17 +165,20 @@ class MaconomyService:
                 if concurrency_token is not None:
                     headers["Maconomy-Concurrency-Control"] = concurrency_token
                 response = await self.client.post(
-                    f"{self.jobs_url}{path}",
+                    f"{container_url}{path}",
                     headers=headers,
                     json=payload,
                 )
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             raise MaconomyServiceError(
-                f"Maconomy job request failed (HTTP {exc.response.status_code})"
+                f"Maconomy {resource_name} request failed "
+                f"(HTTP {exc.response.status_code})"
             ) from exc
         except httpx.HTTPError as exc:
-            raise MaconomyServiceError("Maconomy job request failed or timed out") from exc
+            raise MaconomyServiceError(
+                f"Maconomy {resource_name} request failed or timed out"
+            ) from exc
         return response
 
     @staticmethod
@@ -201,6 +230,46 @@ class MaconomyService:
                     continue
             candidates.append(candidate)
         return candidates
+
+    async def get_country_codes(self) -> dict[str, str]:
+        """Return Maconomy country names mapped to their two-letter ISO codes."""
+        response = await self._post_container(
+            self.countries_url,
+            "/filter",
+            {
+                "restriction": "",
+                "fields": ["isocode", "name"],
+                "limit": 1000,
+                "offset": 0,
+            },
+            resource_name="country list",
+        )
+        records = self._records(response, "filter")
+        country_codes: dict[str, str] = {}
+        for record in records:
+            name = record.get("name")
+            iso_code = record.get("isocode")
+            if not isinstance(name, str) or not name.strip():
+                continue
+            if (
+                not isinstance(iso_code, str)
+                or len(iso_code.strip()) != 2
+                or not iso_code.strip().isalpha()
+            ):
+                continue
+            normalized_name = name.strip().casefold()
+            normalized_iso_code = iso_code.strip().upper()
+            existing_code = country_codes.get(normalized_name)
+            if existing_code is not None and existing_code != normalized_iso_code:
+                raise MaconomyServiceError(
+                    f"Maconomy country {name!r} has multiple ISO codes"
+                )
+            country_codes[normalized_name] = normalized_iso_code
+        if not country_codes:
+            raise MaconomyServiceError(
+                "Maconomy country list did not contain any valid ISO mappings"
+            )
+        return country_codes
 
     async def get_job_by_number(self, job_number: str) -> dict[str, Any] | None:
         if not isinstance(job_number, str) or not job_number.strip():
