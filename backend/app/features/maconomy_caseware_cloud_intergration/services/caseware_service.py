@@ -106,7 +106,7 @@ class CasewareService:
         matches: dict[str, dict[str, Any] | None] = {}
 
         for job_number in unique_job_numbers:
-            entity_number = f"VSKY-{job_number.strip()}"
+            entity_number = f"{job_number.strip()}" if self.settings.app_env == "production" else f"VSKY-{job_number.strip()}"
             try:
                 response, token = await self._search_entity(
                     url=url,
