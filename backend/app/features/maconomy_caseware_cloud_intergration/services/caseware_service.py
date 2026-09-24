@@ -50,7 +50,9 @@ class CasewareService:
                     f"{self.settings.caseware_cloud_url}/api/v2/auth/token",
                     headers={"Content-Type": "application/json"},
                     json={
-                        "ClientId": self.settings.caseware_cloud_client_id,
+                        "ClientId": (
+                            self.settings.caseware_cloud_client_id.get_secret_value()
+                        ),
                         "ClientSecret": (
                             self.settings.caseware_cloud_client_secret.get_secret_value()
                         ),
@@ -236,6 +238,8 @@ class CasewareService:
                 "OperatingName": str(job_name),
                 "OwnerType": "Client",
                 "Type": "A",
+                # "ExDescription": str(job.get("description1", "")),
+                # "StartDate": job.get("startingdate", None),
             },
         )
         return current_entity
@@ -252,13 +256,15 @@ class CasewareService:
             "/api/v2/entities",
             json={
                 "Id": 0,
-                "EntityNo": f"VSKY-{job_number}",
+                "EntityNo": f"{job_number}" if self.settings.app_env == "production" else f"VSKY-{job_number}",
                 "Name": str(job_name),
                 "OwnerType": "Client",
                 "CountryCode": "US",
                 "OperatingName": str(job_name),
                 "OrganizationType": "Corporation",
                 "Type": "A",
+                #"ExDescription": str(job.get("description1", "")),
+                #"StartDate": job.get("startingdate", None),
             },
         )
         try:
@@ -406,6 +412,7 @@ class CasewareService:
 
     @staticmethod
     def _address_update_payload(job: dict[str, Any]) -> dict[str, Any]:
+        print(job)
         return {
             "Address1": job.get("name2", ""),
             "Address2": job.get("name3", ""),
@@ -414,4 +421,7 @@ class CasewareService:
             "City": job.get("postaldistrict", ""),
             "Country": job.get("country", ""),
             "Name": job.get("name1", ""),
+            "PostalCode": job.get("zipcode", ""),
+            # "CountryCode":"ZZ",
+            "PhoneNumber": job.get("telephone", ""),
         }

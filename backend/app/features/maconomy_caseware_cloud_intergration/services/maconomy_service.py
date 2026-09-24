@@ -27,6 +27,7 @@ JOB_FIELDS = [
     "name2",
     "name3",
     "name4",
+    "description1",
     "postaldistrict",
     "country",
     "customernumber",
@@ -36,6 +37,11 @@ JOB_FIELDS = [
     "createddate",
     "changeddate",
     "text19",
+    "telephone",
+    "workcompleteddate",
+    "startingdate",
+    "zipcode",
+    "electronicmailaddress"
 ]
 
 
