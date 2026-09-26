@@ -98,7 +98,8 @@ class Settings(BaseSettings):
         "http://127.0.0.1:8000"
     )
     scheduler_api_key: SecretStr
-    scheduler_interval_minutes: int = Field(default=5, ge=1)
+    scheduler_cch_interval_minutes: int = Field(default=5, ge=1)
+    scheduler_caseware_interval_minutes: int = Field(default=5, ge=1)
     scheduler_request_timeout_seconds: float = Field(default=600, gt=0)
 
     @field_validator("api_v1_prefix")

@@ -127,8 +127,6 @@ class MaconomyService:
                 for job in jobs:
                     updated_job = dict(job)
                     resolution = job.get("cchtaskresolution")
-                    print("-"*50)
-                    print(resolution)
                     if isinstance(resolution, dict) and resolution.get(
                         "status"
                     ) in {"failed", "manual_review"}:
@@ -161,8 +159,6 @@ class MaconomyService:
                         source_version = self._parse_version(
                             job.get("versionnumber")
                         )
-                        print("-"*50)
-                        print(job_number, task_id, period_end_date, source_version)
                         saved_version = await self._update_job_task_mapping(
                             client,
                             reconnect_token,
@@ -220,7 +216,6 @@ class MaconomyService:
         period_end_date = datetime.datetime.strptime(
             period_end_date, "%m/%d/%Y"
         ).strftime("%Y-%m-%d")
-        print(f"Updating Maconomy job {job_number} with task ID {task_id} and period end date {period_end_date}")
         await self._post_job_request(
             client,
             reconnect_token,
