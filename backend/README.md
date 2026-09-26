@@ -1,14 +1,17 @@
 # FastAPI backend
 
-Feature-first FastAPI service with PostgreSQL, SQLAlchemy 2, Alembic, and
-`X-API-KEY` header authentication.
+FastAPI integration service with PostgreSQL, SQLAlchemy 2, Alembic, API-key
+authentication for integrations, and session authentication for the dashboard.
 
 ## Structure
 
 ```text
 app/
+├── authentication/       # Dashboard users, passwords, sessions, login/logout
 ├── core/                 # Shared configuration
 ├── db/                   # Shared database primitives
+├── templates/            # Jinja UI templates
+├── web/                  # Protected server-rendered dashboard routes
 ├── features/
 │   ├── auth/
 │   │   ├── dependencies/ # X-API-KEY dependency
@@ -40,6 +43,11 @@ uvicorn app.main:app --reload
 
 Swagger UI is at `http://localhost:8000/docs`. Click **Authorize** and enter the
 configured API key, or send it in the `X-API-KEY` header.
+
+The dashboard is at `http://localhost:8000/`. After running migrations, the
+initial account is `SysAdmin` with password `SysAdmin#312`. Change this bootstrap
+credential before exposing the service. Set `WEB_SESSION_SECRET` to a separate,
+long random value and enable `WEB_SESSION_HTTPS_ONLY` wherever HTTPS is used.
 
 Application, PostgreSQL, API-key, and Maconomy connection settings are loaded
 from `.env`. Copy `.env.example` for the complete supported variable list.

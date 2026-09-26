@@ -25,6 +25,11 @@ class Settings(BaseSettings):
     app_env: str
     api_v1_prefix: str = "/api/v1"
     docs_enabled: bool = True
+    web_session_secret: SecretStr = SecretStr(
+        "development-only-change-this-session-secret"
+    )
+    web_session_https_only: bool = False
+    web_session_max_age_seconds: int = Field(default=28800, ge=300)
 
     # Database settings
     postgres_user: str

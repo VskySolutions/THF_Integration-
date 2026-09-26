@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+
+{% block title %}{{ integration.display_name }}{% endblock %}
+
+{% block body %}
+<main class="container-fluid content-shell py-4 py-md-5">
+    <nav aria-label="breadcrumb" class="mb-4">
+        <ol class="breadcrumb">
+            <li class="breadcrumb-item"><a href="{{ url_for('dashboard') }}">Integrations</a></li>
+            <li class="breadcrumb-item active" aria-current="page">Historical logs</li>
+        </ol>
+    </nav>
+
+    <section class="card rounded-4">
+        <div class="card-body p-4 p-md-5 text-center">
+            <div class="display-6 mb-3" aria-hidden="true">&#128202;</div>
+            <h1 class="h3 fw-bold">{{ integration.display_name }}</h1>
+            <p class="text-secondary mx-auto mb-4" style="max-width: 36rem;">
+                The historical log dashboard will be implemented in the next phase.
+            </p>
+            <a href="{{ url_for('dashboard') }}" class="btn btn-primary">Back to integrations</a>
+        </div>
+    </section>
+</main>
+{% endblock %}
