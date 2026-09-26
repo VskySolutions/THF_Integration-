@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+
+{% block title %}Sign in{% endblock %}
+
+{% block body %}
+<main class="container min-vh-100 d-flex align-items-center justify-content-center py-5">
+    <div class="row w-100 justify-content-center">
+        <div class="col-sm-10 col-md-7 col-lg-5 col-xl-4">
+            <div class="text-center mb-4">
+                <span class="brand-mark text-white mx-auto mb-3">F</span>
+                <h1 class="h3 fw-bold mb-2">Integration Console</h1>
+                <p class="text-secondary mb-0">Sign in to view integrations and run history.</p>
+            </div>
+            <div class="card rounded-4">
+                <div class="card-body p-4 p-md-5">
+                    <h2 class="h5 fw-semibold mb-4">Welcome back</h2>
+                    {% if error %}
+                    <div class="alert alert-danger" role="alert">{{ error }}</div>
+                    {% endif %}
+                    <form method="post" action="{{ url_for('login') }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                        <div class="mb-3">
+                            <label for="username_or_email" class="form-label">Username or email</label>
+                            <input type="text" class="form-control form-control-lg" id="username_or_email"
+                                   name="username_or_email" value="{{ username_or_email | default('') }}"
+                                   maxlength="320" autocomplete="username" required autofocus>
+                        </div>
+                        <div class="mb-4">
+                            <label for="password" class="form-label">Password</label>
+                            <div class="input-group input-group-lg">
+                                <input type="password" class="form-control" id="password"
+                                       name="password" maxlength="1024"
+                                       autocomplete="current-password" required>
+                                <button type="button" class="btn btn-outline-secondary" id="togglePassword"
+                                        aria-label="Show password" aria-pressed="false">
+                                    <svg id="showPasswordIcon" xmlns="http://www.w3.org/2000/svg"
+                                         width="20" height="20" fill="currentColor" viewBox="0 0 16 16"
+                                         aria-hidden="true">
+                                        <path d="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8M1.173 8a13 13 0 0 1 1.66-2.043C4.12 4.668 5.88 3.5 8 3.5s3.879 1.168 5.168 2.457A13 13 0 0 1 14.828 8q-.086.13-.195.288c-.335.48-.83 1.12-1.465 1.755C11.879 11.332 10.119 12.5 8 12.5s-3.879-1.168-5.168-2.457A13 13 0 0 1 1.172 8z"/>
+                                        <path d="M8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5M6.5 8a1.5 1.5 0 1 1 3 0 1.5 1.5 0 0 1-3 0"/>
+                                    </svg>
+                                    <svg id="hidePasswordIcon" class="d-none" xmlns="http://www.w3.org/2000/svg"
+                                         width="20" height="20" fill="currentColor" viewBox="0 0 16 16"
+                                         aria-hidden="true">
+                                        <path d="m10.79 12.912-1.614-1.615a3.5 3.5 0 0 1-4.474-4.474L2.771 4.892C1.2 6.18 0 8 0 8s3 5.5 8 5.5a7.1 7.1 0 0 0 2.79-.588M5.21 3.088A7.1 7.1 0 0 1 8 2.5c5 0 8 5.5 8 5.5s-1.2 1.82-2.771 3.108l-1.931-1.931a3.5 3.5 0 0 0-4.474-4.474z"/>
+                                        <path d="M5.525 7.646a2.5 2.5 0 0 0 2.829 2.829zm4.95.708-2.829-2.83a2.5 2.5 0 0 1 2.829 2.829z"/>
+                                        <path d="m13.646 14.354-12-12 .708-.708 12 12z"/>
+                                    </svg>
+                                </button>
+                            </div>
+                        </div>
+                        <button type="submit" class="btn btn-primary btn-lg w-100">Sign in</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</main>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    $(function () {
+        $('#togglePassword').on('click', function () {
+            const passwordInput = $('#password');
+            const isHidden = passwordInput.attr('type') === 'password';
+
+            passwordInput.attr('type', isHidden ? 'text' : 'password');
+            $(this)
+                .attr('aria-label', isHidden ? 'Hide password' : 'Show password')
+                .attr('aria-pressed', isHidden ? 'true' : 'false');
+            $('#showPasswordIcon').toggleClass('d-none', isHidden);
+            $('#hidePasswordIcon').toggleClass('d-none', !isHidden);
+        });
+    });
+</script>
+{% endblock %}

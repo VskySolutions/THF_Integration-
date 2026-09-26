@@ -25,6 +25,11 @@ class Settings(BaseSettings):
     app_env: str
     api_v1_prefix: str = "/api/v1"
     docs_enabled: bool = True
+    web_session_secret: SecretStr = SecretStr(
+        "development-only-change-this-session-secret"
+    )
+    web_session_https_only: bool = False
+    web_session_max_age_seconds: int = Field(default=28800, ge=300)
 
     # Database settings
     postgres_user: str
@@ -94,7 +99,8 @@ class Settings(BaseSettings):
         "http://127.0.0.1:8000"
     )
     scheduler_api_key: SecretStr
-    scheduler_interval_minutes: int = Field(default=5, ge=1)
+    scheduler_cch_interval_minutes: int = Field(default=5, ge=1)
+    scheduler_caseware_interval_minutes: int = Field(default=5, ge=1)
     scheduler_request_timeout_seconds: float = Field(default=600, gt=0)
 
     @field_validator("api_v1_prefix")

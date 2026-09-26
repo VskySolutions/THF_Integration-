@@ -54,12 +54,9 @@ class CCHXCMService:
         search_result = await self._search_tasks(client, token, search_values)
         total_count = search_result["total_count"]
         results = search_result["results"]
-        print(f"Total count: {total_count}, Results: {results}")
         resolved_job = dict(job)
         if total_count == 0:
-            print("No existing task found, creating a new task...")
             task_id = await self._create_task(client, token, search_values)
-            print(f"Created task with ID: {task_id}")
             resolved_job["cchtaskresolution"] = {
                 "status": "created",
                 "taskid": task_id,
@@ -169,7 +166,6 @@ class CCHXCMService:
                 "responsiblePerson":"prasad.sawant@vskysolutions.com"
             },
         )
-        print(response.text)
 
         response.raise_for_status()
         try:
