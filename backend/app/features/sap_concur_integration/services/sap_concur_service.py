@@ -233,7 +233,7 @@ class SAPConcurService:
             #     "password": self.settings.sap_concur_password.get_secret_value(),
             #     "grant_type" : "refresh_token",
             # },
-            payload = f"client_id={self.settings.sap_concur_client_id}&client_secret={self.settings.sap_concur_client_secret.get_secret_value()}&username={self.settings.sap_concur_username}&password={self.settings.sap_concur_password.get_secret_value()}&grant_type=authtoken"
+            payload = f"client_id={self.settings.sap_concur_client_id.get_secret_value()}&client_secret={self.settings.sap_concur_client_secret.get_secret_value()}&username={self.settings.sap_concur_username}&password={self.settings.sap_concur_password.get_secret_value()}&grant_type=authtoken"
         )
         print(f"Concur Token Response: {response.status_code} - {response.text}")
         response.raise_for_status()
@@ -267,18 +267,17 @@ class SAPConcurService:
             f"{self.settings.sap_concur_api_base_url}/oauth2/v0/token",
             headers={"Content-Type": "application/x-www-form-urlencoded"},
             data={
-                "client_id": self.settings.sap_concur_client_id,
+                "client_id": self.settings.sap_concur_client_id.get_secret_value(),
                 "client_secret": (
                     self.settings.sap_concur_client_secret.get_secret_value()
                 ),
                 "grant_type" : "refresh_token",
-                "refresh_token": self.settings.sap_concur_refresh_token,
+                "refresh_token": self.settings.sap_concur_refresh_token.get_secret_value(),
             },
             # data = f"client_id={self.settings.sap_concur_client_id}&client_secret={self.settings.sap_concur_client_secret.get_secret_value()}&grant_type=refresh_token&refresh_token={self.settings.sap_concur_refresh_token}"
         )
         
         response.raise_for_status()
-        print("Token status:", response.status_code)
 
         try:
             payload = response.json()
@@ -317,6 +316,7 @@ class SAPConcurService:
         Async-safe: lock-free fast path (no await between check and return),
         slow path serialized via class-level asyncio.Lock with double-check.
         """
+        
         now = time.time()
         token = self._cached_access_token
         expires_at = self._cached_token_expires_at
@@ -545,7 +545,7 @@ class SAPConcurService:
                 response = await self._request_with_auth(
                     client, "GET", url, headers=headers, params=params
                 )
-                print("Response:", response)
+                # print("Response:", response)
                 response.raise_for_status()
 
                 try:

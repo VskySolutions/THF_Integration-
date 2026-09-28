@@ -76,7 +76,7 @@ EXPENSE_TYPE_CODE_MAPPING = {
 
 DEFAULT_DEPARTMENT_CODE = "-"
 DEFAULT_LOCATION_CODE = "-"
-DEFAULT_EXPENSE_TYPE_CODE = ""
+DEFAULT_EXPENSE_TYPE_CODE = "-"
 
 
 def get_location_code(department_name: str) -> str:
@@ -129,8 +129,6 @@ def map_concur_expense_to_maconomy_expense(
     currency = expense_data.get("approvedAmount", {}).get("currencyCode")
     exchangerate = expense_data.get("exchangerate", {}).get("value")
     business_purpose = expense_data.get("businessPurpose")
-    # payment_type = expense_data.get("paymentType", {}).get("name")
-    # vendor_description = expense_data.get("vendor", {}).get("description"
 
     # Extract custom data values with fallback to existing logic
     custom_location = custom_data_values.get("location", "") if custom_data_values else ""

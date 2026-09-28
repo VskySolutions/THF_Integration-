@@ -963,3 +963,90 @@ class MaconomyService:
         return filtered_expensesheets
 
 
+# ==================== Get expense sheets by SAP Concur report IDs (restricted) ====================
+    async def get_expense_sheets_by_report_ids(
+        self,
+        report_ids: list[str],
+    ) -> list[dict[str, Any]]:
+        if not report_ids:
+            print("No SAP Concur report IDs provided; skipping Maconomy request")
+            return []
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                reconnect_token = await self._get_reconnect_token(client)
+                return await self._get_maconomy_expense_sheets_by_report_ids(
+                    client, reconnect_token, report_ids,
+                )
+        except httpx.HTTPError as exc:
+            raise MaconomyServiceError("Maconomy request failed") from exc
+
+    async def _get_maconomy_expense_sheets_by_report_ids(
+        self,
+        client: httpx.AsyncClient,
+        reconnect_token: str,
+        report_ids: list[str],
+    )-> dict[str, Any] | None:
+        shortname = quote(self.settings.maconomy_shortname, safe="")
+        print("In exp sheet retrieval")
+
+        url = f"{self.settings.maconomy_url}/maconomy-api/containers/{shortname}/expensesheets/filter"
+
+        # Restrict the filter to ONLY the given SAP Concur report IDs (order preserved)
+        id_conditions = " or ".join(f"expensesheettext5 = '{report_id}'" for report_id in report_ids)
+        # restriction = f"template=false and ({id_conditions})"
+        restriction = id_conditions
+
+
+        payload = {
+            "restriction": restriction,
+            "fields":["amountbase","approvaldate","approved","createddate","description","employeename","employeenumber","expensesheetnumber","expensesheettext5","fullyapproved","instancekey","submitted","vendorsettlementstatus"],
+            "limit":500,
+        }
+
+        response = await client.post(
+            url,
+            headers=self._container_headers(
+                reconnect_token
+            ),
+            json=payload,
+        )
+        print("Maconomy sync-status response:", response.status_code)
+        response.raise_for_status()
+
+
+        try:
+            expensesheets = response.json()["panes"]["filter"]["records"]
+
+            # ONLY expensesheettext5 decides "already synced" (it always carries the
+            # SAP Concur report ID when a record is returned); expensesheetnumber and
+            # every other field are irrelevant to duplicate detection.
+            filtered_expensesheets = []
+            for item in expensesheets:
+                sap_report_id = str(item["data"]["expensesheettext5"] or "").strip()
+                if not sap_report_id:
+                    continue
+                filtered_expensesheets.append(
+                    {
+                        "expensesheetnumber": item["data"]["expensesheetnumber"],
+                        "employeenumber": item["data"]["employeenumber"],
+                        "instancekey": item["data"]["instancekey"],
+                        "sap_report_id": sap_report_id,
+                    }
+                )
+
+        except (KeyError, TypeError, ValueError) as exc:
+            raise MaconomyServiceError("Invalid vendor response", exc) from exc
+
+        extracted_ids = [sheet["sap_report_id"] for sheet in filtered_expensesheets]
+        print("Maconomy extracted synced report IDs:", extracted_ids)
+        if expensesheets and not extracted_ids:
+            # Should never happen under confirmed behavior (a returned record always
+            # carries expensesheettext5) — retained as an anomaly tripwire.
+            print(
+                "WARNING: Maconomy returned",
+                len(expensesheets),
+                "record(s) but none carried expensesheettext5 -",
+                "every report will proceed to creation. Investigate the raw response.",
+            )
+        print(len(filtered_expensesheets))
+        return filtered_expensesheets

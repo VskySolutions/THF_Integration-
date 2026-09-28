@@ -81,7 +81,7 @@ class Settings(BaseSettings):
         "https://us2concursolutions.com"
     )
     sap_concur_api_base_url: AnyHttpUrl = AnyHttpUrl(
-        "https://us.api.concursolutions.com"
+        "https://us2.api.concursolutions.com"
     )
     sap_concur_client_id: SecretStr
     sap_concur_client_secret: SecretStr
