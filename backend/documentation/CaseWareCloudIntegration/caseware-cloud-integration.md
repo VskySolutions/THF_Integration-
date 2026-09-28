@@ -31,19 +31,25 @@ service `MACONOMY_CASEWARE_CLOUD_SYNC` to be active. The service is registered
 by migration `20260916_0010` and is inactive by default. The same gate protects
 manual calls and scheduled calls.
 
-When `SCHEDULER_ENABLED=true`, the application starts one APScheduler job from
-the FastAPI lifespan. It calls the endpoint every five minutes by default:
+When `SCHEDULER_ENABLED=true`, the application starts one sequential
+APScheduler job from the FastAPI lifespan. Every five minutes it first waits
+for the CCH task-mapping endpoint to complete successfully, then calls the
+CaseWare endpoint:
 
 ```text
 SCHEDULER_ENABLED=true
-SCHEDULER_INTERVAL_MINUTES=5
+SCHEDULER_CCH_INTERVAL_MINUTES=5
+SCHEDULER_CASEWARE_INTERVAL_MINUTES=5
 SCHEDULER_API_BASE_URL=http://127.0.0.1:8000
 SCHEDULER_API_KEY=<same API key accepted by the application>
 ```
 
-The scheduler has one active job, `maconomy_caseware_cloud_sync`, and calls only
-this endpoint. If the integration-service row is inactive or missing, the
-endpoint returns HTTP 503 and no Maconomy or CaseWare work starts.
+The scheduler has separate `maconomy_cch_sync` and
+`maconomy_caseware_cloud_sync` jobs. The CaseWare job waits for the CCH job to
+complete successfully, and a shared execution lock prevents either integration
+from overlapping the other. If CCH is inactive, missing, or fails, CaseWare is
+skipped for that interval. Each endpoint still enforces its own
+integration-service active status.
 
 ## Complete processing flow
 

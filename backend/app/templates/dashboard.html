@@ -1,0 +1,180 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard{% endblock %}
+
+{% block head %}
+<link href="https://cdn.datatables.net/v/bs5/dt-3.1.2/datatables.min.css" rel="stylesheet">
+<style>
+    .integration-action-btn {
+        align-items: center;
+        display: inline-flex;
+        height: 2.25rem;
+        justify-content: center;
+        padding: 0;
+        width: 2.25rem;
+    }
+</style>
+{% endblock %}
+
+{% block body %}
+<main class="container-fluid content-shell py-4 py-md-5">
+    <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-end gap-3 mb-4">
+        <div>
+            <p class="text-primary fw-semibold text-uppercase small mb-1">Operations</p>
+            <h1 class="h2 fw-bold mb-1">Integration dashboard</h1>
+            <p class="text-secondary mb-0">Monitor configured data synchronization services.</p>
+        </div>
+        <div class="d-flex gap-2">
+            <div class="card px-4 py-3 rounded-3">
+                <span class="text-secondary small">Configured</span>
+                <strong class="fs-4">{{ integrations | length }}</strong>
+            </div>
+            <div class="card px-4 py-3 rounded-3">
+                <span class="text-secondary small">Active</span>
+                <strong class="fs-4 text-success">{{ active_count }}</strong>
+            </div>
+        </div>
+    </div>
+
+    {% if flash_message %}
+    <div class="alert alert-{{ flash_category }} alert-dismissible fade show" role="alert">
+        {{ flash_message }}
+        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+    </div>
+    {% endif %}
+
+    <section class="card rounded-4">
+        <div class="card-body p-3 p-md-4">
+            <div class="table-responsive">
+                <table id="integrationsTable" class="table table-hover align-middle w-100">
+                    <thead>
+                    <tr>
+                        <th>Integration</th>
+                        <th>Source</th>
+                        <th>Target</th>
+                        <th>Status</th>
+                        <th class="text-end" data-orderable="false">Actions</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    {% for integration in integrations %}
+                    <tr>
+                        <td>
+                            <div class="fw-semibold">{{ integration.display_name }}</div>
+                            <code class="small">{{ integration.identifier_unique_name }}</code>
+                        </td>
+                        <td>{{ integration.source_system or '—' }}</td>
+                        <td>{{ integration.target_system or '—' }}</td>
+                        <td data-order="{{ 1 if integration.is_active else 0 }}">
+                            {% if integration.is_active %}
+                            <span class="badge text-bg-success">Active</span>
+                            {% else %}
+                            <span class="badge text-bg-secondary">Inactive</span>
+                            {% endif %}
+                        </td>
+                        <td class="text-end text-nowrap">
+                            <button type="button"
+                                    class="btn btn-sm btn-outline-secondary integration-action-btn integration-status-action"
+                                    data-status-url="{{ url_for('update_integration_status', integration_id=integration.id) }}"
+                                    data-target-active="{{ 'false' if integration.is_active else 'true' }}"
+                                    data-action-label="{{ 'Inactivate' if integration.is_active else 'Activate' }}"
+                                    data-integration-name="{{ integration.display_name }}"
+                                    data-bs-toggle="tooltip"
+                                    data-bs-placement="top"
+                                    data-bs-title="{{ 'Inactivate — disable execution for this integration' if integration.is_active else 'Activate — enable execution for this integration' }}"
+                                    aria-label="{{ 'Inactivate integration' if integration.is_active else 'Activate integration' }}">
+                                {% if integration.is_active %}
+                                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18"
+                                     fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
+                                    <path d="M5.5 3.5A1.5 1.5 0 0 1 7 5v6a1.5 1.5 0 0 1-3 0V5a1.5 1.5 0 0 1 1.5-1.5m5 0A1.5 1.5 0 0 1 12 5v6a1.5 1.5 0 0 1-3 0V5a1.5 1.5 0 0 1 1.5-1.5"/>
+                                </svg>
+                                {% else %}
+                                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18"
+                                     fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
+                                    <path d="M10.804 8 5 11.633V4.367z"/>
+                                    <path d="M0 8a8 8 0 1 1 16 0A8 8 0 0 1 0 8m8-7a7 7 0 1 0 0 14A7 7 0 0 0 8 1"/>
+                                </svg>
+                                {% endif %}
+                            </button>
+                            <a href="{{ url_for('integration_logs', integration_id=integration.id) }}"
+                               class="btn btn-sm btn-outline-secondary integration-action-btn ms-1"
+                               data-bs-toggle="tooltip"
+                               data-bs-placement="top"
+                               data-bs-title="Show dashboard — open this integration's historical logs"
+                               aria-label="Show integration dashboard">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18"
+                                     fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
+                                    <path d="M0 0h1v15h15v1H0zm10 10h2v4h-2zm3-3h2v7h-2zM4 9h2v5H4zm3-5h2v10H7z"/>
+                                </svg>
+                            </a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+</main>
+
+<div class="modal fade" id="integrationStatusModal" tabindex="-1"
+     aria-labelledby="integrationStatusModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title fs-5" id="integrationStatusModalLabel">Confirm status change</h2>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <p class="mb-0" id="integrationStatusModalMessage"></p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                <form method="post" id="integrationStatusForm" class="m-0">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <input type="hidden" name="is_active" id="integrationTargetStatus">
+                    <button type="submit" class="btn btn-primary" id="confirmIntegrationStatus">
+                        Confirm
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.datatables.net/v/bs5/dt-3.1.2/datatables.min.js"></script>
+<script>
+    $(function () {
+        $('#integrationsTable').DataTable({
+            order: [[0, 'asc']],
+            pageLength: 10,
+            language: { emptyTable: 'No integrations are configured yet.' }
+        });
+
+        $('[data-bs-toggle="tooltip"]').each(function () {
+            new bootstrap.Tooltip(this);
+        });
+
+        const statusModalElement = document.getElementById('integrationStatusModal');
+        const statusModal = bootstrap.Modal.getOrCreateInstance(statusModalElement);
+
+        $('#integrationsTable').on('click', '.integration-status-action', function () {
+            const actionButton = $(this);
+            const action = actionButton.data('action-label');
+            const integrationName = actionButton.data('integration-name');
+
+            bootstrap.Tooltip.getInstance(this)?.hide();
+            $('#integrationStatusForm').attr('action', actionButton.data('status-url'));
+            $('#integrationTargetStatus').val(actionButton.data('target-active'));
+            $('#integrationStatusModalLabel').text(`${action} integration`);
+            $('#integrationStatusModalMessage').text(
+                `Are you sure you want to ${action.toLowerCase()} ${integrationName}?`
+            );
+            $('#confirmIntegrationStatus').text(`Confirm ${action.toLowerCase()}`);
+            statusModal.show();
+        });
+    });
+</script>
+{% endblock %}

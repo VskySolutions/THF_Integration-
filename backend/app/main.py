@@ -1,7 +1,9 @@
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from starlette.middleware.sessions import SessionMiddleware
 
+from app.authentication import router as dashboard_auth_router
 from app.core.config import get_settings
 from app.features.auth.routers import router as auth_router
 from app.features.maconomy_caseware_cloud_intergration.routers import (
@@ -17,6 +19,7 @@ from app.features.xcm_cch_axcess_integration.routers import (
     manual_cch_task_mapping_router,
     pending_cch_task_mapping_router,
 )
+from app.web import router as web_router
 
 #paycor imports 
 #from app.features.paycor_integration.routers import get_new_employees_router
@@ -44,6 +47,14 @@ app = FastAPI(
     redoc_url="/redoc" if settings.docs_enabled else None,
     lifespan=lifespan,
 )
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=settings.web_session_secret.get_secret_value(),
+    session_cookie="falcon_dashboard_session",
+    max_age=settings.web_session_max_age_seconds,
+    same_site="lax",
+    https_only=settings.web_session_https_only,
+)
 install_exception_logging(app)
 
 
@@ -52,6 +63,8 @@ async def health_check() -> dict[str, str]:
     return {"status": "ok"}
 
 
+app.include_router(dashboard_auth_router)
+app.include_router(web_router)
 app.include_router(auth_router, prefix=settings.api_v1_prefix)
 app.include_router(maconomy_caseware_cloud_router, prefix=settings.api_v1_prefix)
 app.include_router(job_sync_router, prefix=settings.api_v1_prefix)

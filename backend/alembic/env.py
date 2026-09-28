@@ -3,6 +3,7 @@ from logging.config import fileConfig
 from sqlalchemy import engine_from_config, pool
 
 from alembic import context
+from app.authentication.models import User  # noqa: F401
 from app.features.sap_concur_integration.models import (  #noqa: F401
         SAPConcurIntegrationLog,
         SAPConcurExpensesheetExpenseReportMapping,

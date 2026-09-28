@@ -1,0 +1,409 @@
+{% extends "base.html" %}
+
+{% block title %}Maconomy to CaseWare Cloud{% endblock %}
+
+{% block head %}
+<link href="https://cdn.datatables.net/v/bs5/dt-3.1.2/datatables.min.css" rel="stylesheet">
+<style>
+    .metric-card { min-height: 8.5rem; }
+    .metric-icon {
+        align-items: center; background: #eef3ff; border-radius: .75rem;
+        color: var(--falcon-blue); display: inline-flex; height: 2.5rem;
+        justify-content: center; width: 2.5rem;
+    }
+    .system-pill { background: #eef1f6; border-radius: 999px; padding: .4rem .8rem; }
+    .request-id { color: #53627a; font-size: .78rem; }
+    .message-cell { max-width: 30rem; white-space: normal; }
+    .dashboard-action-btn {
+        align-items: center; display: inline-flex; height: 2.5rem;
+        justify-content: center; padding: 0; width: 2.5rem;
+    }
+</style>
+{% endblock %}
+
+{% block body %}
+<main class="container-fluid content-shell py-4 py-md-5">
+    <nav aria-label="breadcrumb" class="mb-4">
+        <ol class="breadcrumb">
+            <li class="breadcrumb-item"><a href="{{ url_for('dashboard') }}">Integrations</a></li>
+            <li class="breadcrumb-item active" aria-current="page">Maconomy to CaseWare Cloud</li>
+        </ol>
+    </nav>
+
+    <div class="d-flex flex-column flex-lg-row justify-content-between align-items-lg-end gap-3 mb-4">
+        <div>
+            <div class="d-flex align-items-center gap-2 mb-2">
+                <span class="badge {{ 'text-bg-success' if integration.is_active else 'text-bg-secondary' }}">
+                    {{ 'Active' if integration.is_active else 'Inactive' }}
+                </span>
+                <span class="text-secondary small">{{ integration.identifier_unique_name }}</span>
+            </div>
+            <h1 class="h2 fw-bold mb-2">{{ integration.display_name }}</h1>
+            <div class="d-flex flex-wrap align-items-center gap-2 text-secondary">
+                <span class="system-pill">{{ integration.source_system or 'Maconomy' }}</span>
+                <span aria-hidden="true">&rarr;</span>
+                <span class="system-pill">{{ integration.target_system or 'CaseWare Cloud' }}</span>
+            </div>
+        </div>
+        <div class="d-flex flex-column align-items-lg-end gap-3">
+            <div class="d-flex flex-wrap gap-2 justify-content-lg-end">
+                <a href="{{ url_for('dashboard') }}"
+                   class="btn btn-outline-secondary dashboard-action-btn"
+                   data-dashboard-tooltip data-bs-placement="top"
+                   data-bs-title="Back to integrations: return to the integration service list"
+                   aria-label="Back to integrations">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"
+                         fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
+                        <path fill-rule="evenodd" d="M15 8a.5.5 0 0 0-.5-.5H2.707l3.147-3.146a.5.5 0 1 0-.708-.708l-4 4a.5.5 0 0 0 0 .708l4 4a.5.5 0 0 0 .708-.708L2.707 8.5H14.5A.5.5 0 0 0 15 8"/>
+                    </svg>
+                </a>
+                <a href="{{ url_for('integration_logs', integration_id=integration.id) }}"
+                   class="btn btn-outline-secondary dashboard-action-btn"
+                   data-dashboard-tooltip data-bs-placement="top"
+                   data-bs-title="Refresh page: reload the latest dashboard metrics and logs"
+                   aria-label="Refresh page">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"
+                         fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
+                        <path d="M8 3a5 5 0 1 0 4.546 2.914.5.5 0 0 1 .908-.417A6 6 0 1 1 8 2z"/>
+                        <path d="M8 4.466V.534a.25.25 0 0 1 .41-.192l2.36 1.966a.25.25 0 0 1 0 .384L8.41 4.658A.25.25 0 0 1 8 4.466"/>
+                    </svg>
+                </a>
+                <button type="button"
+                        class="btn btn-outline-secondary dashboard-action-btn"
+                        id="changeIntegrationStatusButton"
+                        data-bs-toggle="modal" data-bs-target="#integrationStatusModal"
+                        data-dashboard-tooltip data-bs-placement="top"
+                        data-bs-title="{{ 'Inactivate: disable scheduled and manual execution' if integration.is_active else 'Activate: enable scheduled and manual execution' }}"
+                        aria-label="{{ 'Inactivate integration' if integration.is_active else 'Activate integration' }}">
+                    {% if integration.is_active %}
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"
+                         fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
+                        <path d="M5.5 3.5A1.5 1.5 0 0 1 7 5v6a1.5 1.5 0 0 1-3 0V5a1.5 1.5 0 0 1 1.5-1.5m5 0A1.5 1.5 0 0 1 12 5v6a1.5 1.5 0 0 1-3 0V5a1.5 1.5 0 0 1 1.5-1.5"/>
+                    </svg>
+                    {% else %}
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"
+                         fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
+                        <path d="M10.804 8 5 11.633V4.367z"/>
+                        <path d="M0 8a8 8 0 1 1 16 0A8 8 0 0 1 0 8m8-7a7 7 0 1 0 0 14A7 7 0 0 0 8 1"/>
+                    </svg>
+                    {% endif %}
+                </button>
+                <button type="button"
+                        class="btn btn-success dashboard-action-btn"
+                        id="openSyncJobButton"
+                        data-bs-toggle="modal" data-bs-target="#syncJobModal"
+                        data-dashboard-tooltip data-bs-placement="top"
+                        data-bs-title="Sync job: synchronize one Maconomy job with CaseWare Cloud"
+                        aria-label="Sync job">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"
+                         fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
+                        <path d="M8.5 1.5v3a1 1 0 0 0 1 1h3v8a1 1 0 0 1-1 1h-7a1 1 0 0 1-1-1v-12a1 1 0 0 1 1-1h3zm.121-1H4.5a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h7a2 2 0 0 0 2-2V5.379a2 2 0 0 0-.586-1.414l-2.879-2.879A2 2 0 0 0 8.621.5"/>
+                        <path fill-rule="evenodd" d="M8 12a.5.5 0 0 0 .5-.5V7.707l1.146 1.147a.5.5 0 0 0 .708-.708l-2-2a.5.5 0 0 0-.708 0l-2 2a.5.5 0 1 0 .708.708L7.5 7.707V11.5a.5.5 0 0 0 .5.5"/>
+                    </svg>
+                </button>
+            </div>
+            {% if metrics.latest_run %}
+            <div class="text-lg-end">
+                <div class="text-secondary small">Last run</div>
+                <div class="fw-semibold">
+                    {{ metrics.latest_run.created_on_utc.strftime('%d %b %Y, %H:%M:%S') }} UTC
+                </div>
+                <span class="badge {{ 'text-bg-success' if metrics.latest_run.status == 'SUCCESS' else 'text-bg-danger' }}">
+                    {{ metrics.latest_run.status | title }}
+                </span>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    {% if flash_message %}
+    <div class="alert alert-{{ flash_category }} alert-dismissible fade show" role="alert">
+        {{ flash_message }}
+        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+    </div>
+    {% endif %}
+
+    <div class="row g-3 mb-4">
+        <div class="col-6 col-xl-3">
+            <section class="card metric-card rounded-4 h-100">
+                <div class="card-body p-4">
+                    <span class="metric-icon mb-3" aria-hidden="true">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="currentColor" viewBox="0 0 16 16">
+                            <path d="M8 3a5 5 0 1 0 4.546 2.914.5.5 0 0 1 .908-.417A6 6 0 1 1 8 2z"/>
+                            <path d="M8 4.466V.534a.25.25 0 0 1 .41-.192l2.36 1.966a.25.25 0 0 1 0 .384L8.41 4.658A.25.25 0 0 1 8 4.466"/>
+                        </svg>
+                    </span>
+                    <div class="text-secondary small">Recent runs</div>
+                    <div class="display-6 fw-semibold">{{ metrics.total_runs }}</div>
+                </div>
+            </section>
+        </div>
+        <div class="col-6 col-xl-3">
+            <section class="card metric-card rounded-4 h-100">
+                <div class="card-body p-4">
+                    <span class="metric-icon mb-3" aria-hidden="true">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="currentColor" viewBox="0 0 16 16">
+                            <path d="M2.5 8a5.5 5.5 0 1 1 11 0 .5.5 0 0 1-1 0 4.5 4.5 0 1 0-9 0 .5.5 0 0 1-1 0"/>
+                            <path d="M7.5 8.5 10.8 5.2l.7.7-3.3 3.3a1 1 0 1 1-.7-.7"/>
+                        </svg>
+                    </span>
+                    <div class="text-secondary small">Run success rate</div>
+                    <div class="display-6 fw-semibold">{{ metrics.success_rate }}%</div>
+                </div>
+            </section>
+        </div>
+        <div class="col-6 col-xl-3">
+            <section class="card metric-card rounded-4 h-100">
+                <div class="card-body p-4">
+                    <span class="metric-icon mb-3" aria-hidden="true">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="currentColor" viewBox="0 0 16 16">
+                            <path d="M4.5 3A1.5 1.5 0 0 0 3 4.5v7A1.5 1.5 0 0 0 4.5 13h7a1.5 1.5 0 0 0 1.5-1.5v-7A1.5 1.5 0 0 0 11.5 3zM4 4.5a.5.5 0 0 1 .5-.5h7a.5.5 0 0 1 .5.5v7a.5.5 0 0 1-.5.5h-7a.5.5 0 0 1-.5-.5z"/>
+                            <path d="M6 6h4v4H6z"/>
+                        </svg>
+                    </span>
+                    <div class="text-secondary small">Jobs processed</div>
+                    <div class="display-6 fw-semibold">{{ metrics.jobs_processed }}</div>
+                </div>
+            </section>
+        </div>
+        <div class="col-6 col-xl-3">
+            <section class="card metric-card rounded-4 h-100">
+                <div class="card-body p-4">
+                    <span class="metric-icon mb-3" aria-hidden="true">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="currentColor" viewBox="0 0 16 16">
+                            <path d="M8 1.45 14.705 13H1.295zM8 0a1 1 0 0 0-.866.5L.43 12.05A1 1 0 0 0 1.295 13.5h13.41a1 1 0 0 0 .866-1.5L8.866.5A1 1 0 0 0 8 0"/>
+                            <path d="M7.002 5h2L8.75 9h-1.5zM8 12a1 1 0 1 0 0-2 1 1 0 0 0 0 2"/>
+                        </svg>
+                    </span>
+                    <div class="text-secondary small">Failed jobs</div>
+                    <div class="display-6 fw-semibold">{{ metrics.failed_jobs }}</div>
+                </div>
+            </section>
+        </div>
+    </div>
+
+    <section class="card rounded-4">
+        <div class="card-body p-3 p-md-4">
+            <ul class="nav nav-tabs" id="casewareHistoryTabs" role="tablist">
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link active" id="run-history-tab" data-bs-toggle="tab"
+                            data-bs-target="#run-history-pane" type="button" role="tab"
+                            aria-controls="run-history-pane" aria-selected="true">
+                        Run history
+                        <span class="badge text-bg-light border ms-1">{{ run_logs | length }}</span>
+                    </button>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="job-activity-tab" data-bs-toggle="tab"
+                            data-bs-target="#job-activity-pane" type="button" role="tab"
+                            aria-controls="job-activity-pane" aria-selected="false">
+                        Job activity
+                        <span class="badge text-bg-light border ms-1">{{ job_logs | length }}</span>
+                    </button>
+                </li>
+            </ul>
+
+            <div class="tab-content pt-4" id="casewareHistoryTabContent">
+                <div class="tab-pane fade show active" id="run-history-pane" role="tabpanel"
+                     aria-labelledby="run-history-tab" tabindex="0">
+                    <p class="text-secondary small mb-3">
+                        One summary record for each synchronization request.
+                    </p>
+                    <div class="table-responsive">
+                <table id="runHistoryTable" class="table table-hover align-middle w-100">
+                    <thead>
+                    <tr>
+                        <th>Started (UTC)</th>
+                        <th>Request ID</th>
+                        <th>Instance</th>
+                        <th>Status</th>
+                        <th>Processed</th>
+                        <th>Succeeded</th>
+                        <th>Failed</th>
+                        <th>Summary</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    {% for run in run_logs %}
+                    {% set request_id = run.request_id | string %}
+                    <tr>
+                        <td data-order="{{ run.created_on_utc.isoformat() }}">
+                            {{ run.created_on_utc.strftime('%d %b %Y, %H:%M:%S') }}
+                        </td>
+                        <td><code class="request-id" title="{{ request_id }}">{{ request_id[:8] }}&hellip;</code></td>
+                        <td>{{ run.maconomy_instance }}</td>
+                        <td>
+                            <span class="badge {{ 'text-bg-success' if run.status == 'SUCCESS' else 'text-bg-danger' }}">
+                                {{ run.status | title }}
+                            </span>
+                        </td>
+                        <td>{{ run.details.get('processed', 0) if run.details else 0 }}</td>
+                        <td>{{ run.details.get('succeeded', 0) if run.details else 0 }}</td>
+                        <td>{{ run.details.get('failed', 0) if run.details else 0 }}</td>
+                        <td class="message-cell">{{ run.message }}</td>
+                    </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+                    </div>
+                </div>
+
+                <div class="tab-pane fade" id="job-activity-pane" role="tabpanel"
+                     aria-labelledby="job-activity-tab" tabindex="0">
+                    <p class="text-secondary small mb-3">
+                        Individual Maconomy job outcomes recorded by recent runs.
+                    </p>
+                    <div class="table-responsive">
+                <table id="jobActivityTable" class="table table-hover align-middle w-100">
+                    <thead>
+                    <tr>
+                        <th>Created (UTC)</th>
+                        <th>Job number</th>
+                        <th>Action</th>
+                        <th>Status</th>
+                        <th>Request ID</th>
+                        <th>Message</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    {% for log in job_logs %}
+                    {% set request_id = log.request_id | string %}
+                    <tr>
+                        <td data-order="{{ log.created_on_utc.isoformat() }}">
+                            {{ log.created_on_utc.strftime('%d %b %Y, %H:%M:%S') }}
+                        </td>
+                        <td class="fw-semibold">{{ log.job_number }}</td>
+                        <td><span class="badge text-bg-light border">{{ log.action | replace('_', ' ') | title }}</span></td>
+                        <td>
+                            <span class="badge {{ 'text-bg-success' if log.status == 'SUCCESS' else 'text-bg-danger' }}">
+                                {{ log.status | title }}
+                            </span>
+                        </td>
+                        <td><code class="request-id" title="{{ request_id }}">{{ request_id[:8] }}&hellip;</code></td>
+                        <td class="message-cell">{{ log.message }}</td>
+                    </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+</main>
+
+<div class="modal fade" id="integrationStatusModal" tabindex="-1"
+     aria-labelledby="integrationStatusModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title fs-5" id="integrationStatusModalLabel">
+                    {{ 'Inactivate' if integration.is_active else 'Activate' }} integration
+                </h2>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <p class="mb-0">
+                    Are you sure you want to
+                    {{ 'inactivate' if integration.is_active else 'activate' }}
+                    {{ integration.display_name }}?
+                </p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                <form method="post"
+                      action="{{ url_for('update_integration_status', integration_id=integration.id) }}"
+                      class="m-0" id="casewareIntegrationStatusForm">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <input type="hidden" name="is_active"
+                           value="{{ 'false' if integration.is_active else 'true' }}">
+                    <input type="hidden" name="return_to" value="integration">
+                    <button type="submit" class="btn btn-primary" id="confirmIntegrationStatus">
+                        Confirm {{ 'inactivation' if integration.is_active else 'activation' }}
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="syncJobModal" tabindex="-1"
+     aria-labelledby="syncJobModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <form method="post"
+                  action="{{ url_for('sync_caseware_job', integration_id=integration.id) }}"
+                  id="syncJobForm">
+                <div class="modal-header">
+                    <h2 class="modal-title fs-5" id="syncJobModalLabel">Sync a Maconomy job</h2>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <p class="text-secondary small">
+                        Enter the Maconomy job number to synchronize it with CaseWare Cloud.
+                    </p>
+                    <label for="syncJobNumber" class="form-label">Job number</label>
+                    <input type="text" class="form-control" id="syncJobNumber"
+                           name="job_number" maxlength="100" autocomplete="off"
+                           placeholder="For example, 10101" required>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary" id="submitSyncJob">
+                        <span class="spinner-border spinner-border-sm me-1 d-none" aria-hidden="true"></span>
+                        <span class="sync-job-label">Sync job</span>
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.datatables.net/v/bs5/dt-3.1.2/datatables.min.js"></script>
+<script>
+    $(function () {
+        const runHistoryTable = $('#runHistoryTable').DataTable({
+            order: [[0, 'desc']],
+            pageLength: 10,
+            language: { emptyTable: 'No synchronization runs have been logged yet.' }
+        });
+
+        const jobActivityTable = $('#jobActivityTable').DataTable({
+            order: [[0, 'desc']],
+            pageLength: 10,
+            language: { emptyTable: 'No job activity has been logged yet.' }
+        });
+
+        $('#casewareHistoryTabs button[data-bs-toggle="tab"]').on('shown.bs.tab', function () {
+            runHistoryTable.columns.adjust();
+            jobActivityTable.columns.adjust();
+        });
+
+        $('[data-dashboard-tooltip]').each(function () {
+            new bootstrap.Tooltip(this);
+        });
+
+        $('#changeIntegrationStatusButton, #openSyncJobButton').on('click', function () {
+            bootstrap.Tooltip.getInstance(this)?.hide();
+        });
+
+        $('#syncJobModal').on('shown.bs.modal', function () {
+            $('#syncJobNumber').trigger('focus');
+        });
+
+        $('#syncJobForm').on('submit', function () {
+            const submitButton = $('#submitSyncJob');
+            submitButton.prop('disabled', true);
+            submitButton.find('.spinner-border').removeClass('d-none');
+            submitButton.find('.sync-job-label').text('Syncing...');
+        });
+
+        $('#casewareIntegrationStatusForm').on('submit', function () {
+            $('#confirmIntegrationStatus').prop('disabled', true);
+        });
+    });
+</script>
+{% endblock %}
