@@ -10,6 +10,7 @@ from .paycor_employee_sync_service import (
     PaycorEmployeeSyncService,
     PaycorEmployeeSyncServiceError,
 )
+from .maconomy_timesheet_service import (MaconomyTimesheetService,MaconomyTimesheetServiceError)
 
 __all__ = [
     "PaycorService",
@@ -18,4 +19,6 @@ __all__ = [
     "MaconomyEmployeeServiceError",
     "PaycorEmployeeSyncService",
     "PaycorEmployeeSyncServiceError",
+    "MaconomyTimesheetService",
+    "MaconomyTimesheetServiceError"
 ]
