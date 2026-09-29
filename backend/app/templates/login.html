@@ -2,18 +2,30 @@
 
 {% block title %}Sign in{% endblock %}
 
+{% block head %}
+<style>
+    .login-shell { min-height: 100vh; }
+    .login-card { max-width: 27rem; width: 100%; }
+    .login-eyebrow { color: var(--falcon-blue); font-size: .72rem; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; }
+    .login-note { border-top: 1px solid var(--falcon-border); color: var(--falcon-muted); font-size: .75rem; padding-top: 1rem; }
+</style>
+{% endblock %}
+
 {% block body %}
-<main class="container min-vh-100 d-flex align-items-center justify-content-center py-5">
-    <div class="row w-100 justify-content-center">
-        <div class="col-sm-10 col-md-7 col-lg-5 col-xl-4">
-            <div class="text-center mb-4">
-                <span class="brand-mark text-white mx-auto mb-3">F</span>
-                <h1 class="h3 fw-bold mb-2">Integration Console</h1>
-                <p class="text-secondary mb-0">Sign in to view integrations and run history.</p>
+<main class="container login-shell d-flex align-items-center justify-content-center py-5">
+    <div class="login-card">
+        <div class="d-flex align-items-center gap-3 mb-4">
+            <span class="brand-mark">THF</span>
+            <div>
+                <div class="fw-bold">THF</div>
+                <div class="text-secondary small">Integration operations</div>
             </div>
-            <div class="card rounded-4">
-                <div class="card-body p-4 p-md-5">
-                    <h2 class="h5 fw-semibold mb-4">Welcome back</h2>
+        </div>
+        <div class="card rounded-3">
+            <div class="card-body p-4 p-md-5">
+                    <div class="login-eyebrow mb-2">Secure access</div>
+                    <h1 class="h4 fw-bold mb-2">Sign in to monitoring</h1>
+                    <p class="text-secondary small mb-4">Review service status, run history, and integration activity.</p>
                     {% if error %}
                     <div class="alert alert-danger" role="alert">{{ error }}</div>
                     {% endif %}
@@ -49,9 +61,9 @@
                                 </button>
                             </div>
                         </div>
-                        <button type="submit" class="btn btn-primary btn-lg w-100">Sign in</button>
+                        <button type="submit" class="btn btn-primary w-100 py-2">Sign in</button>
                     </form>
-                </div>
+                    <div class="login-note mt-4">Authorized THF operations personnel only.</div>
             </div>
         </div>
     </div>
