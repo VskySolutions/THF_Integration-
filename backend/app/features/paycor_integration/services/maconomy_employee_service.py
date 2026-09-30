@@ -37,7 +37,7 @@ EMPLOYEE_FIELDS = (
     "lastname",
     # "initials",
     "specification4name",
-    "text9",
+    "remark5",
     "country",
     "dateemployed",
     "electronicmailaddress",
@@ -73,7 +73,7 @@ EMPLOYEE_REVISION_TABLE_FIELDS = (
     "electronicmailaddress",
     "position",
     "specification4name",
-    "text9",
+    "remark5",
     "text10",
     "date5",
     "instancekey",
@@ -192,18 +192,23 @@ class MaconomyEmployeeService:
                     employee_data,
                 )
 
-        except httpx.HTTPStatusError as exc:
-            response_text = exc.response.text.strip()
-
-            raise MaconomyEmployeeServiceError(
-                "Maconomy employee request failed "
-                f"with HTTP {exc.response.status_code}: "
-                f"{response_text[:1000]}"
-            ) from exc
-
         except httpx.RequestError as exc:
+            request = getattr(
+                exc,
+                "request",
+                None,
+            )
+
+            request_url = (
+                str(request.url)
+                if request is not None
+                else self.settings.maconomy_url
+            )
+
             raise MaconomyEmployeeServiceError(
-                "Unable to connect to Maconomy"
+                "Unable to connect to Maconomy: "
+                f"{type(exc).__name__} while calling "
+                f"{request_url}: {exc}"
             ) from exc
             
             
@@ -213,6 +218,7 @@ class MaconomyEmployeeService:
         *,
         employee_number: str,
         paycor_employee_data: dict[str, Any],
+        excluded_fields: set[str] | None = None,
     ) -> dict[str, Any]:
         """Update one current Maconomy employee revision."""
 
@@ -241,6 +247,8 @@ class MaconomyEmployeeService:
                     paycor_employee_data
                 )
             )
+            for field_name in excluded_fields or set():
+                desired_data.pop(field_name, None)
 
         except (TypeError, ValueError) as exc:
             raise MaconomyEmployeeServiceError(
@@ -295,7 +303,7 @@ class MaconomyEmployeeService:
 
                 current_paycor_employee_id = str(
                     current_employee.get(
-                        "text9",
+                        "remark5",
                         "",
                     )
                 ).strip()
@@ -871,7 +879,18 @@ class MaconomyEmployeeService:
             headers=headers,
             json={"data": employee_data},
         )
-        response.raise_for_status()
+
+        if response.is_error:
+            response_text = (
+                response.text.strip()
+                or "<empty Maconomy response body>"
+            )
+
+            raise MaconomyEmployeeServiceError(
+                "Maconomy rejected the employee card "
+                f"with HTTP {response.status_code}: "
+                f"{response_text[:2000]}"
+            )
 
         try:
             card = response.json()["panes"]["card"]

@@ -578,8 +578,8 @@ def map_paycor_employee_to_maconomy(
         "employeenumber": employee_number,
         "country": maconomy_country,
 
-        # Paycor employee UUID is now stored in text9.
-        "text9": paycor_employee_id,
+        # Paycor employee UUID is now stored in remark5.
+        "remark5": paycor_employee_id,
     }
 
     # Optional string fields. Blank values are omitted.
@@ -668,10 +668,19 @@ def map_paycor_employee_to_maconomy(
 # update employee
 MACONOMY_EMPLOYEE_UPDATE_FIELDS = (
     "name1",
+    "firstname",
+    "middlename",
+    "lastname",
     "country",
     "dateemployed",
     "electronicmailaddress",
     "position",
+    "entityname",
+    "specification4name",
+    "personaltitle",
+    "text10",
+    "remark5",
+    "superioremployee",
 )
 
 
