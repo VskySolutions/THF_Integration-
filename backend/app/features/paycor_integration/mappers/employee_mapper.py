@@ -98,18 +98,11 @@ def _parse_legal_entity_id(
 def _build_full_name(
     employee_data: dict[str, Any],
 ) -> str:
-    """Build Maconomy name1 as LastName,FirstName M."""
+    """Build Maconomy name1 as 'LastName, FirstName'."""
 
     first_name = (
         _normalize_optional_string(
             employee_data.get("firstName")
-        )
-        or ""
-    )
-
-    middle_name = (
-        _normalize_optional_string(
-            employee_data.get("middleName")
         )
         or ""
     )
@@ -121,47 +114,12 @@ def _build_full_name(
         or ""
     )
 
-    middle_initial = (
-        middle_name[0]
-        if middle_name
-        else ""
-    )
+    if last_name and first_name:
+        return f"{last_name}, {first_name}"
 
-    given_name = first_name
+    return last_name or first_name
 
-    if middle_initial:
-        given_name = (
-            f"{given_name} {middle_initial}".strip()
-        )
 
-    if last_name and given_name:
-        return f"{last_name},{given_name}"
-
-    return last_name or given_name
-
-def _build_maconomy_name1(
-    employee_data: dict[str, Any],
-) -> str | None:
-    """Build Maconomy name1 as lastname,firstname."""
-
-    first_name = _normalize_optional_string(
-        employee_data.get("firstName")
-    )
-
-    last_name = _normalize_optional_string(
-        employee_data.get("lastName")
-    )
-
-    if first_name and last_name:
-        return f"{last_name},{first_name}"
-
-    if last_name:
-        return last_name
-
-    if first_name:
-        return first_name
-
-    return None
 
 def map_paycor_employee(
     employee_data: dict[str, Any],
@@ -609,7 +567,7 @@ def map_paycor_employee_to_maconomy(
         employee_data
     )
 
-    if name1 is not None:
+    if name1:
         maconomy_data["name1"] = name1
 
     for (
@@ -621,9 +579,7 @@ def map_paycor_employee_to_maconomy(
         )
 
         if value is not None:
-            maconomy_data[
-                maconomy_field
-            ] = value
+            maconomy_data[maconomy_field] = value
 
     # Hire date is optional, but when provided it must
     # contain a valid Paycor date.
