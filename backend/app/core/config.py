@@ -53,7 +53,6 @@ class Settings(BaseSettings):
     maconomy_shortname: str
     maconomy_username: str
     maconomy_password: SecretStr
-    maconomy_send_name_components: bool = False
 
     # Caseware Cloud integration settings
     caseware_cloud_base_url: AnyHttpUrl = AnyHttpUrl(
@@ -81,6 +80,7 @@ class Settings(BaseSettings):
     paycor_subscription_key: SecretStr
     paycor_legal_entity_id: str 
     paycor_tenant_id: str
+    maconomy_send_name_components: bool = False
     
     # SAP Concur integration settings
     sap_concur_url: AnyHttpUrl = AnyHttpUrl(
