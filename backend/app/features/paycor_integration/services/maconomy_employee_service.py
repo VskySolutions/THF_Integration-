@@ -79,6 +79,7 @@ EMPLOYEE_REVISION_TABLE_FIELDS = (
     "instancekey",
     "personaltitle",
     "entityname"
+    "superioremployee"
 )
 
 EMPLOYEE_FILTER_PAGE_SIZE = 1000
