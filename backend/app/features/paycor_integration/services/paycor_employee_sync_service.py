@@ -34,9 +34,9 @@ from app.features.paycor_integration.services.paycor_employee_service import (
 )
 
 
-# Maconomy may reject one optional field while accepting the rest of an
+
 # employee update. These fields may be omitted one at a time and retried.
-# Identity fields such as employeenumber are intentionally not included.
+
 SKIPPABLE_MACONOMY_UPDATE_FIELDS = frozenset(
     {
         "country",
