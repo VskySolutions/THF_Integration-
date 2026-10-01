@@ -80,6 +80,7 @@ class Settings(BaseSettings):
     paycor_subscription_key: SecretStr
     paycor_legal_entity_id: str 
     paycor_tenant_id: str
+    maconomy_send_name_components: bool = False
     
     # SAP Concur integration settings
     sap_concur_url: AnyHttpUrl = AnyHttpUrl(

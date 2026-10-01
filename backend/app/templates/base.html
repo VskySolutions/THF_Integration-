@@ -3,52 +3,132 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>{% block title %}Integration Console{% endblock %} · Falcon THF</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css"
-          rel="stylesheet"
-          integrity="sha384-sRIl4kxILFvY47J16cr9ZwB07vP4J8+LH7qKQnuqkuIAvNWLzeN8tE5YBujZqJLB"
-          crossorigin="anonymous">
+    <title>{% block title %}Monitoring{% endblock %} · THF</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" rel="stylesheet"
+          integrity="sha384-sRIl4kxILFvY47J16cr9ZwB07vP4J8+LH7qKQnuqkuIAvNWLzeN8tE5YBujZqJLB" crossorigin="anonymous">
     {% block head %}{% endblock %}
     <style>
-        :root { --falcon-navy: #12233f; --falcon-blue: #2764e7; }
-        body { background: #f5f7fb; color: #172033; }
-        .navbar { background: var(--falcon-navy); }
-        .brand-mark {
-            align-items: center; background: var(--falcon-blue); border-radius: .65rem;
-            display: inline-flex; font-weight: 700; height: 2.15rem;
-            justify-content: center; margin-right: .7rem; width: 2.15rem;
+        :root {
+            --falcon-ink: #172033; --falcon-muted: #657188; --falcon-border: #dfe5ed;
+            --falcon-surface: #fff; --falcon-canvas: #f4f6f9; --falcon-navy: #111d32;
+            --falcon-blue: #2457d6; --falcon-blue-soft: #edf3ff;
+            --falcon-green: #15825f; --falcon-green-soft: #eaf8f2;
         }
-        .content-shell { max-width: 1320px; }
-        .card { border: 0; box-shadow: 0 .25rem 1rem rgba(22, 38, 66, .07); }
+        * { box-sizing: border-box; }
+        body {
+            background: var(--falcon-canvas); color: var(--falcon-ink);
+            font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            font-size: .925rem; -webkit-font-smoothing: antialiased;
+        }
+        a { color: var(--falcon-blue); text-underline-offset: 2px; }
+        .app-header { background: var(--falcon-surface); border-bottom: 1px solid var(--falcon-border); min-height: 4.25rem; }
+        .content-shell { max-width: 1440px; }
+        .brand-lockup { color: var(--falcon-ink); letter-spacing: -.01em; }
+        .brand-lockup:hover { color: var(--falcon-ink); }
+        .brand-mark {
+            align-items: center; background: var(--falcon-blue); border-radius: .6rem; color: #fff;
+            display: inline-flex; flex: 0 0 auto; font-size: .72rem; font-weight: 750; height: 2.25rem;
+            justify-content: center; letter-spacing: -.03em; width: 2.25rem;
+        }
+        .brand-product { font-size: .94rem; font-weight: 700; line-height: 1.1; }
+        .brand-context { color: var(--falcon-muted); font-size: .7rem; font-weight: 500; line-height: 1.1; margin-top: .22rem; }
+        .top-nav-link {
+            align-items: center; border-radius: .5rem; color: #47546a; display: inline-flex;
+            font-size: .84rem; font-weight: 600; gap: .45rem; padding: .5rem .72rem; text-decoration: none;
+        }
+        .top-nav-link:hover, .top-nav-link.active { background: var(--falcon-blue-soft); color: var(--falcon-blue); }
+        .environment-badge {
+            background: #f1f4f8; border: 1px solid var(--falcon-border); border-radius: 999px; color: #536078;
+            font-size: .7rem; font-weight: 700; letter-spacing: .05em; padding: .35rem .58rem; text-transform: uppercase;
+        }
+        .user-avatar {
+            align-items: center; background: #e8edf5; border-radius: 50%; color: #344258; display: inline-flex;
+            font-size: .72rem; font-weight: 750; height: 2rem; justify-content: center; text-transform: uppercase; width: 2rem;
+        }
+        .page-kicker { color: var(--falcon-blue); font-size: .72rem; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; }
+        .page-title { font-size: clamp(1.55rem, 2vw, 2rem); font-weight: 720; letter-spacing: -.035em; }
+        .text-secondary { color: var(--falcon-muted) !important; }
+        .card { background: var(--falcon-surface); border: 1px solid var(--falcon-border); box-shadow: 0 1px 2px rgba(20, 34, 58, .035); }
+        .btn { border-radius: .55rem; font-size: .85rem; font-weight: 650; }
         .btn-primary { background-color: var(--falcon-blue); border-color: var(--falcon-blue); }
+        .btn-primary:hover { background-color: #1c48b8; border-color: #1c48b8; }
+        .btn-outline-secondary { border-color: #cfd7e3; color: #48566c; }
+        .btn-outline-secondary:hover { background: #f1f4f8; border-color: #bcc6d4; color: #253249; }
+        .form-control, .form-select { border-color: #cfd7e3; border-radius: .55rem; font-size: .9rem; }
+        .form-control:focus, .form-select:focus { border-color: #86a7f2; box-shadow: 0 0 0 .2rem rgba(36, 87, 214, .12); }
+        .form-label { color: #364258; font-size: .82rem; font-weight: 650; }
+        .badge { border-radius: 999px; font-size: .7rem; font-weight: 700; letter-spacing: .015em; padding: .38rem .6rem; }
+        .text-bg-success { background: var(--falcon-green-soft) !important; color: #086748 !important; }
+        .text-bg-danger { background: #fff0f0 !important; color: #b42318 !important; }
+        .text-bg-warning { background: #fff6dc !important; color: #8a5a00 !important; }
+        .text-bg-primary { background: var(--falcon-blue-soft) !important; color: #214db5 !important; }
+        .text-bg-secondary { background: #eef1f5 !important; color: #5d697c !important; }
+        .table { --bs-table-bg: transparent; --bs-table-hover-bg: #f8faff; color: #2b374b; font-size: .82rem; }
+        .table > :not(caption) > * > * { border-bottom-color: #e7ebf1; padding: .82rem .75rem; }
+        .table thead th {
+            background: #f7f9fc; border-bottom-width: 1px; color: #69758a; font-size: .68rem;
+            font-weight: 750; letter-spacing: .055em; text-transform: uppercase; white-space: nowrap;
+        }
+        .table tbody tr:last-child td { border-bottom: 0; }
+        .breadcrumb { --bs-breadcrumb-divider-color: #9aa4b3; font-size: .78rem; margin-bottom: 0; }
+        .breadcrumb-item a { color: #657188; text-decoration: none; }
+        .breadcrumb-item.active { color: #303d52; }
+        .modal-content { border: 0; border-radius: .85rem; box-shadow: 0 1.2rem 3rem rgba(14, 28, 52, .18); }
+        .modal-header, .modal-footer { border-color: var(--falcon-border); }
+        .alert { border: 1px solid currentColor; border-radius: .65rem; font-size: .86rem; }
+        .nav-tabs { border-bottom-color: var(--falcon-border); gap: .25rem; }
+        .nav-tabs .nav-link { border: 0; color: #647087; font-size: .83rem; font-weight: 650; padding: .7rem .9rem; }
+        .nav-tabs .nav-link.active { border-bottom: 2px solid var(--falcon-blue); color: var(--falcon-blue); }
+        div.dt-container .dt-search input, div.dt-container .dt-length select { border-color: #cfd7e3; border-radius: .45rem; }
+        div.dt-container .dt-info, div.dt-container .dt-length, div.dt-container .dt-search, div.dt-container .dt-paging { color: #6d788b; font-size: .78rem; }
+        .page-link { color: #4d5b70; font-size: .78rem; }
+        .active > .page-link, .page-link.active { background-color: var(--falcon-blue); border-color: var(--falcon-blue); }
+        @media (max-width: 767.98px) {
+            .app-header { min-height: 3.8rem; }
+            .content-shell { padding-left: 1rem !important; padding-right: 1rem !important; }
+            .brand-context, .header-username, .top-nav-link span { display: none; }
+            .top-nav-link { padding: .5rem; }
+            .table > :not(caption) > * > * { padding: .72rem .6rem; }
+        }
     </style>
 </head>
 <body>
 {% if current_user %}
-<nav class="navbar navbar-expand navbar-dark shadow-sm">
-    <div class="container-fluid content-shell">
-        <a class="navbar-brand d-flex align-items-center fw-semibold" href="{{ url_for('dashboard') }}">
-            <span class="brand-mark">F</span>Integration Console
-        </a>
-        <div class="d-flex align-items-center gap-3 text-white">
-            <span class="small opacity-75 d-none d-sm-inline">{{ current_user.username }}</span>
-            <form method="post" action="{{ url_for('logout') }}" class="m-0">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <button type="submit" class="btn btn-sm btn-outline-light">Sign out</button>
-            </form>
+<header class="app-header sticky-top">
+    <div class="container-fluid content-shell h-100">
+        <div class="d-flex align-items-center justify-content-between gap-3 py-3">
+            <div class="d-flex align-items-center gap-4">
+                <a class="brand-lockup d-flex align-items-center gap-2 text-decoration-none" href="{{ url_for('dashboard') }}">
+                    <span class="brand-mark">THF</span>
+                    <span><span class="brand-product d-block">Integration Monitor</span><span class="brand-context d-block">THF operations</span></span>
+                </a>
+                <nav aria-label="Primary navigation">
+                    <a class="top-nav-link active" href="{{ url_for('dashboard') }}">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 13h6V4H4v9Zm0 7h6v-4H4v4Zm10 0h6v-9h-6v9Zm0-16v4h6V4h-6Z"/></svg>
+                        <span>Monitoring</span>
+                    </a>
+                </nav>
+            </div>
+            <div class="d-flex align-items-center gap-3">
+                <span class="environment-badge">{{ app_env | title }}</span>
+                <div class="d-flex align-items-center gap-2">
+                    <span class="user-avatar" aria-hidden="true">{{ current_user.username[:2] }}</span>
+                    <span class="header-username small fw-semibold">{{ current_user.username }}</span>
+                </div>
+                <form method="post" action="{{ url_for('logout') }}" class="m-0">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <button type="submit" class="btn btn-sm btn-outline-secondary">Sign out</button>
+                </form>
+            </div>
         </div>
     </div>
-</nav>
+</header>
 {% endif %}
 
 {% block body %}{% endblock %}
 
-<script src="https://code.jquery.com/jquery-4.0.0.min.js"
-        integrity="sha256-OaVG6prZf4v69dPg6PhVattBXkcOWQB62pdZ3ORyrao="
-        crossorigin="anonymous"></script>
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js"
-        integrity="sha384-FKyoEForCGlyvwx9Hj09JcYn3nv7wiPVlz7YYwJrWVcXK/BmnVDxM+D2scQbITxI"
-        crossorigin="anonymous"></script>
+<script src="https://code.jquery.com/jquery-4.0.0.min.js" integrity="sha256-OaVG6prZf4v69dPg6PhVattBXkcOWQB62pdZ3ORyrao=" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js" integrity="sha384-FKyoEForCGlyvwx9Hj09JcYn3nv7wiPVlz7YYwJrWVcXK/BmnVDxM+D2scQbITxI" crossorigin="anonymous"></script>
 {% block scripts %}{% endblock %}
 </body>
 </html>
