@@ -29,14 +29,6 @@ router = APIRouter(
 )
 DatabaseSession = Annotated[AsyncSession, Depends(get_db)]
 
-@router.post(
-    "/sap-concur-test", 
-    response_model=dict[str, Any]
-)
-async def sap_concur():
-    return {
-        "message": "SAP Concur Integration"
-    }
 
 @router.post(
     "/get-employee-from-maconomy",
@@ -124,7 +116,7 @@ async def sync_todays_created_sap_concur_expense_reports_with_maconomy(
             detail=f"Failed to fetch Maconomy expense sheets: {str(exc)}",
         ) from exc
 
-    print("Requested report IDs sent to Maconomy restriction:", concur_report_ids)
+    print("Requested report IDs sent to Maconomy restriction")
 
     # Build a set of sap_report_id values already synced in Maconomy (normalized)
     synced_report_ids = {

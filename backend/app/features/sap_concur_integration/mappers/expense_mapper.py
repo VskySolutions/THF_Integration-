@@ -3,75 +3,19 @@ from decimal import Decimal
 
 # Department code mapping: SAP Concur department name -> Maconomy code
 DEPARTMENT_CODE_MAPPING = {
-    "Admin": "ADM",
-    "Assurance": "AUD",
-    "CAS": "CAS",
-    "GCS": "GCS",
-    "Tax": "TAX",
+    "Assurance": "1",
+    "Tax": "2",
+    "Admin": "3",
+    "GCS": "4",
+    "CAS": "5",
 }
 
 LOCATION_CODE_MAPPING = {
-    "Lakeland": "50",
-    "Panama City": "40",
-    "Tallahassee": "10",
-    "Tampa": "20",
-    "Kimley Horne": "19",
-    "Bainbridge": "30",
-}
-
-EXPENSE_TYPE_CODE_MAPPING = {
-    "Airfare": "401",
-    "Car Rental": "404",
-    "Hotel": "403",
-    "Fuel": "",
-    "Parking": "406",
-    "Personal Car Mileage": "",
-    "Runner Mileage": "",
-    "Taxi/ Uber": "405",
-    "Tolls/Road Charges": "",
-    "Entertainment -  Event/Shows": "407",
-    "Off Site Meals (Attendees)": "407",
-    "On Site Meals (Attendees)": "407",
-    "Computer": "",
-    "Courier/Shipping/Freight": "",
-    "Furniture & Fixtures": "",
-    "Leasehold Improvements": "",
-    "Office Supplies/Software": "",
-    "Internet/Online Fees": "",
-    "Phone Expense": "",
-    "professional Subscription/Dues": "",
-    "Advertising": "",
-    "Cable & Internet Expenses": "",
-    "Computer Network Services": "",
-    "Computer Software & Support": "",
-    "Computer Supplies": "",
-    "CPE Seminar/Courses": "",
-    "CPE Shareholder Courses/Seminars": "",
-    "Direct Recruiting - Meals": "",
-    "Direct Recruiting Expenses": "",
-    "Due from THF D&I": "",
-    "Equipment": "",
-    "Gifts - Clients": "",
-    "Holiday Party": "",
-    "Indirect Recruiting Expense": "",
-    "Marketing-Contractors": "",
-    "Marketing-Practice Development": "",
-    "Marketing-Social Media": "",
-    "Marketing-Sponsorships": "",
-    "Marketing/Promotional Costs": "",
-    "Non Reimbursable/Personal Expense": "",
-    "Other Administrative": "",
-    "Postage & Overnight Expense": "",
-    "Prepaid Software": "",
-    "Rental Expense": "",
-    "Repairs & Maintenance": "",
-    "Security": "",
-    "Seminar/Course Fees": "",
-    "Staff Awards/Incentives": "",
-    "Subscriptions/Newspaper/Books": "",
-    "Technology Training Expense": "",
-    "Tuition/Training Reimbursement": "",
-    "Utilities": ""
+    "Dade City": "DDC",
+    "Lakeland": "LKL",
+    "Panama City": "PCB",
+    "Tallahassee": "TLH",
+    "Tampa": "TPA"
 }
 
 DEFAULT_DEPARTMENT_CODE = "-"
@@ -109,18 +53,13 @@ def get_department_code(location_name: str) -> str:
     return DEPARTMENT_CODE_MAPPING.get(location_name, DEFAULT_LOCATION_CODE)
 
 
-def get_expense_type_code(expense_type: str) -> str:
-
-    if not expense_type:
-        return DEFAULT_EXPENSE_TYPE_CODE
-    return DEPARTMENT_CODE_MAPPING.get(expense_type, DEFAULT_EXPENSE_TYPE_CODE)
-
-
 def map_concur_expense_to_maconomy_expense(
     expense_data: dict[str, Any],
     expense_sheet_number: str | None = None,
     employee_number: str | None = None,
     custom_data_values: dict[str, Any] | None = None,
+    job_number: str | None = None,
+    task_code: str | None = None,
 ) -> dict[str, Any]:
     expense_id = expense_data.get("expenseId")
     expense_type = expense_data.get("expenseType", {}).get("name")
@@ -129,6 +68,7 @@ def map_concur_expense_to_maconomy_expense(
     currency = expense_data.get("approvedAmount", {}).get("currencyCode")
     exchangerate = expense_data.get("exchangerate", {}).get("value")
     business_purpose = expense_data.get("businessPurpose")
+    vendor_description = expense_data.get("vendor", {}).get("description")
 
     # Extract custom data values with fallback to existing logic
     custom_location = custom_data_values.get("location", "") if custom_data_values else ""
@@ -140,9 +80,10 @@ def map_concur_expense_to_maconomy_expense(
 
     if not expense_id:
         raise ValueError("SAP Concur expense_id are required")
-
-    # Check if job number has a valid value (not None, not empty, not whitespace)
-    has_valid_job_number = custom_job_number and custom_job_number.strip()
+    if not job_number or not str(job_number).strip():
+        raise ValueError("Maconomy job number is required")
+    if not task_code or not str(task_code).strip():
+        raise ValueError("Maconomy task code is required")
 
     # Start with base payload
     payload_data = {
@@ -154,15 +95,10 @@ def map_concur_expense_to_maconomy_expense(
         "unitpricecurrency": float(amount)* 100 if amount is not None else 0.0,
         "numberof": float(exchangerate) if exchangerate is not None else 1.0,
         "expensesheetlinetext10": str(expense_id) if expense_id else "",
-        "jobnumber": "10102",
-        "taskname": "401",
-
+        "jobnumber": str(job_number).strip(),
+        "taskname": str(task_code).strip(),
+        "remark1": str(vendor_description)
     }
-
-    # Conditionally add jobnumber and taskname only if job number has valid value
-    # if has_valid_job_number:
-    #     payload_data["jobnumber"] = str(custom_job_number)
-    #     payload_data["taskname"] = get_expense_type_code(expense_type)
 
     return {
         "data": payload_data,

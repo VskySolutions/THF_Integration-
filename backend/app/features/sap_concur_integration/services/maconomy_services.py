@@ -9,8 +9,11 @@ import httpx
 
 from app.core.config import Settings, get_settings
 from app.features.sap_concur_integration.mappers import (
+    build_job_tasklist_map,
+    build_task_code_map,
     map_concur_expense_report_to_maconomy_expensesheet,
-    map_concur_expense_to_maconomy_expense
+    map_concur_expense_to_maconomy_expense,
+    resolve_task_code,
 )
 from app.features.sap_concur_integration.services.sap_concur_service import SAPConcurService
 
@@ -40,9 +43,11 @@ class MaconomyService:
         Example: "(75674.T0) 1130 SUCCESS AVE LLC" -> "75674"
         """
         import re
-        match = re.search(r'\(([^.]+)\.', value)
+        # match = re.search(r'\(([^.]+)\.', value)
+        match = re.search(r'^([^.]+)', value)
         if match:
             return match.group(1)
+        
         return value
 
 
@@ -117,6 +122,7 @@ class MaconomyService:
                 "Authorization": f"Basic {encoded_credentials}",
             },
         )
+        # print(response.status_code, response.text)
         response.raise_for_status()
 
         token = response.headers.get("Maconomy-Reconnect", "").strip()
@@ -129,6 +135,109 @@ class MaconomyService:
     def _expense_sheet_url(self) -> str:
         shortname = quote(self.settings.maconomy_shortname, safe="")
         return f"{self.settings.maconomy_url}/maconomy-api/containers/{shortname}/expensesheets"
+
+
+    def _jobs_url(self) -> str:
+        shortname = quote(self.settings.maconomy_shortname, safe="")
+        return f"{self.settings.maconomy_url}/maconomy-api/containers/{shortname}/jobs"
+
+
+    def _api_tasks_url(self) -> str:
+        shortname = quote(self.settings.maconomy_shortname, safe="")
+        return f"{self.settings.maconomy_url}/maconomy-api/containers/{shortname}/api_tasks"
+
+
+    @staticmethod
+    def _build_or_restriction(field: str, values: list[str]) -> str:
+        escaped = [v.replace("'", "''") for v in values if v and v.strip()]
+        return " or ".join(f"{field}='{v}'" for v in escaped)
+
+
+    async def get_job_records_by_job_numbers(
+        self,
+        client: httpx.AsyncClient,
+        reconnect_token: str,
+        job_numbers: list[str],
+    ) -> list[dict[str, Any]]:
+        """ONE jobs/filter call for all job numbers.
+        Returns raw records (jobnumber, tasklist); map building is done by
+        task_code_mapper.build_job_tasklist_map (FR-4)."""
+        if not job_numbers:
+            return []
+        restriction = self._build_or_restriction("jobnumber", job_numbers)
+        payload = {
+            "restriction": restriction,
+            "fields": ["jobnumber", "tasklist"],
+            "limit": max(len(job_numbers), 1),
+        }
+        try:
+            response = await client.post(
+                f"{self._jobs_url()}/filter",
+                headers=self._container_headers(reconnect_token),
+                json=payload,
+            )
+            response.raise_for_status()
+            records = response.json()["panes"]["filter"]["records"]
+        except httpx.HTTPError as exc:
+            raise MaconomyServiceError(f"Maconomy jobs request failed: {exc}") from exc
+        except (KeyError, TypeError, ValueError) as exc:
+            raise MaconomyServiceError("Invalid Maconomy jobs response") from exc
+
+        return [
+            record["data"]
+            for record in records
+            if isinstance(record, dict) and isinstance(record.get("data"), dict)
+        ]
+
+
+    async def get_task_codes_by_task_lists(
+        self,
+        client: httpx.AsyncClient,
+        reconnect_token: str,
+        task_lists: list[str],
+    ) -> list[dict[str, Any]]:
+        """ONE api_tasks/filter call for all task lists, expense-eligible only.
+        Returns raw task records (taskname, tasklist, description,
+        activitynumber, activitytype)."""
+        if not task_lists:
+            return []
+        or_clause = self._build_or_restriction("tasklist", task_lists)
+        restriction = (
+            f"({or_clause}) "
+            "and canbeusedforexpenseregistration = true "
+            "and allowexpenseregistration = true"
+        )
+        print("restriction:", restriction)
+        payload = {
+            "restriction": restriction,
+            "fields": [
+                "taskname",
+                "tasklist",
+                "description",
+                "activitynumber",
+                "activitytype",
+            ],
+            "limit": 2000,
+        }
+        try:
+            response = await client.post(
+                f"{self._api_tasks_url()}/filter",
+                headers=self._container_headers(reconnect_token),
+                json=payload,
+            )
+            print("response:", response.status_code, response.text)
+            response.raise_for_status()
+            records = response.json()["panes"]["filter"]["records"]
+        except httpx.HTTPError as exc:
+            raise MaconomyServiceError(f"Maconomy tasks request failed: {exc}") from exc
+        except (KeyError, TypeError, ValueError) as exc:
+            raise MaconomyServiceError("Invalid Maconomy tasks response") from exc
+
+        return [
+            record["data"]
+            for record in records
+            if isinstance(record, dict) and isinstance(record.get("data"), dict)
+        ]
 
 
     @staticmethod
@@ -226,7 +335,7 @@ class MaconomyService:
         ) -> tuple[str, str]:
             url = f"{self._expense_sheet_url()}/instances"
 
-            payload = {"panes":{"card":{"fields":["description","employeenumber","expensesheettext5"]},"table":{"fields":[]}}}
+            payload = {"panes":{"card":{"fields":["description","employeenumber","expensesheettext5","expensesheettext1"]},"table":{"fields":[]}}}
 
             print("======= _retrieve_expense_sheet_instance ==========")
             response = await client.post(
@@ -426,6 +535,7 @@ class MaconomyService:
     async def get_all_employees_from_maconomy(
             self,
         ) -> list[dict[str, Any]]:
+            print("get all employees")
             try:
                 async with httpx.AsyncClient(timeout=self.timeout) as client:
                     reconnect_token = await self._get_reconnect_token(client)
@@ -442,6 +552,7 @@ class MaconomyService:
         client: httpx.AsyncClient,
         reconnect_token: str,
     )-> dict[str, Any] | None:
+        print("_get_maconomy_employees")
         shortname = quote(self.settings.maconomy_shortname, safe="")
         
         url = f"{self.settings.maconomy_url}/maconomy-api/containers/{shortname}/showemployeeshr/filter"
@@ -459,6 +570,7 @@ class MaconomyService:
             ),
             json=payload,
         )
+        # print(response.status_code, response.text)
         response.raise_for_status()
 
 
@@ -478,7 +590,7 @@ class MaconomyService:
                     "instancekey": item["data"]["instancekey"]
                 }
                 for item in employee_card
-                if item["data"]["electronicmailaddress"] # and item["data"]["vendornumber"]
+                if item["data"]["electronicmailaddress"] and item["data"]["vendornumber"]
             ]
 
 
@@ -501,7 +613,7 @@ class MaconomyService:
     ) -> tuple[str, str]:
         url = f"{self._expense_sheet_url()}/instances"
 
-        payload = {"panes":{"card":{"fields":["description","employeenumber","expensesheettext5"]},"table":{"fields":["entrydate","expensesheetlinetext10","currency","linenumber","numberof","unitpricecurrency","specification4name","entityname","text","jobnumber","taskname"]}}} # "specification4name","locationname","amountbase", "specification4name"
+        payload = {"panes":{"card":{"fields":["description","employeenumber","expensesheettext5","expensesheettext1"]},"table":{"fields":["entrydate","expensesheetlinetext10","currency","linenumber","numberof","unitpricecurrency","specification4name","entityname","text","jobnumber","taskname","remark1"]}}} # "specification4name","locationname","amountbase", "specification4name"
 
         print("======= _retrieve_expense_instance ==========")
         response = await client.post(
@@ -602,19 +714,30 @@ class MaconomyService:
         user_id: str | None = None,
         context_type: str | None = None,
     ) -> dict[str, Any]:
-        """Create Maconomy expense lines fault-tolerantly.
+        """Create Maconomy expense lines fault-tolerantly (3 phases).
 
-        Each expense line is processed independently through its own
-        fetch -> resolve customData -> map -> create pipeline. A failure on
-        one line is captured (original exception text retained) and
-        processing CONTINUES with the remaining lines — a single failed
-        line never terminates the report.
+        Phase A — per-line SAP Concur pre-resolution: fetch detail +
+        resolve customData -> job_number, expense_type; collect the
+        UNIQUE job numbers for the report. Per-line Concur failures are
+        recorded (same behavior as before) and never abort the batch.
+
+        Phase B — bulk Maconomy retrieval: ONE jobs/filter call +
+        ONE api_tasks/filter call build the in-memory
+        `jobnumber -> tasklist` and `jobno|tasklist|description ->
+        taskcode` maps (FR-3/FR-8/FR-15). A retrieval failure records
+        every pre-resolved line as failed and RETURNS — it never raises,
+        because the expense sheet already exists (FR-17/FR-19).
+
+        Phase C — per-line resolution: task code resolved via
+        resolve_task_code (skip reasons per FR-5/FR-6/FR-11/FR-20),
+        then the unchanged existing Maconomy line-create sequence.
+        One failed/skipped line never terminates the report.
 
         Shared Maconomy session setup (client + reconnect token) is a
         report-level concern: if setup fails, MaconomyServiceError is
         raised as before.
 
-        Returns:
+        Returns (shape unchanged):
             {
                 "succeeded": [{"expense_id", "line_number", "response"}, ...],
                 "failed": [{"expense_id", "error_type", "message"}, ...],
@@ -622,8 +745,9 @@ class MaconomyService:
                 "success_count": int,
                 "failure_count": int,
             }
-            Skips (missing expenseId / detail not found / list item not
-            found) are recorded in "failed" with error_type "SKIPPED".
+            Skips are recorded in "failed" with error_type "SKIPPED";
+            Phase B retrieval failures carry message
+            "Maconomy Jobs/Tasks retrieval failed: ...".
         """
         print("=========== create_expense_line_items =============")
 
@@ -641,6 +765,157 @@ class MaconomyService:
                 }
             )
 
+        # --- Phase A: per-line SAP Concur pre-resolution (FR-1) ---
+        resolved_lines: list[dict[str, Any]] = []
+        unique_job_numbers: list[str] = []
+        seen_job_numbers: set[str] = set()
+
+        for index, expense_item in enumerate(expense_data):
+            expense_id = expense_item.get("expenseId")
+            try:
+                if not expense_id:
+                    _record_skip(None, "missing expenseId")
+                    continue
+
+                print(
+                    f"---- Pre-resolving expense line {index} "
+                    f"(expense_id={expense_id}) ----"
+                )
+
+                # 1) Fetch detailed expense data from SAP Concur
+                detailed_expense = (
+                    await sap_concur_service.get_expenses_by_expense_id(
+                        expense_id=expense_id,
+                        report_id=report_id or "",
+                        user_id=user_id or "",
+                        context_type=context_type or "",
+                    )
+                )
+                if detailed_expense is None:
+                    _record_skip(
+                        str(expense_id),
+                        "could not retrieve detailed data for "
+                        f"expense_id={expense_id}",
+                    )
+                    continue
+
+                # 2) Resolve customData list items
+                custom_data = detailed_expense.get("customData", [])
+                print("=== custom_data ===:", custom_data)
+                custom_data_values: dict[str, Any] = {}
+                skip_expense = False
+                skip_reason = ""
+
+                if custom_data:
+                    for custom_entry in custom_data:
+                        print("custom_entry:", custom_entry)
+                        entry_id = custom_entry.get("id")
+                        entry_value = custom_entry.get("value", "")
+
+                        if not entry_id:
+                            continue
+
+                        # Only process custom1, custom2, custom5, custom6
+                        if entry_id not in (
+                            "custom1",
+                            "custom2",
+                            "custom5",
+                            "custom6",
+                        ):
+                            continue
+
+                        list_item = (
+                            await sap_concur_service.get_list_items_by_id(
+                                report_id=report_id or "",
+                                user_id=user_id or "",
+                                context_type=context_type or "",
+                                item_id=entry_value,
+                            )
+                        )
+
+                        if list_item is None:
+                            skip_reason = (
+                                "get_list_items_by_id returned None "
+                                f"for {entry_id}={entry_value}"
+                            )
+                            skip_expense = True
+                            break
+
+                        if entry_id == "custom1":
+                            # Location
+                            custom_data_values["location"] = (
+                                list_item.get("value", "")
+                            )
+                        elif entry_id == "custom2":
+                            # Department
+                            custom_data_values["department"] = (
+                                list_item.get("value", "")
+                            )
+                        elif entry_id == "custom5":
+                            # Travel Reason
+                            custom_data_values["travel_reason"] = (
+                                list_item.get("value", "")
+                            )
+                        elif entry_id == "custom6":
+                            # Client Engagement - extract job number
+                            client_engagement = list_item.get("code", "")
+                            print("client_engagement:", client_engagement)
+                            custom_data_values["client_engagement"] = (
+                                client_engagement
+                            )
+                            custom_data_values["job_number"] = ( # client_engagement
+                                self.extract_job_number_from_client_engagement(
+                                    client_engagement
+                                )
+                            )
+
+                if skip_expense:
+                    _record_skip(str(expense_id), skip_reason)
+                    continue
+
+                expense_type = str(
+                    detailed_expense.get("expenseType", {}).get("name") or ""
+                )
+                job_number = str(
+                    custom_data_values.get("job_number", "") or ""
+                )
+                detailed_expense["_custom_data_values"] = (
+                    custom_data_values
+                )
+
+                resolved_lines.append(
+                    {
+                        "index": index,
+                        "expense_id": str(expense_id),
+                        "detailed_expense": detailed_expense,
+                        "custom_data_values": custom_data_values,
+                        "expense_type": expense_type,
+                        "job_number": job_number,
+                    }
+                )
+
+                job_key = job_number.strip()
+                if job_key and job_key not in seen_job_numbers:
+                    seen_job_numbers.add(job_key)
+                    unique_job_numbers.append(job_key)
+
+            except Exception as exc:
+                # Same per-line capture behavior as before; never abort batch.
+                print(
+                    f"Expense line pre-resolution failed "
+                    f"(expense_id={expense_id}): {exc}"
+                )
+                failed.append(
+                    {
+                        "expense_id": str(expense_id)
+                        if expense_id
+                        else "",
+                        "error_type": type(exc).__name__,
+                        "message": str(exc),
+                    }
+                )
+                continue
+
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 # --- Report-level setup (raises on failure, as today) ---
@@ -651,120 +926,92 @@ class MaconomyService:
 
                 print("======== Expense Line Items Creation Started ========")
 
-                # --- Per-line pipeline: one failure never stops the rest ---
-                for index, expense_item in enumerate(expense_data):
-                    expense_id = expense_item.get("expenseId")
+                # --- Phase B: ONE jobs/filter + ONE api_tasks/filter (FR-3/FR-8/FR-15) ---
+                job_tasklist_map: dict[str, str] = {}
+                task_code_map: dict[str, str] = {}
+
+                if unique_job_numbers:
                     try:
-                        if not expense_id:
-                            _record_skip(None, "missing expenseId")
+                        job_records = (
+                            await self.get_job_records_by_job_numbers(
+                                client, reconnect_token, unique_job_numbers
+                            )
+                        )
+                        job_tasklist_map = build_job_tasklist_map(job_records)
+
+                        task_lists = sorted(
+                            {
+                                tl
+                                for tl in job_tasklist_map.values()
+                                if tl and tl.strip()
+                            }
+                        )
+                        if task_lists:
+                            task_records = (
+                                await self.get_task_codes_by_task_lists(
+                                    client, reconnect_token, task_lists
+                                )
+                            )
+                            task_code_map = build_task_code_map(
+                                task_records, job_tasklist_map
+                            )
+                    except Exception as exc:
+                        # FR-19: expense sheet already created — never raise.
+                        # Raising would roll back the DB mapping row and orphan
+                        # the created sheet; instead fail every line here.
+                        print(f"Maconomy Jobs/Tasks retrieval failed: {exc}")
+                        failure_message = (
+                            f"Maconomy Jobs/Tasks retrieval failed: {exc}"
+                        )
+                        for entry in resolved_lines:
+                            failed.append(
+                                {
+                                    "expense_id": entry["expense_id"],
+                                    "error_type": type(exc).__name__,
+                                    "message": failure_message,
+                                }
+                            )
+                        return {
+                            "succeeded": succeeded,
+                            "failed": failed,
+                            "total": len(expense_data),
+                            "success_count": len(succeeded),
+                            "failure_count": len(failed),
+                        }
+
+                # --- Phase C: resolve task code + create lines (FR-5..FR-13) ---
+                for entry in resolved_lines:
+                    index = entry["index"]
+                    expense_id = entry["expense_id"]
+                    try:
+                        (
+                            tasklist,
+                            task_code,
+                            skip_reason,
+                        ) = resolve_task_code(
+                            entry["job_number"],
+                            entry["expense_type"],
+                            job_tasklist_map,
+                            task_code_map,
+                        )
+                        if skip_reason:
+                            _record_skip(expense_id, skip_reason)
                             continue
 
                         print(
                             f"---- Processing expense line {index} "
-                            f"(expense_id={expense_id}) ----"
+                            f"(expense_id={expense_id}) -> tasklist="
+                            f"{tasklist}, task_code={task_code} ----"
                         )
 
-                        # 1) Fetch detailed expense data from SAP Concur
-                        detailed_expense = (
-                            await sap_concur_service.get_expenses_by_expense_id(
-                                expense_id=expense_id,
-                                report_id=report_id or "",
-                                user_id=user_id or "",
-                                context_type=context_type or "",
-                            )
-                        )
-                        if detailed_expense is None:
-                            _record_skip(
-                                str(expense_id),
-                                "could not retrieve detailed data for "
-                                f"expense_id={expense_id}",
-                            )
-                            continue
-
-                        # 2) Resolve customData list items
-                        custom_data = detailed_expense.get("customData", [])
-                        print("=== custom_data ===:", custom_data)
-                        custom_data_values: dict[str, Any] = {}
-                        skip_expense = False
-                        skip_reason = ""
-
-                        if custom_data:
-                            for custom_entry in custom_data:
-                                print("custom_entry:", custom_entry)
-                                entry_id = custom_entry.get("id")
-                                entry_value = custom_entry.get("value", "")
-
-                                if not entry_id:
-                                    continue
-
-                                # Only process custom1, custom2, custom5, custom6
-                                if entry_id not in (
-                                    "custom1",
-                                    "custom2",
-                                    "custom5",
-                                    "custom6",
-                                ):
-                                    continue
-
-                                list_item = (
-                                    await sap_concur_service.get_list_items_by_id(
-                                        report_id=report_id or "",
-                                        user_id=user_id or "",
-                                        context_type=context_type or "",
-                                        item_id=entry_value,
-                                    )
-                                )
-
-                                if list_item is None:
-                                    skip_reason = (
-                                        "get_list_items_by_id returned None "
-                                        f"for {entry_id}={entry_value}"
-                                    )
-                                    skip_expense = True
-                                    break
-
-                                if entry_id == "custom1":
-                                    # Location
-                                    custom_data_values["location"] = (
-                                        list_item.get("value", "")
-                                    )
-                                elif entry_id == "custom2":
-                                    # Department
-                                    custom_data_values["department"] = (
-                                        list_item.get("value", "")
-                                    )
-                                elif entry_id == "custom5":
-                                    # Travel Reason
-                                    custom_data_values["travel_reason"] = (
-                                        list_item.get("value", "")
-                                    )
-                                elif entry_id == "custom6":
-                                    # Client Engagement - extract job number
-                                    client_engagement = list_item.get("value", "")
-                                    custom_data_values["client_engagement"] = (
-                                        client_engagement
-                                    )
-                                    custom_data_values["job_number"] = (
-                                        self.extract_job_number_from_client_engagement(
-                                            client_engagement
-                                        )
-                                    )
-
-                        if skip_expense:
-                            _record_skip(str(expense_id), skip_reason)
-                            continue
-
-                        detailed_expense["_custom_data_values"] = (
-                            custom_data_values
-                        )
-
-                        # 3) Map THIS line only — one ValueError no longer
-                        #    aborts the batch
+                        # 3) Map THIS line with DYNAMIC jobnumber/taskcode
                         expense_line_data = map_concur_expense_to_maconomy_expense(
-                            detailed_expense,
+                            entry["detailed_expense"],
                             expense_sheet_number=expense_sheet_number,
                             employee_number=employee_number,
-                            custom_data_values=custom_data_values,
+                            custom_data_values=entry["custom_data_values"],
+                            job_number=entry["job_number"],
+                            task_code=task_code,
                         )
 
                         # 4) Create the line in Maconomy — exact existing
@@ -920,7 +1167,7 @@ class MaconomyService:
         url = f"{self.settings.maconomy_url}/maconomy-api/containers/{shortname}/expensesheets/filter"
         
         payload = {
-            "fields":["amountbase","approvaldate","approved","createddate","description","employeename","employeenumber","expensesheetnumber","expensesheettext5","fullyapproved","instancekey","submitted","vendorsettlementstatus"],
+            "fields":["amountbase","approvaldate","approved","createddate","description","employeename","employeenumber","expensesheetnumber","expensesheettext5","expensesheettext1","fullyapproved","instancekey","submitted","vendorsettlementstatus"],
             "limit":500,
         }
 
@@ -999,7 +1246,7 @@ class MaconomyService:
 
         payload = {
             "restriction": restriction,
-            "fields":["amountbase","approvaldate","approved","createddate","description","employeename","employeenumber","expensesheetnumber","expensesheettext5","fullyapproved","instancekey","submitted","vendorsettlementstatus"],
+            "fields":["amountbase","approvaldate","approved","createddate","description","employeename","employeenumber","expensesheetnumber","expensesheettext5","expensesheettext1","fullyapproved","instancekey","submitted","vendorsettlementstatus"],
             "limit":500,
         }
 
