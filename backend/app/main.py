@@ -19,6 +19,9 @@ from app.features.xcm_cch_axcess_integration.routers import (
     manual_cch_task_mapping_router,
     pending_cch_task_mapping_router,
 )
+from app.features.xcm_cch_client_scoped_integration.routers import (
+    router as xcm_cch_client_scoped_router,
+)
 from app.web import router as web_router
 
 #paycor imports 
@@ -72,6 +75,7 @@ app.include_router(sap_concur_router, prefix=settings.api_v1_prefix)
 
 app.include_router(pending_cch_task_mapping_router, prefix=settings.api_v1_prefix)
 app.include_router(manual_cch_task_mapping_router, prefix=settings.api_v1_prefix)
+app.include_router(xcm_cch_client_scoped_router, prefix=settings.api_v1_prefix)
 
 #paycor router
 app.include_router(paycor_router, prefix=settings.api_v1_prefix)
