@@ -54,7 +54,7 @@ router = APIRouter(
 async def sync_client_scoped_engagements(
     payload: ClientScopedSyncRequest,
 ) -> list[dict[str, Any]]:
-    """Discover Maconomy jobs and check whether each CCH client exists."""
+    """Create CCH clients for missing Maconomy jobs and return their details."""
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
             maconomy = MaconomyService(client)
@@ -63,7 +63,18 @@ async def sync_client_scoped_engagements(
             if not jobs:
                 return []
             cch = CCHClientService(client)
-            return await cch.flag_existing_clients(jobs)
+            flagged_jobs = await cch.flag_existing_clients(jobs[:40])
+            new_cch_clients = [
+                job for job in flagged_jobs if job["is_exist_in_chh"] is False
+            ]
+            if not new_cch_clients:
+                return []
+            reference_data = await maconomy.get_client_reference_records(new_cch_clients)
+            enriched_jobs = maconomy.join_client_reference_records(
+                new_cch_clients, reference_data
+            )
+            return await cch.create_clients_and_tasks(enriched_jobs)
+
     except MaconomyServiceError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -72,5 +83,5 @@ async def sync_client_scoped_engagements(
     except CCHClientServiceError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Unable to check clients in CCH/XCM: {exc}",
+            detail=f"Unable to process clients or tasks in CCH/XCM: {exc}",
         ) from exc
