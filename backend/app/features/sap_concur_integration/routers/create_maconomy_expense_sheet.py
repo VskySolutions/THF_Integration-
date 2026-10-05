@@ -399,6 +399,10 @@ async def _run_create_maconomy_expense_sheet(
     mapping = None
     is_new_expensesheet = True
     expensesheet_was_reconciled = False
+    # Defensive defaults: the submission block below must never raise
+    # NameError if the creation branch shape changes.
+    expense_sheet_number = ""
+    maconomy_expense_sheet_result: dict[str, Any] = {}
 
     print("======== Maconomy service initiated =========")
 
@@ -601,6 +605,61 @@ async def _run_create_maconomy_expense_sheet(
             f"Failed to write integration log for report {report_id}: {log_exc}"
         )
 
+    # --- Submit expense sheet for approval (FR-1 / FR-4) ---
+    submission: dict[str, Any] = {
+        "expense_sheet_number": expense_sheet_number,
+        "submitted": False,
+        "status": "SKIPPED",
+        "message": "",
+    }
+
+    if not expense_sheet_number:
+        submission["message"] = "Submission skipped: no expense sheet number"
+    elif failure_count > 0:
+        submission["message"] = (
+            f"Submission skipped: {failure_count}/{total} expense line(s) failed"
+        )
+    else:
+        try:
+            submission = await maconomy_service.submit_expense_sheet(
+                expense_sheet_number
+            )
+        except MaconomyServiceError as exc:
+            submission.update(
+                {"submitted": False, "status": "FAILED", "message": str(exc)}
+            )
+        except Exception as exc:  # never reach the outer catch-all (R3)
+            submission.update(
+                {"submitted": False, "status": "FAILED", "message": str(exc)}
+            )
+
+    # --- Exactly one submission log row (FR-3, action=UPDATE, no migration) ---
+    submit_log_status = {
+        "SUBMITTED": IntegrationStatus.SUCCESS,
+        "ALREADY_SUBMITTED": IntegrationStatus.SKIPPED,
+        "FAILED": IntegrationStatus.FAILED,
+        "SKIPPED": IntegrationStatus.SKIPPED,
+    }.get(str(submission.get("status", "")), IntegrationStatus.FAILED)
+    submit_log_message = (
+        f"Expense sheet {expense_sheet_number or 'N/A'} submission: "
+        f"{submission.get('status', '')} - {submission.get('message', '')}"
+    )
+    try:
+        await integration_log_service.create_log(
+            session,
+            mapping_id=mapping.id if mapping else None,
+            report_id=report_id,
+            status=submit_log_status,
+            action=IntegrationAction.UPDATE,
+            message=submit_log_message,
+            employeeemail=employee_email,
+        )
+    except Exception as log_exc:
+        print(
+            f"Failed to write submission log for report {report_id}: {log_exc}"
+        )
+
+    maconomy_expense_sheet_result["submission"] = submission
     return maconomy_expense_sheet_result
 
 
