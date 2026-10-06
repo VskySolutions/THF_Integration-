@@ -21,6 +21,20 @@
     .metric-card .card-body { display: flex; flex-direction: column; justify-content: space-between; }
     .metric-card .display-6 { font-size: 1.75rem; letter-spacing: -.04em; }
     .dashboard-heading { font-size: clamp(1.45rem, 2vw, 1.85rem); font-weight: 720; letter-spacing: -.035em; }
+    .run-details-btn { white-space: nowrap; }
+    .run-detail-summary {
+        background: #f7f9fc; border: 1px solid var(--falcon-border);
+        border-radius: .65rem; padding: .85rem 1rem;
+    }
+    .run-detail-summary-label {
+        color: var(--falcon-muted); font-size: .65rem; font-weight: 750;
+        letter-spacing: .055em; text-transform: uppercase;
+    }
+    .run-detail-summary-value { font-size: 1.2rem; font-weight: 720; letter-spacing: -.03em; }
+    .entity-reference { max-width: 13rem; }
+    .entity-reference code { color: #53627a; font-size: .72rem; }
+    .detail-reason { min-width: 14rem; max-width: 28rem; white-space: normal; }
+    .detail-loading { min-height: 12rem; }
 </style>
 {% endblock %}
 
@@ -224,6 +238,7 @@
                         <th>Succeeded</th>
                         <th>Failed</th>
                         <th>Summary</th>
+                        <th class="text-end" data-orderable="false">Details</th>
                     </tr>
                     </thead>
                     <tbody>
@@ -244,6 +259,19 @@
                         <td>{{ run.details.get('succeeded', 0) if run.details else 0 }}</td>
                         <td>{{ run.details.get('failed', 0) if run.details else 0 }}</td>
                         <td class="message-cell">{{ run.message }}</td>
+                        <td class="text-end">
+                            <button type="button"
+                                    class="btn btn-sm btn-outline-secondary run-details-btn"
+                                    data-run-details
+                                    data-details-url="{{ url_for('caseware_run_jobs', integration_id=integration.id, request_id=run.request_id) }}"
+                                    data-request-id="{{ request_id }}"
+                                    data-started="{{ run.created_on_utc.strftime('%d %b %Y, %H:%M:%S') }} UTC"
+                                    data-processed="{{ run.details.get('processed', 0) if run.details else 0 }}"
+                                    data-succeeded="{{ run.details.get('succeeded', 0) if run.details else 0 }}"
+                                    data-failed="{{ run.details.get('failed', 0) if run.details else 0 }}">
+                                View details
+                            </button>
+                        </td>
                     </tr>
                     {% endfor %}
                     </tbody>
@@ -294,6 +322,76 @@
         </div>
     </section>
 </main>
+
+<div class="modal fade" id="runDetailsModal" tabindex="-1"
+     aria-labelledby="runDetailsModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div>
+                    <h2 class="modal-title fs-5" id="runDetailsModalLabel">Run details</h2>
+                    <div class="text-secondary small mt-1">
+                        <span id="runDetailsStarted"></span>
+                        <span class="mx-1" aria-hidden="true">&middot;</span>
+                        <code class="request-id" id="runDetailsRequestId"></code>
+                    </div>
+                </div>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body p-3 p-md-4">
+                <div class="row g-2 mb-4" aria-label="Run outcome summary">
+                    <div class="col-4">
+                        <div class="run-detail-summary h-100">
+                            <div class="run-detail-summary-label">Discovered</div>
+                            <div class="run-detail-summary-value" id="runDetailsProcessed">0</div>
+                        </div>
+                    </div>
+                    <div class="col-4">
+                        <div class="run-detail-summary h-100">
+                            <div class="run-detail-summary-label">Succeeded</div>
+                            <div class="run-detail-summary-value text-success" id="runDetailsSucceeded">0</div>
+                        </div>
+                    </div>
+                    <div class="col-4">
+                        <div class="run-detail-summary h-100">
+                            <div class="run-detail-summary-label">Failed</div>
+                            <div class="run-detail-summary-value text-danger" id="runDetailsFailed">0</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="detail-loading d-flex align-items-center justify-content-center" id="runDetailsLoading">
+                    <div class="text-center text-secondary">
+                        <span class="spinner-border spinner-border-sm mb-2" aria-hidden="true"></span>
+                        <div class="small">Loading job outcomes&hellip;</div>
+                    </div>
+                </div>
+                <div class="alert alert-danger d-none" id="runDetailsError" role="alert"></div>
+                <div class="table-responsive d-none" id="runDetailsTableWrapper">
+                    <table class="table table-hover align-middle mb-0">
+                        <thead>
+                        <tr>
+                            <th>Job number</th>
+                            <th>Outcome</th>
+                            <th>Operation</th>
+                            <th>CaseWare entity</th>
+                            <th>Maconomy version</th>
+                            <th>Reason</th>
+                        </tr>
+                        </thead>
+                        <tbody id="runDetailsTableBody"></tbody>
+                    </table>
+                </div>
+                <div class="text-center text-secondary py-5 d-none" id="runDetailsEmpty">
+                    No job-level records were found for this run.
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
 
 <div class="modal fade" id="integrationStatusModal" tabindex="-1"
      aria-labelledby="integrationStatusModalLabel" aria-hidden="true">
@@ -383,6 +481,94 @@
         $('#casewareHistoryTabs button[data-bs-toggle="tab"]').on('shown.bs.tab', function () {
             runHistoryTable.columns.adjust();
             jobActivityTable.columns.adjust();
+        });
+
+        const runDetailsModalElement = document.getElementById('runDetailsModal');
+        const runDetailsModal = bootstrap.Modal.getOrCreateInstance(runDetailsModalElement);
+        const actionLabels = {
+            CREATED: 'Created',
+            TOUPDATE: 'Updated',
+            ALREADY_SYNCED: 'Already synced',
+            FAILED: 'Failed',
+            UNKNOWN: 'Unknown'
+        };
+
+        function detailCell(value, className) {
+            return $('<td>').addClass(className || '').text(value ?? '\u2014');
+        }
+
+        function renderRunJobs(jobs) {
+            const tableBody = $('#runDetailsTableBody').empty();
+            jobs.forEach(function (job) {
+                const isSuccessful = job.status === 'SUCCESS';
+                const row = $('<tr>');
+                row.append(detailCell(job.job_number || 'Request level', 'fw-semibold'));
+                row.append(
+                    $('<td>').append(
+                        $('<span>')
+                            .addClass(`badge ${isSuccessful ? 'text-bg-success' : 'text-bg-danger'}`)
+                            .text(isSuccessful ? 'Succeeded' : 'Failed')
+                    )
+                );
+                row.append(detailCell(actionLabels[job.action] || job.action || 'Unknown'));
+
+                const entityCell = $('<td>').addClass('entity-reference');
+                if (job.entity_number) {
+                    entityCell.append($('<div>').addClass('fw-semibold').text(job.entity_number));
+                    if (job.entity_id) {
+                        entityCell.append($('<code>').attr('title', job.entity_id).text(`${job.entity_id.slice(0, 8)}\u2026`));
+                    }
+                } else {
+                    entityCell.text('\u2014');
+                }
+                row.append(entityCell);
+                row.append(detailCell(job.version_number));
+
+                let reason = '\u2014';
+                if (!isSuccessful) {
+                    reason = job.message || 'No failure reason was recorded.';
+                } else if (job.action === 'ALREADY_SYNCED') {
+                    reason = 'No changes detected.';
+                }
+                row.append(detailCell(reason, 'detail-reason'));
+                tableBody.append(row);
+            });
+        }
+
+        $('#runHistoryTable').on('click', '[data-run-details]', async function () {
+            const button = $(this);
+            $('#runDetailsRequestId').text(button.data('request-id'));
+            $('#runDetailsStarted').text(button.data('started'));
+            $('#runDetailsProcessed').text(button.data('processed'));
+            $('#runDetailsSucceeded').text(button.data('succeeded'));
+            $('#runDetailsFailed').text(button.data('failed'));
+            $('#runDetailsLoading').removeClass('d-none');
+            $('#runDetailsError, #runDetailsTableWrapper, #runDetailsEmpty').addClass('d-none');
+            $('#runDetailsTableBody').empty();
+            runDetailsModal.show();
+
+            try {
+                const response = await fetch(button.data('details-url'), {
+                    headers: { Accept: 'application/json' }
+                });
+                if (!response.ok) {
+                    throw new Error(`Request failed with status ${response.status}`);
+                }
+                const payload = await response.json();
+                const jobs = Array.isArray(payload.jobs) ? payload.jobs : [];
+                $('#runDetailsLoading').addClass('d-none');
+                if (jobs.length === 0) {
+                    $('#runDetailsEmpty').removeClass('d-none');
+                    return;
+                }
+                renderRunJobs(jobs);
+                $('#runDetailsTableWrapper').removeClass('d-none');
+            } catch (error) {
+                $('#runDetailsLoading').addClass('d-none');
+                $('#runDetailsError')
+                    .text('Job details could not be loaded. Refresh the page and try again.')
+                    .removeClass('d-none');
+            }
         });
 
         $('[data-dashboard-tooltip]').each(function () {

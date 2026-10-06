@@ -14,10 +14,16 @@ from app.features.sap_concur_integration.routers.create_maconomy_expense_sheet i
     router as sap_concur_router,
 )
 from app.features.exception_logs import install_exception_logging
-from app.features.schedular_services import SchedulerService
+from app.features.schedular_services import (
+    PaycorSchedulerService,
+    SchedulerService,
+)
 from app.features.xcm_cch_axcess_integration.routers import (
     manual_cch_task_mapping_router,
     pending_cch_task_mapping_router,
+)
+from app.features.xcm_cch_client_scoped_integration.routers import (
+    router as xcm_cch_client_scoped_router,
 )
 from app.web import router as web_router
 
@@ -30,11 +36,19 @@ async def lifespan(_: FastAPI):
     # Database connections are created lazily by SQLAlchemy and disposed on exit.
     from app.db.session import engine
 
-    scheduler = SchedulerService(get_settings())
+    scheduler_settings = get_settings()
+    scheduler = SchedulerService(scheduler_settings)
+    paycor_scheduler = PaycorSchedulerService(scheduler_settings)
     await scheduler.start()
+    try:
+        await paycor_scheduler.start()
+    except Exception:
+        await scheduler.shutdown()
+        raise
     try:
         yield
     finally:
+        await paycor_scheduler.shutdown()
         await scheduler.shutdown()
         await engine.dispose()
 
@@ -72,6 +86,7 @@ app.include_router(sap_concur_router, prefix=settings.api_v1_prefix)
 
 app.include_router(pending_cch_task_mapping_router, prefix=settings.api_v1_prefix)
 app.include_router(manual_cch_task_mapping_router, prefix=settings.api_v1_prefix)
+app.include_router(xcm_cch_client_scoped_router, prefix=settings.api_v1_prefix)
 
 #paycor router
 app.include_router(paycor_router, prefix=settings.api_v1_prefix)

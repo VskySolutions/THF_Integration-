@@ -101,6 +101,16 @@ class Settings(BaseSettings):
     scheduler_api_key: SecretStr
     scheduler_cch_interval_minutes: int = Field(default=5, ge=1)
     scheduler_caseware_interval_minutes: int = Field(default=5, ge=1)
+    scheduler_paycor_update_interval_minutes: int = Field(
+        default=5,
+        ge=1,
+        le=59,
+    )
+    scheduler_paycor_create_start_hour_et: int = Field(
+        default=0,
+        ge=0,
+        le=23,
+    )
     scheduler_request_timeout_seconds: float = Field(default=600, gt=0)
 
     @field_validator("api_v1_prefix")
