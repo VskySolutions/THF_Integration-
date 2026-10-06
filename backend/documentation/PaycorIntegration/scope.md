@@ -80,12 +80,13 @@ The integration can be run in three ways:
 2. **Employee update run:** It will review employees who exist in both systems and update information that has changed.
 3. **Single employee run:** It will process one employee. This can be used for a correction or a retry.
 
-The Paycor integration does not currently run automatically within the application. An approved business process or an external scheduling service must start it.
+When the application scheduler is enabled, Paycor synchronization runs automatically:
 
-Before production use, the business must agree on how often it will run. The suggested approach is:
-
-- Run the recent hire process once every day.
-- Run the employee update process at an agreed time.
+- The recent hire/create process runs twice daily at midnight and noon Eastern Time by default. The application uses `America/New_York`, so daylight-saving changes are applied automatically.
+- The employee update process runs every five minutes.
+- The Paycor jobs run independently from the CCH and CaseWare jobs.
+- Paycor create and update never run at the same time. When both are due, create runs first and update waits for it to finish.
+- Both endpoints require the `PAYCOR_SYNC_ONBOARDING_EMPLOYEES` integration service to be active.
 - Use the single employee process when a correction or retry is needed.
 
 After every run, the result for each employee will be shown as **Created**, **Updated**, **Skipped**, or **Failed**. Failed employees should be reviewed and processed again after the problem has been corrected.
@@ -136,7 +137,7 @@ The following items must be ready:
 - The employee update run will review all relevant active employees and will skip employees who have no changes.
 - A temporary Paycor or Maconomy problem may require the process to be run again.
 - A person must be responsible for reviewing failed employees and arranging corrections.
-- The run times must be agreed because the integration is not currently started automatically by the application.
+- The configured Eastern Time create hour can be changed using `SCHEDULER_PAYCOR_CREATE_START_HOUR_ET`; the second run is 12 hours later.
 
 ## Summary
 

@@ -315,7 +315,7 @@ class PaycorEmployeeSyncService:
         await get_active_service(
             session,
             IntegrationServiceIdentifier
-            .PAYCOR_SYNC_EMPLOYEES,
+            .PAYCOR_SYNC_ONBOARDING_EMPLOYEES,
         )
 
         try:

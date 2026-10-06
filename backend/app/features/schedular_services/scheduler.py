@@ -43,7 +43,7 @@ class SchedulerService:
             minutes=self._settings.scheduler_cch_interval_minutes,
             args=[client],
             id=MACONOMY_CCH_SYNC_JOB_ID,
-            name="Maconomy to CCH/XCM task mapping",
+            name="Maconomy to CCH/XCM client-scoped sync",
             replace_existing=True,
             max_instances=1,
             coalesce=True,

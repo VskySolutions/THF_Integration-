@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.authentication.dependencies import AuthenticatedUser
 from app.authentication.security import (
@@ -19,10 +20,19 @@ from app.features.integration_services.models import IntegrationService
 from app.features.maconomy_caseware_cloud_intergration.models import (
     MaconomyCasewareRequestLog,
 )
+from app.features.paycor_integration.models import PaycorIntegrationLog
 from app.features.xcm_cch_axcess_integration.models import XCMCCHIntegrationRunLog
+from app.features.xcm_cch_client_scoped_integration.models import (
+    XCMCCHClientScopedRunLog,
+)
 from app.web.templating import templates
 
 router = APIRouter(tags=["dashboard"])
+
+_PAYCOR_INTEGRATION_IDENTIFIERS = {
+    "PAYCOR_SYNC_EMPLOYEES",
+    IntegrationServiceIdentifier.PAYCOR_SYNC_ONBOARDING_EMPLOYEES.value,
+}
 
 
 @router.get("/", include_in_schema=False)
@@ -142,6 +152,7 @@ async def sync_caseware_job(
                 (
                     IntegrationServiceIdentifier.MACONOMY_CASEWARE_CLOUD_SYNC.value,
                     IntegrationServiceIdentifier.MACONOMY_CCH_XCM_TASK_MAPPING.value,
+                    IntegrationServiceIdentifier.MACONOMY_CCH_XCM_CLIENT_SCOPED.value,
                 )
             ),
             IntegrationService.is_deleted.is_(False),
@@ -168,13 +179,26 @@ async def sync_caseware_job(
         integration.identifier_unique_name
         == IntegrationServiceIdentifier.MACONOMY_CASEWARE_CLOUD_SYNC.value
     )
+    is_client_scoped_cch = (
+        integration.identifier_unique_name
+        == IntegrationServiceIdentifier.MACONOMY_CCH_XCM_CLIENT_SCOPED.value
+    )
     sync_path = (
         f"{settings.api_v1_prefix.rstrip('/')}/maconomy-caseware-cloud/sync-job"
         if is_caseware
         else (
-            f"{settings.api_v1_prefix.rstrip('/')}/xcm-cch-axcess/"
-            "maconomy-tax-engagements/retry-cch-task-mapping"
+            f"{settings.api_v1_prefix.rstrip('/')}/xcm-cch-client-scoped/sync"
+            if is_client_scoped_cch
+            else (
+                f"{settings.api_v1_prefix.rstrip('/')}/xcm-cch-axcess/"
+                "maconomy-tax-engagements/retry-cch-task-mapping"
+            )
         )
+    )
+    request_payload: dict[str, object] = (
+        {"jobnumbers": [normalized_job_number]}
+        if is_client_scoped_cch
+        else {"jobnumber": normalized_job_number}
     )
     try:
         async with httpx.AsyncClient(
@@ -188,7 +212,7 @@ async def sync_caseware_job(
         ) as client:
             response = await client.post(
                 sync_path,
-                json={"jobnumber": normalized_job_number},
+                json=request_payload,
             )
     except httpx.RequestError:
         _set_flash(
@@ -198,7 +222,8 @@ async def sync_caseware_job(
         )
         return redirect
 
-    payload = _json_response(response)
+    payload_value = _json_response_value(response)
+    payload = payload_value if isinstance(payload_value, dict) else {}
     if not response.is_success:
         _set_flash(
             request,
@@ -207,7 +232,31 @@ async def sync_caseware_job(
         )
         return redirect
 
-    if is_caseware:
+    if is_client_scoped_cch:
+        jobs = payload_value if isinstance(payload_value, list) else []
+        if not jobs:
+            _set_flash(
+                request,
+                f"Job {normalized_job_number} did not require CCH client sync "
+                "or was not eligible.",
+                "warning",
+            )
+            return redirect
+
+        job = jobs[0] if isinstance(jobs[0], dict) else {}
+        failure_message = _client_scoped_job_failure(job)
+        if failure_message:
+            _set_flash(
+                request,
+                f"Job {normalized_job_number}: {failure_message}",
+                "danger",
+            )
+            return redirect
+        success_message = (
+            f"Job {normalized_job_number} was synchronized with CCH/XCM "
+            "successfully."
+        )
+    elif is_caseware:
         sync_action = str(payload.get("syncAction", "completed"))
         if sync_action.upper() == "FAILED":
             message = str(
@@ -261,6 +310,53 @@ async def integration_logs(
     flash_message = request.session.pop("flash_message", None)
     flash_category = request.session.pop("flash_category", "success")
 
+    if integration.identifier_unique_name in _PAYCOR_INTEGRATION_IDENTIFIERS:
+        log_result = await session.execute(
+            select(PaycorIntegrationLog)
+            .options(
+                selectinload(PaycorIntegrationLog.employee_mapping_log)
+            )
+            .order_by(PaycorIntegrationLog.created_on_utc.desc())
+            .limit(1000)
+        )
+        activity_logs = list(log_result.scalars().all())
+        successful_logs = sum(
+            log.status.value == "SUCCESS" for log in activity_logs
+        )
+        total_logs = len(activity_logs)
+
+        return templates.TemplateResponse(
+            request=request,
+            name="paycor_dashboard.html",
+            context={
+                "current_user": current_user,
+                "csrf_token": ensure_csrf_token(request),
+                "integration": integration,
+                "activity_logs": activity_logs,
+                "metrics": {
+                    "total_activity": total_logs,
+                    "success_rate": (
+                        round(successful_logs / total_logs * 100, 1)
+                        if total_logs
+                        else 0
+                    ),
+                    "created": sum(
+                        log.action.value == "CREATE"
+                        for log in activity_logs
+                    ),
+                    "failed": sum(
+                        log.status.value == "FAILED"
+                        for log in activity_logs
+                    ),
+                    "latest_activity": (
+                        activity_logs[0] if activity_logs else None
+                    ),
+                },
+                "flash_message": flash_message,
+                "flash_category": flash_category,
+            },
+        )
+
     if (
         integration.identifier_unique_name
         == IntegrationServiceIdentifier.MACONOMY_CASEWARE_CLOUD_SYNC.value
@@ -307,6 +403,51 @@ async def integration_logs(
                     "failed_jobs": sum(
                         _detail_count(log, "failed") for log in run_logs
                     ),
+                    "latest_run": run_logs[0] if run_logs else None,
+                },
+                "flash_message": flash_message,
+                "flash_category": flash_category,
+            },
+        )
+
+    if (
+        integration.identifier_unique_name
+        == IntegrationServiceIdentifier.MACONOMY_CCH_XCM_CLIENT_SCOPED.value
+    ):
+        run_result = await session.execute(
+            select(XCMCCHClientScopedRunLog)
+            .order_by(XCMCCHClientScopedRunLog.started_on_utc.desc())
+            .limit(250)
+        )
+        run_logs = list(run_result.scalars().all())
+        successful_runs = sum(log.status == "SUCCESS" for log in run_logs)
+        total_runs = len(run_logs)
+
+        return templates.TemplateResponse(
+            request=request,
+            name="maconomy_cch_client_scoped_dashboard.html",
+            context={
+                "current_user": current_user,
+                "csrf_token": ensure_csrf_token(request),
+                "integration": integration,
+                "run_logs": run_logs,
+                "status_badges": {
+                    "SUCCESS": "text-bg-success",
+                    "PARTIAL_SUCCESS": "text-bg-warning",
+                    "FAILED": "text-bg-danger",
+                    "RUNNING": "text-bg-primary",
+                },
+                "metrics": {
+                    "total_runs": total_runs,
+                    "success_rate": (
+                        round(successful_runs / total_runs * 100, 1)
+                        if total_runs
+                        else 0
+                    ),
+                    "jobs_succeeded": sum(
+                        log.jobs_succeeded for log in run_logs
+                    ),
+                    "jobs_failed": sum(log.failed_count for log in run_logs),
                     "latest_run": run_logs[0] if run_logs else None,
                 },
                 "flash_message": flash_message,
@@ -378,9 +519,70 @@ async def integration_logs(
     )
 
 
+@router.get(
+    "/integrations/{integration_id}/runs/{request_id}/jobs",
+    name="caseware_run_jobs",
+    include_in_schema=False,
+)
+async def caseware_run_jobs(
+    integration_id: uuid.UUID,
+    request_id: uuid.UUID,
+    current_user: AuthenticatedUser,
+    session: Annotated[AsyncSession, Depends(get_db)],
+) -> dict[str, object]:
+    integration_result = await session.execute(
+        select(IntegrationService).where(
+            IntegrationService.id == integration_id,
+            IntegrationService.identifier_unique_name
+            == IntegrationServiceIdentifier.MACONOMY_CASEWARE_CLOUD_SYNC.value,
+            IntegrationService.is_deleted.is_(False),
+        )
+    )
+    if integration_result.scalar_one_or_none() is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="CaseWare Cloud integration service not found.",
+        )
+
+    result = await session.execute(
+        select(MaconomyCasewareRequestLog)
+        .where(
+            MaconomyCasewareRequestLog.request_id == request_id,
+            MaconomyCasewareRequestLog.action != "SYNC",
+        )
+        .order_by(
+            MaconomyCasewareRequestLog.created_on_utc.asc(),
+            MaconomyCasewareRequestLog.job_number.asc(),
+        )
+    )
+    logs = list(result.scalars().all())
+    return {
+        "request_id": str(request_id),
+        "jobs": [_caseware_job_log_payload(log) for log in logs],
+    }
+
+
 def _detail_count(log: MaconomyCasewareRequestLog, key: str) -> int:
     value = (log.details or {}).get(key, 0)
     return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
+def _caseware_job_log_payload(
+    log: MaconomyCasewareRequestLog,
+) -> dict[str, object | None]:
+    details = log.details if isinstance(log.details, dict) else {}
+    checkpoint = details.get("text19")
+    checkpoint = checkpoint if isinstance(checkpoint, dict) else {}
+    return {
+        "job_number": log.job_number,
+        "action": log.action,
+        "status": log.status,
+        "message": log.message,
+        "version_number": details.get("versionnumber"),
+        "entity_number": checkpoint.get("entityNo"),
+        "entity_id": checkpoint.get("entityId"),
+        "created_on_utc": log.created_on_utc.isoformat(),
+    }
 
 
 def _set_flash(request: Request, message: str, category: str) -> None:
@@ -388,12 +590,29 @@ def _set_flash(request: Request, message: str, category: str) -> None:
     request.session["flash_category"] = category
 
 
-def _json_response(response: httpx.Response) -> dict[str, object]:
+def _json_response_value(response: httpx.Response) -> object:
     try:
-        payload = response.json()
+        return response.json()
     except ValueError:
         return {}
-    return payload if isinstance(payload, dict) else {}
+
+
+def _client_scoped_job_failure(job: dict[str, object]) -> str | None:
+    stages = (
+        ("CCH client creation", job.get("cchclientcreation")),
+        ("CCH task creation", job.get("cchtaskcreation")),
+    )
+    for stage_name, stage_value in stages:
+        if not isinstance(stage_value, dict):
+            return f"{stage_name} result was not recorded."
+        if stage_value.get("status") != "created":
+            reason = stage_value.get("error") or f"{stage_name} failed."
+            return str(reason)
+
+    if job.get("maconomywritebackstatus") != "updated":
+        reason = job.get("maconomywritebackerror")
+        return str(reason or "Maconomy writeback failed.")
+    return None
 
 
 def _internal_api_error(payload: dict[str, object], status_code: int) -> str:

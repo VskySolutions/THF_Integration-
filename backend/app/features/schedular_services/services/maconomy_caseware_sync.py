@@ -7,9 +7,13 @@ from app.features.schedular_services.constants import (
 
 
 async def run_maconomy_cch_sync(client: httpx.AsyncClient) -> bool:
-    """Run the CCH task mapping and report whether it completed successfully."""
+    """Run the client-scoped CCH sync and report whether it completed."""
     try:
-        response = await client.post(MACONOMY_CCH_SYNC_PATH)
+        response = await client.post(
+            MACONOMY_CCH_SYNC_PATH,
+            headers={"X-Integration-Trigger": "SCHEDULER"},
+            json={"jobnumbers": None},
+        )
         response.raise_for_status()
     except httpx.HTTPError:
         return False
