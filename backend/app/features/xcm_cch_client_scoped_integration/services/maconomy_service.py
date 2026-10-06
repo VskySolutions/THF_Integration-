@@ -534,7 +534,7 @@ class MaconomyService:
             yesterday = date.today() - timedelta(days=1)
             restriction += (
                 " and (createddate>="
-                f"date({yesterday.year},{yesterday.month - 1},{yesterday.day}))"
+                f"date({yesterday.year},{yesterday.month },{yesterday.day-1}))"
             )
         else:
             numbers = list(dict.fromkeys(jobnumbers))

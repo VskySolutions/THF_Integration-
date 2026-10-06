@@ -8,6 +8,12 @@ of strings or `null`; omitting the field has the same meaning as `null`.
 {"jobnumbers": ["12345", "67890"]}
 ```
 
+The CCH scheduler calls this endpoint with `{"jobnumbers": null}` at the
+configured `scheduler_cch_interval_minutes` interval. This replaces the old
+scheduled CCH task-mapping endpoint. The old integration routes and code stay
+available, but the scheduler no longer calls them. The client-scoped
+integration service must be active for the scheduled request to run.
+
 The endpoint authenticates with Maconomy once, keeps the reconnect token on
 the Maconomy service instance for subsequent steps in the same request, and
 returns eligible jobs from the Maconomy `jobs/filter` API. With `jobnumbers`
