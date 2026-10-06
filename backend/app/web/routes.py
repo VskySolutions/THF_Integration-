@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.authentication.dependencies import AuthenticatedUser
 from app.authentication.security import (
@@ -19,6 +20,7 @@ from app.features.integration_services.models import IntegrationService
 from app.features.maconomy_caseware_cloud_intergration.models import (
     MaconomyCasewareRequestLog,
 )
+from app.features.paycor_integration.models import PaycorIntegrationLog
 from app.features.xcm_cch_axcess_integration.models import XCMCCHIntegrationRunLog
 from app.features.xcm_cch_client_scoped_integration.models import (
     XCMCCHClientScopedRunLog,
@@ -26,6 +28,11 @@ from app.features.xcm_cch_client_scoped_integration.models import (
 from app.web.templating import templates
 
 router = APIRouter(tags=["dashboard"])
+
+_PAYCOR_INTEGRATION_IDENTIFIERS = {
+    "PAYCOR_SYNC_EMPLOYEES",
+    IntegrationServiceIdentifier.PAYCOR_SYNC_ONBOARDING_EMPLOYEES.value,
+}
 
 
 @router.get("/", include_in_schema=False)
@@ -302,6 +309,53 @@ async def integration_logs(
         )
     flash_message = request.session.pop("flash_message", None)
     flash_category = request.session.pop("flash_category", "success")
+
+    if integration.identifier_unique_name in _PAYCOR_INTEGRATION_IDENTIFIERS:
+        log_result = await session.execute(
+            select(PaycorIntegrationLog)
+            .options(
+                selectinload(PaycorIntegrationLog.employee_mapping_log)
+            )
+            .order_by(PaycorIntegrationLog.created_on_utc.desc())
+            .limit(1000)
+        )
+        activity_logs = list(log_result.scalars().all())
+        successful_logs = sum(
+            log.status.value == "SUCCESS" for log in activity_logs
+        )
+        total_logs = len(activity_logs)
+
+        return templates.TemplateResponse(
+            request=request,
+            name="paycor_dashboard.html",
+            context={
+                "current_user": current_user,
+                "csrf_token": ensure_csrf_token(request),
+                "integration": integration,
+                "activity_logs": activity_logs,
+                "metrics": {
+                    "total_activity": total_logs,
+                    "success_rate": (
+                        round(successful_logs / total_logs * 100, 1)
+                        if total_logs
+                        else 0
+                    ),
+                    "created": sum(
+                        log.action.value == "CREATE"
+                        for log in activity_logs
+                    ),
+                    "failed": sum(
+                        log.status.value == "FAILED"
+                        for log in activity_logs
+                    ),
+                    "latest_activity": (
+                        activity_logs[0] if activity_logs else None
+                    ),
+                },
+                "flash_message": flash_message,
+                "flash_category": flash_category,
+            },
+        )
 
     if (
         integration.identifier_unique_name
