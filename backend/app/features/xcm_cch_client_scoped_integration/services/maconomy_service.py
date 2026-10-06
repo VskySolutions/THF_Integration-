@@ -2,9 +2,10 @@
 
 import base64
 from calendar import month_abbr, month_name, monthrange
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 from urllib.parse import quote
+from uuid import UUID
 
 import httpx
 
@@ -291,6 +292,179 @@ class MaconomyService:
 
         return period_end_date.strftime("%m/%d/%Y")
 
+    async def update_cch_processing_results(
+        self,
+        jobs: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Write date5 and an optional task ID to each processed Maconomy job."""
+        await self.authenticate()
+        updated_jobs: list[dict[str, Any]] = []
+        for job in jobs:
+            updated_job = dict(job)
+            client_creation = job.get("cchclientcreation")
+            if (
+                not isinstance(client_creation, dict)
+                or client_creation.get("status") != "created"
+            ):
+                updated_job["maconomywritebackstatus"] = "skipped"
+                updated_jobs.append(updated_job)
+                continue
+
+            try:
+                job_number = self._required_string(
+                    job.get("jobnumber"), "jobnumber"
+                )
+                period_end_date = self._required_string(
+                    job.get("periodenddate"), "periodenddate"
+                )
+                source_version = self._parse_version(job.get("versionnumber"))
+
+                task_id: str | None = None
+                task_creation = job.get("cchtaskcreation")
+                if (
+                    isinstance(task_creation, dict)
+                    and task_creation.get("status") == "created"
+                ):
+                    task_id = self._required_string(
+                        task_creation.get("taskid"), "CCH task ID"
+                    )
+
+                saved_version = await self._update_job_cch_log(
+                    job_number=job_number,
+                    source_version=source_version,
+                    period_end_date=period_end_date,
+                    task_id=task_id,
+                )
+                updated_job["date5"] = period_end_date
+                if task_id is not None:
+                    updated_job["text20"] = task_id
+                updated_job["versionnumber"] = saved_version
+                updated_job["maconomywritebackstatus"] = "updated"
+            except Exception as exc:
+                updated_job["maconomywritebackstatus"] = "failed"
+                updated_job["maconomywritebackerror"] = (
+                    self._safe_update_error_message(exc)
+                )
+            updated_jobs.append(updated_job)
+        return updated_jobs
+
+    async def _update_job_cch_log(
+        self,
+        *,
+        job_number: str,
+        source_version: int,
+        period_end_date: str,
+        task_id: str | None,
+    ) -> int:
+        job, instance_id, concurrency_token = await self._bind_job(job_number)
+        current_version = self._parse_version(job.get("versionnumber"))
+        if current_version != source_version:
+            raise MaconomyServiceError(
+                f"Maconomy job {job_number} changed before its CCH log could be saved"
+            )
+
+        if task_id is not None:
+            current_task_id = job.get("text20")
+            if current_task_id is not None and (
+                not isinstance(current_task_id, str) or current_task_id.strip()
+            ):
+                raise MaconomyServiceError(
+                    f"Maconomy job {job_number} already has a text20 mapping"
+                )
+
+        maconomy_period_end_date = datetime.strptime(
+            period_end_date, "%m/%d/%Y"
+        ).strftime("%Y-%m-%d")
+        data: dict[str, Any] = {"date5": maconomy_period_end_date}
+        if task_id is not None:
+            data["text20"] = task_id
+
+        await self._post_job_request(
+            f"/instances/{instance_id}/data/panes/card/0",
+            {"data": data},
+            concurrency_token=concurrency_token,
+        )
+
+        saved_job, _, _ = await self._bind_job(job_number)
+        saved_version = self._parse_version(saved_job.get("versionnumber"))
+        if saved_version != source_version + 1:
+            raise MaconomyServiceError(
+                f"Maconomy job {job_number} version did not increase by one"
+            )
+        if str(saved_job.get("date5", "")).strip() != maconomy_period_end_date:
+            raise MaconomyServiceError(
+                f"Maconomy job {job_number} date5 write could not be verified"
+            )
+        if task_id is not None and str(saved_job.get("text20", "")).strip() != task_id:
+            raise MaconomyServiceError(
+                f"Maconomy job {job_number} text20 write could not be verified"
+            )
+        return saved_version
+
+    async def _bind_job(
+        self, job_number: str
+    ) -> tuple[dict[str, Any], str, str]:
+        instance_response = await self._post_job_request(
+            "/instances",
+            {
+                "panes": {
+                    "card": {
+                        "fields": [
+                            "jobnumber",
+                            "versionnumber",
+                            "text20",
+                            "date5",
+                        ]
+                    }
+                }
+            },
+        )
+        try:
+            instance_id_value = instance_response.json()["meta"][
+                "containerInstanceId"
+            ]
+        except (KeyError, TypeError, ValueError) as exc:
+            raise MaconomyServiceError("Invalid Maconomy instance response") from exc
+
+        instance_id = self._response_uuid(
+            instance_id_value, "containerInstanceId"
+        )
+        concurrency_token = self._response_uuid(
+            instance_response.headers.get("Maconomy-Concurrency-Control"),
+            "Maconomy-Concurrency-Control",
+        )
+        bind_response = await self._post_job_request(
+            f"/instances/{instance_id}/data;jobnumber={quote(job_number, safe='')}",
+            {},
+            concurrency_token=concurrency_token,
+        )
+        bound_token = self._response_uuid(
+            bind_response.headers.get("Maconomy-Concurrency-Control"),
+            "Maconomy-Concurrency-Control",
+        )
+        records = self._read_pane_records(bind_response, "card")
+        if len(records) != 1 or str(records[0].get("jobnumber")) != job_number:
+            raise MaconomyServiceError(f"Maconomy job {job_number} was not found")
+        return records[0], instance_id, bound_token
+
+    async def _post_job_request(
+        self,
+        path: str,
+        payload: dict[str, Any],
+        *,
+        concurrency_token: str | None = None,
+    ) -> httpx.Response:
+        headers = self._container_headers()
+        if concurrency_token is not None:
+            headers["Maconomy-Concurrency-Control"] = concurrency_token
+        response = await self.client.post(
+            f"{self._jobs_url()}{path}",
+            headers=headers,
+            json=payload,
+        )
+        response.raise_for_status()
+        return response
+
     async def _filter_container(
         self,
         container: str,
@@ -402,6 +576,59 @@ class MaconomyService:
         return records
 
     @staticmethod
+    def _read_pane_records(
+        response: httpx.Response,
+        pane_name: str,
+    ) -> list[dict[str, Any]]:
+        try:
+            pane = response.json()["panes"][pane_name]
+            records = [record["data"] for record in pane["records"]]
+            row_count = pane["meta"]["rowCount"]
+        except (KeyError, TypeError, ValueError) as exc:
+            raise MaconomyServiceError(
+                f"Invalid Maconomy {pane_name} response"
+            ) from exc
+        if (
+            isinstance(row_count, bool)
+            or not isinstance(row_count, int)
+            or row_count != len(records)
+            or not all(isinstance(record, dict) for record in records)
+        ):
+            raise MaconomyServiceError(f"Invalid Maconomy {pane_name} response")
+        return records
+
+    @staticmethod
+    def _response_uuid(value: Any, field_name: str) -> str:
+        try:
+            return str(UUID(value))
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise MaconomyServiceError(
+                f"Invalid Maconomy {field_name} response"
+            ) from exc
+
+    @staticmethod
+    def _parse_version(value: Any) -> int:
+        if isinstance(value, str) and value.strip().isdigit():
+            value = int(value.strip())
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise MaconomyServiceError("Invalid Maconomy versionnumber")
+        return value
+
+    @staticmethod
+    def _required_string(value: Any, field_name: str) -> str:
+        if value is None or not str(value).strip():
+            raise MaconomyServiceError(f"Maconomy {field_name} is required")
+        return str(value).strip()
+
+    @staticmethod
+    def _safe_update_error_message(exc: Exception) -> str:
+        if isinstance(exc, httpx.HTTPStatusError):
+            return f"Maconomy update failed with HTTP {exc.response.status_code}"
+        if isinstance(exc, httpx.RequestError):
+            return "Maconomy update failed or timed out"
+        return str(exc)
+
+    @staticmethod
     def _is_syncable_tax_job(record: dict[str, Any]) -> bool:
         location_name = record.get("locationname")
         task_internal_id = record.get("text20")
@@ -411,4 +638,11 @@ class MaconomyService:
             and str(location_name) == "2"
             and "text20" in record
             and (task_internal_id is None or task_internal_id == "")
+        )
+
+    def _jobs_url(self) -> str:
+        shortname = quote(self.settings.maconomy_shortname, safe="")
+        return (
+            f"{self.settings.maconomy_url}/maconomy-api/containers/"
+            f"{shortname}/jobs"
         )

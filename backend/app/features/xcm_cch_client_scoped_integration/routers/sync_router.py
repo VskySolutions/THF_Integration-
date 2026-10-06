@@ -73,7 +73,8 @@ async def sync_client_scoped_engagements(
             enriched_jobs = maconomy.join_client_reference_records(
                 new_cch_clients, reference_data
             )
-            return await cch.create_clients_and_tasks(enriched_jobs)
+            processed_jobs = await cch.create_clients_and_tasks(enriched_jobs)
+            return await maconomy.update_cch_processing_results(processed_jobs)
 
     except MaconomyServiceError as exc:
         raise HTTPException(

@@ -54,9 +54,9 @@ values produce `null`. Jobs also include `specification1_description` and
 employees. A missing match produces `null` for that field. The route currently
 passes the first 40 eligible jobs to the CCH lookup. For each job flagged
 `is_exist_in_chh: false`, it posts a new client to
-`/xcmrestservices/vnext/api/v2.1/Client` using the joined values. It maps
-`projectmanager_email` to `responsiblePerson`, job `electronicmailaddress` to
-`emailId`, `name1` to `last_Entity_Name`, `telephone` to `phoneNumber`,
+`/xcmrestservices/vnext/api/v2.1/Client` using the joined values. It maps job
+`electronicmailaddress` to `emailId`, `name1` to `last_Entity_Name`,
+`telephone` to `phoneNumber`,
 `jobnumber` to `accountNumber`, `specification2_description` to `primaryTask`,
 `periodenddate` to `periodEndDate`, `spec5_email` to `auditStaff`, and
 `employee6_email` to `taxPartner`. `clientType` is `Individual` when
@@ -67,13 +67,40 @@ After a client is created, the endpoint directly creates its task through
 `/xcmrestservices/vnext/api/v2/Task`. It does not search for an existing task,
 because this path only processes newly created clients. The task uses the
 client's `jobnumber` account number, `specification2_description` task type,
-`periodenddate`, and `projectmanager_email` as its responsible person. A blank
+`periodenddate`, and `description` as the task description. A blank
 specification description uses `Tax - 1040 Individual` as the task type.
 
 Each returned job includes `cchclientcreation` and `cchtaskcreation` status
 objects. Client creation failure marks the task as `skipped`. Task failure is
 recorded independently after a successful client creation. A failure for one
 job does not stop processing of later jobs.
+
+## CCH processing and Maconomy writeback order
+
+The integration uses two separate phases. It first completes the CCH client
+and task processing loop for every selected job and keeps each result in
+memory. It does not update Maconomy from inside the client creation or task
+creation methods.
+
+After the CCH loop has finished, the integration starts the Maconomy
+writeback phase. Each eligible job receives at most one Maconomy card update:
+
+| CCH result | Maconomy update |
+|---|---|
+| Client created and task created | Write `date5` and `text20` together |
+| Client created and task failed or skipped | Write only `date5`; leave `text20` unchanged |
+| Client creation failed | Skip the Maconomy update |
+
+`date5` receives the calculated `periodenddate`, converted from `MM/DD/YYYY`
+to Maconomy's `YYYY-MM-DD` format. `text20` receives the CCH `taskId` only
+when task creation succeeds.
+
+Before updating, the integration binds the Maconomy job and confirms that its
+`versionnumber` has not changed since it was fetched. After the single update,
+it reads the job again and verifies the new version and saved values. Each job
+reports `maconomywritebackstatus` as `updated`, `failed`, or `skipped` in the
+endpoint response. That status is not written into a Maconomy field. A
+writeback failure for one job does not stop later jobs.
 
 It has its own integration service registration, initially inactive, separate
 from the old CCH task-mapping integration.

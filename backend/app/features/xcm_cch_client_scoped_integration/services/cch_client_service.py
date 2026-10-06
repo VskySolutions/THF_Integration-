@@ -223,8 +223,6 @@ class CCHClientService:
             "account_number": job.get("jobnumber"),
             "task_type": task_type,
             "period_end_date": job.get("periodenddate"),
-            "job_number": job.get("jobnumber"),
-            "responsible_person": job.get("projectmanager_email"),
             "description": job.get("description"),
         }
         values: dict[str, str] = {}
