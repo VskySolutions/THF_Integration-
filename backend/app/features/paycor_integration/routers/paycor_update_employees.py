@@ -50,7 +50,7 @@ DatabaseSession = Annotated[
         Depends(
             require_active_integration_service(
                 IntegrationServiceIdentifier
-                .PAYCOR_SYNC_EMPLOYEES
+                .PAYCOR_SYNC_ONBOARDING_EMPLOYEES
             )
         )
     ],
@@ -91,7 +91,7 @@ async def update_employee_with_maconomy(
         Depends(
             require_active_integration_service(
                 IntegrationServiceIdentifier
-                .PAYCOR_SYNC_EMPLOYEES
+                .PAYCOR_SYNC_ONBOARDING_EMPLOYEES
             )
         )
     ],

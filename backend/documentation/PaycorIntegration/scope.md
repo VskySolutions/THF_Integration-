@@ -86,7 +86,7 @@ When the application scheduler is enabled, Paycor synchronization runs automatic
 - The employee update process runs every five minutes.
 - The Paycor jobs run independently from the CCH and CaseWare jobs.
 - Paycor create and update never run at the same time. When both are due, create runs first and update waits for it to finish.
-- Both endpoints still require the `PAYCOR_SYNC_EMPLOYEES` integration service to be active.
+- Both endpoints require the `PAYCOR_SYNC_ONBOARDING_EMPLOYEES` integration service to be active.
 - Use the single employee process when a correction or retry is needed.
 
 After every run, the result for each employee will be shown as **Created**, **Updated**, **Skipped**, or **Failed**. Failed employees should be reviewed and processed again after the problem has been corrected.
