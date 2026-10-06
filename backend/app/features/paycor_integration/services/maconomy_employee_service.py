@@ -67,7 +67,7 @@ EMPLOYEE_REVISION_TABLE_FIELDS = (
     "firstname",
     "middlename",
     "lastname",
-    "initials",
+    # "initials",
     "country",
     "dateemployed",
     "electronicmailaddress",
@@ -248,6 +248,16 @@ class MaconomyEmployeeService:
                     paycor_employee_data
                 )
             )
+            
+            if (
+                self.settings
+                .maconomy_send_name_components
+            ):
+                desired_data.pop("name1", None)
+            else:
+                desired_data.pop("firstname", None)
+                desired_data.pop("middlename", None)
+                desired_data.pop("lastname", None)
             for field_name in excluded_fields or set():
                 desired_data.pop(field_name, None)
 
@@ -315,7 +325,7 @@ class MaconomyEmployeeService:
                     != expected_paycor_employee_id
                 ):
                     raise MaconomyEmployeeServiceError(
-                        "Maconomy text10 does not match "
+                        "Maconomy remark5 does not match "
                         "the Paycor employee UUID; manual "
                         "reconciliation is required"
                     )
@@ -453,7 +463,7 @@ class MaconomyEmployeeService:
         headers = self._container_headers(reconnect_token)
 
         employee_numbers: set[str] = set()
-        page_size = 100
+        page_size = EMPLOYEE_FILTER_PAGE_SIZE
         offset = 0
 
         for _ in range(self.max_filter_pages):

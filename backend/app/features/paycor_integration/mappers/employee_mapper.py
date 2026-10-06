@@ -563,12 +563,13 @@ def map_paycor_employee_to_maconomy(
             }
         )
     
-    name1 = _build_full_name(
-        employee_data
-    )
+    if not include_name_components:
+        name1 = _build_full_name(
+            employee_data
+        )
 
-    if name1:
-        maconomy_data["name1"] = name1
+        if name1 is not None:
+            maconomy_data["name1"] = name1
 
     for (
         paycor_field,

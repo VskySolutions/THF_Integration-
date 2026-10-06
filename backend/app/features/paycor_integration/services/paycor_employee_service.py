@@ -39,13 +39,32 @@ class PaycorService:
         today = datetime.now(timezone.utc).date()
         yesterday = today - timedelta(days=1)
 
-        return self._filter_employees_by_hire_dates(
-            employees=employees,
-            departments=departments,
-            valid_dates={
+        recent_employees: list[dict[str, Any]] = []
+
+        for employee in employees:
+            employment_date_data = employee.get(
+                "employmentDateData"
+            )
+
+            if not isinstance(
+                employment_date_data,
+                dict,
+            ):
+                continue
+
+            hire_date = self._normalize_date(
+                employment_date_data.get("hireDate")
+            )
+
+            if hire_date in {
                 today,
                 yesterday,
-            },
+            }:
+                recent_employees.append(employee)
+
+        return await self._map_employee_records(
+            employees=recent_employees,
+            departments=departments,
         )
         
     async def get_employee_by_id(
@@ -77,50 +96,14 @@ class PaycorService:
         if employee is None:
             return None
 
-        departments_by_id = (
-            self._build_department_lookup(
-                departments
+        mapped_employees = await (
+            self._map_employee_records(
+                employees=[employee],
+                departments=departments,
             )
         )
 
-        employee_id = str(
-            uuid.UUID(str(employee.get("id")))
-        )
-
-        person_details_by_id = (
-            await self
-            .get_person_details_by_employee_ids(
-                [employee_id]
-            )
-        )
-
-        person_details = person_details_by_id.get(
-            employee_id,
-            {},
-        )
-
-        person_error = person_details.get("_error")
-
-        if person_error:
-            raise PaycorServiceError(person_error)
-
-        enriched_employee = {
-            **employee,
-            "prefix": person_details.get("prefix"),
-            "suffix": person_details.get("suffix"),
-        }
-
-        try:
-            return map_paycor_employee(
-                enriched_employee,
-                departments_by_id=departments_by_id,
-            )
-
-        except ValueError as exc:
-            raise PaycorServiceError(
-                "Unable to map Paycor employee "
-                f"{employee_id}: {exc}"
-            ) from exc
+        return mapped_employees[0]
 
     async def get_all_employee_data(
         self,
@@ -131,6 +114,96 @@ class PaycorService:
         """Return all Paycor employees and departments."""
 
         return await self._retrieve_employee_data()
+    
+    async def _map_employee_records(
+        self,
+        *,
+        employees: list[dict[str, Any]],
+        departments: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Enrich and map Paycor employee records."""
+
+        departments_by_id = (
+            self._build_department_lookup(
+                departments
+            )
+        )
+
+        employee_ids: list[str] = []
+
+        for employee in employees:
+            try:
+                employee_id = str(
+                    uuid.UUID(
+                        str(employee.get("id"))
+                    )
+                )
+
+            except (TypeError, ValueError) as exc:
+                raise PaycorServiceError(
+                    "Invalid Paycor employee UUID: "
+                    f"{employee.get('id')}"
+                ) from exc
+
+            employee_ids.append(employee_id)
+
+        person_details_by_id = (
+            await self.get_person_details_by_employee_ids(
+                employee_ids
+            )
+        )
+
+        mapped_employees: list[dict[str, Any]] = []
+
+        for employee, employee_id in zip(
+            employees,
+            employee_ids,
+        ):
+            person_details = (
+                person_details_by_id.get(
+                    employee_id,
+                    {},
+                )
+            )
+
+            person_error = person_details.get(
+                "_error"
+            )
+
+            if person_error:
+                raise PaycorServiceError(
+                    person_error
+                )
+
+            enriched_employee = {
+                **employee,
+                "prefix": person_details.get(
+                    "prefix"
+                ),
+                "suffix": person_details.get(
+                    "suffix"
+                ),
+            }
+
+            try:
+                mapped_employee = map_paycor_employee(
+                    enriched_employee,
+                    departments_by_id=(
+                        departments_by_id
+                    ),
+                )
+
+            except ValueError as exc:
+                raise PaycorServiceError(
+                    "Unable to map Paycor employee "
+                    f"{employee_id}: {exc}"
+                ) from exc
+
+            mapped_employees.append(
+                mapped_employee
+            )
+
+        return mapped_employees
 
     async def _retrieve_employee_data(
         self,
@@ -176,7 +249,7 @@ class PaycorService:
     ) -> str:
         response = await client.post(
             (
-                f"{self.settings.paycor_url}"
+                f"{self.settings.paycor_url.rstrip('/')}"
                 "/sts/v1/common/token"
             ),
             params={
@@ -633,64 +706,7 @@ class PaycorService:
 
         return False
 
-    def _filter_employees_by_hire_dates(
-        self,
-        *,
-        employees: list[dict[str, Any]],
-        departments: list[dict[str, Any]],
-        valid_dates: set[date],
-    ) -> list[dict[str, Any]]:
-        """Filter and map employees using their hire dates."""
-
-        filtered_employees: list[dict[str, Any]] = []
-
-        departments_by_id = (
-            self._build_department_lookup(
-                departments
-            )
-        )
-
-        for employee in employees:
-            employment_date_data = employee.get(
-                "employmentDateData"
-            )
-
-            if not isinstance(
-                employment_date_data,
-                dict,
-            ):
-                continue
-
-            hire_date = self._normalize_date(
-                employment_date_data.get(
-                    "hireDate"
-                )
-            )
-
-            if hire_date not in valid_dates:
-                continue
-
-            try:
-                mapped_employee = map_paycor_employee(
-                    employee,
-                    departments_by_id=(
-                        departments_by_id
-                    ),
-                )
-
-            except ValueError as exc:
-                employee_id = employee.get("id")
-
-                raise PaycorServiceError(
-                    "Unable to map Paycor employee "
-                    f"{employee_id}"
-                ) from exc
-
-            filtered_employees.append(
-                mapped_employee
-            )
-
-        return filtered_employees
+    
 
     @staticmethod
     def _build_department_lookup(
