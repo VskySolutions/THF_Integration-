@@ -1449,3 +1449,152 @@ class MaconomyService:
             "response": action_payload,
         }
 
+
+# ==================== Approve expense sheet in Maconomy ====================
+    async def approve_expense_sheet(
+        self,
+        expense_sheet_number: str,
+    ) -> dict[str, Any]:
+        if not expense_sheet_number or not expense_sheet_number.strip():
+            raise MaconomyServiceError("Invalid expense sheet number")
+
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                reconnect_token = await self._get_reconnect_token(client)
+                return await self._approve_maconomy_expense_sheet(
+                    client,
+                    reconnect_token,
+                    expense_sheet_number.strip(),
+                )
+        except httpx.HTTPError as exc:
+            raise MaconomyServiceError("Maconomy request failed") from exc
+
+    # Retrieve a container instance whose card pane declares the fields
+    # needed to load + inspect an existing expense sheet before approving.
+    async def _retrieve_expense_sheet_instance_for_approve(
+        self,
+        client: httpx.AsyncClient,
+        reconnect_token: str,
+    ) -> tuple[str, str]:
+        url = f"{self._expense_sheet_url()}/instances"
+        payload = {
+            "panes": {
+                "card": {
+                    "fields": [
+                        "expensesheetnumber",
+                        "description",
+                        "employeenumber",
+                        "submitted",
+                        "approved",
+                    ]
+                },
+                "table": {"fields": []},
+            }
+        }
+
+        print("======= _retrieve_expense_sheet_instance_for_approve ==========")
+        response = await client.post(
+            url,
+            headers=self._container_headers(reconnect_token),
+            json=payload,
+        )
+        response.raise_for_status()
+
+        try:
+            instance_id = response.json()["meta"]["containerInstanceId"]
+            instance_id = str(uuid.UUID(instance_id))
+        except (KeyError, TypeError, ValueError) as exc:
+            raise MaconomyServiceError(
+                "Invalid Maconomy expense sheet instance response"
+            ) from exc
+
+        concurrency_token = self._get_concurrency_token(response)
+        return instance_id, concurrency_token
+
+    async def _approve_maconomy_expense_sheet(
+        self,
+        client: httpx.AsyncClient,
+        reconnect_token: str,
+        expense_sheet_number: str,
+    ) -> dict[str, Any]:
+        instance_id, concurrency_token = (
+            await self._retrieve_expense_sheet_instance_for_approve(
+                client, reconnect_token
+            )
+        )
+
+        # Load the existing expense sheet record into the container instance
+        # (same pattern as submit / expense line creation).
+        load_url = (
+            f"{self._expense_sheet_url()}/instances/"
+            f"{instance_id}/data;expensesheetnumber="
+            f"{quote(expense_sheet_number, safe='')}"
+        )
+        load_headers = self._container_headers(reconnect_token)
+        load_headers["Maconomy-Concurrency-Control"] = concurrency_token
+        print("Loading expense sheet for approve:", expense_sheet_number)
+        load_response = await client.post(
+            load_url, headers=load_headers, json={}
+        )
+        load_response.raise_for_status()
+        concurrency_token = self._get_concurrency_token(load_response)
+
+        try:
+            load_payload = load_response.json()
+            card = load_payload["panes"]["card"]
+            records = card["records"]
+            row_count = card["meta"]["rowCount"]
+        except (KeyError, TypeError, ValueError) as exc:
+            raise MaconomyServiceError(
+                "Invalid Maconomy expense sheet response"
+            ) from exc
+
+        if row_count != 1 or not records:
+            raise MaconomyServiceError(
+                f"Expense sheet {expense_sheet_number} not found in Maconomy"
+            )
+
+        record_data = (
+            records[0].get("data", {})
+            if isinstance(records[0], dict)
+            else {}
+        )
+
+        # Idempotency: never invoke the action twice for the same sheet.
+        if record_data.get("approved"):
+            return {
+                "expense_sheet_number": expense_sheet_number,
+                "approved": True,
+                "status": "ALREADY_APPROVED",
+                "message": "Expense sheet already approved",
+                "response": load_payload,
+            }
+
+        action_url = (
+            f"{self._expense_sheet_url()}/instances/"
+            f"{instance_id}/data/panes/card/0/action;name=approveexpensesheet"
+        )
+        action_headers = self._container_headers(reconnect_token)
+        action_headers["Maconomy-Concurrency-Control"] = concurrency_token
+        action_body = {"offset": 0, "limit": 100}
+        print("Maconomy approve action URL:", action_url)
+        response = await client.post(
+            action_url, headers=action_headers, json=action_body
+        )
+        print("Maconomy approve response:", response.status_code)
+        response.raise_for_status()
+        print("Maconomy approve response body:", response.text)
+
+        try:
+            action_payload = response.json() if response.text.strip() else {}
+        except ValueError:
+            action_payload = {}
+
+        return {
+            "expense_sheet_number": expense_sheet_number,
+            "approved": True,
+            "status": "APPROVED",
+            "message": "Expense sheet approved",
+            "response": action_payload,
+        }
+

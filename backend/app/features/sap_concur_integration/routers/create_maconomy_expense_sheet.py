@@ -659,7 +659,70 @@ async def _run_create_maconomy_expense_sheet(
             f"Failed to write submission log for report {report_id}: {log_exc}"
         )
 
+    # --- Approve expense sheet (Req[#6] FR-10 / FR-11) ---
+    approval: dict[str, Any] = {
+        "expense_sheet_number": expense_sheet_number,
+        "approved": False,
+        "status": "SKIPPED",
+        "message": "",
+    }
+
+    if not expense_sheet_number:
+        approval["message"] = "Approval skipped: no expense sheet number"
+    elif failure_count > 0:
+        approval["message"] = (
+            f"Approval skipped: {failure_count}/{total} expense line(s) failed"
+        )
+    elif str(submission.get("status", "")) not in {
+        "SUBMITTED",
+        "ALREADY_SUBMITTED",
+    }:
+        approval["message"] = (
+            "Approval skipped: submission status "
+            f"{submission.get('status', '')}"
+        )
+    else:
+        try:
+            approval = await maconomy_service.approve_expense_sheet(
+                expense_sheet_number
+            )
+        except MaconomyServiceError as exc:
+            approval.update(
+                {"approved": False, "status": "FAILED", "message": str(exc)}
+            )
+        except Exception as exc:  # never reach the outer catch-all (R4)
+            approval.update(
+                {"approved": False, "status": "FAILED", "message": str(exc)}
+            )
+
+    # --- Exactly one approval log row (FR-12, action=CREATE, no migration) ---
+    approve_log_status = {
+        "APPROVED": IntegrationStatus.SUCCESS,
+        "ALREADY_APPROVED": IntegrationStatus.SKIPPED,
+        "FAILED": IntegrationStatus.FAILED,
+        "SKIPPED": IntegrationStatus.SKIPPED,
+    }.get(str(approval.get("status", "")), IntegrationStatus.FAILED)
+    approve_log_message = (
+        f"Expense sheet {expense_sheet_number or 'N/A'} approval: "
+        f"{approval.get('status', '')} - {approval.get('message', '')}"
+    )
+    try:
+        await integration_log_service.create_log(
+            session,
+            mapping_id=mapping.id if mapping else None,
+            report_id=report_id,
+            status=approve_log_status,
+            action=IntegrationAction.CREATE,
+            message=approve_log_message,
+            employeeemail=employee_email,
+        )
+    except Exception as log_exc:
+        print(
+            f"Failed to write approval log for report {report_id}: {log_exc}"
+        )
+
     maconomy_expense_sheet_result["submission"] = submission
+    maconomy_expense_sheet_result["approval"] = approval
     return maconomy_expense_sheet_result
 
 
