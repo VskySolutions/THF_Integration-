@@ -1,0 +1,157 @@
+{% extends "base.html" %}
+
+{% block title %}Maconomy to CCH/XCM client sync{% endblock %}
+
+{% block body %}
+<main class="container-fluid px-3 px-md-4 py-4">
+    <div class="card rounded-3 mb-4">
+        <div class="card-body p-4 d-flex flex-column flex-lg-row justify-content-between gap-3">
+            <div>
+                <div class="text-secondary small mb-1">Integration monitoring</div>
+                <h1 class="h3 fw-bold mb-2">{{ integration.display_name }}</h1>
+                <div class="d-flex flex-wrap gap-2 align-items-center">
+                    <span class="badge {{ 'text-bg-success' if integration.is_active else 'text-bg-secondary' }}">
+                        {{ 'Active' if integration.is_active else 'Inactive' }}
+                    </span>
+                    <span class="badge text-bg-light border">
+                        {{ integration.source_system }} &rarr; {{ integration.target_system }}
+                    </span>
+                </div>
+            </div>
+            <div class="d-flex align-items-start gap-2">
+                <a href="{{ url_for('integration_logs', integration_id=integration.id) }}"
+                   class="btn btn-outline-secondary">Refresh</a>
+                <button type="button" class="btn btn-outline-secondary"
+                        data-bs-toggle="modal" data-bs-target="#integrationStatusModal">
+                    {{ 'Inactivate' if integration.is_active else 'Activate' }}
+                </button>
+            </div>
+        </div>
+    </div>
+
+    {% if flash_message %}
+    <div class="alert alert-{{ flash_category }} alert-dismissible fade show" role="alert">
+        {{ flash_message }}
+        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+    </div>
+    {% endif %}
+
+    <div class="row g-3 mb-4">
+        <div class="col-6 col-xl-3"><div class="card h-100"><div class="card-body">
+            <div class="text-secondary small">Recent runs</div>
+            <div class="display-6 fw-semibold">{{ metrics.total_runs }}</div>
+        </div></div></div>
+        <div class="col-6 col-xl-3"><div class="card h-100"><div class="card-body">
+            <div class="text-secondary small">Run success rate</div>
+            <div class="display-6 fw-semibold">{{ metrics.success_rate }}%</div>
+        </div></div></div>
+        <div class="col-6 col-xl-3"><div class="card h-100"><div class="card-body">
+            <div class="text-secondary small">Jobs succeeded</div>
+            <div class="display-6 fw-semibold">{{ metrics.jobs_succeeded }}</div>
+        </div></div></div>
+        <div class="col-6 col-xl-3"><div class="card h-100"><div class="card-body">
+            <div class="text-secondary small">Jobs failed</div>
+            <div class="display-6 fw-semibold">{{ metrics.jobs_failed }}</div>
+        </div></div></div>
+    </div>
+
+    <section class="card rounded-3">
+        <div class="card-body p-3 p-md-4">
+            <div class="d-flex align-items-center gap-2 mb-1">
+                <h2 class="h5 fw-bold mb-0">Run history</h2>
+                <span class="badge text-bg-light border">{{ run_logs | length }}</span>
+            </div>
+            <p class="text-secondary small mb-3">
+                Client creation, task creation, and Maconomy writeback outcomes.
+            </p>
+            <div class="table-responsive">
+                <table class="table table-hover align-middle">
+                    <thead><tr>
+                        <th>Started (UTC)</th><th>Status</th><th>Trigger</th>
+                        <th>Discovered</th><th>Succeeded</th><th>Failed</th>
+                        <th>Clients</th><th>Tasks</th><th>Writebacks</th><th>Details</th>
+                    </tr></thead>
+                    <tbody>
+                    {% for run in run_logs %}
+                    {% set details = run.details or {} %}
+                    {% set discovered = details.get('discovered_job_numbers', []) %}
+                    {% set succeeded = details.get('successful_job_numbers', []) %}
+                    {% set failed = details.get('failed_jobs', []) %}
+                    <tr>
+                        <td class="text-nowrap">
+                            {{ run.started_on_utc.strftime('%d %b %Y, %H:%M:%S') }}
+                            <div class="small text-secondary">{{ (run.request_id | string)[:8] }}&hellip;</div>
+                        </td>
+                        <td><span class="badge {{ status_badges.get(run.status, 'text-bg-secondary') }}">
+                            {{ run.status | replace('_', ' ') | title }}
+                        </span></td>
+                        <td>{{ run.trigger_type | title }}</td>
+                        <td>{{ run.jobs_discovered }}</td>
+                        <td>{{ run.jobs_succeeded }}</td>
+                        <td>{{ run.failed_count }}</td>
+                        <td>{{ run.clients_created }}</td>
+                        <td>{{ run.tasks_created }}</td>
+                        <td>{{ run.jobs_updated }}</td>
+                        <td style="min-width: 24rem">
+                            <div>{{ run.summary_message }}</div>
+                            <details class="mt-2">
+                                <summary class="text-primary">Troubleshooting details</summary>
+                                <div class="small mt-2">
+                                    <div><strong>Discovered:</strong> {{ discovered | join(', ') if discovered else 'None' }}</div>
+                                    <div><strong>Succeeded:</strong> {{ succeeded | join(', ') if succeeded else 'None' }}</div>
+                                    {% if run.failure_stage %}
+                                    <div><strong>Run failure stage:</strong> {{ run.failure_stage }}</div>
+                                    {% endif %}
+                                    {% if run.error_message %}
+                                    <div><strong>Run error:</strong> {{ run.error_message }}</div>
+                                    {% endif %}
+                                    {% if failed %}
+                                    <div class="table-responsive mt-2">
+                                        <table class="table table-sm table-bordered mb-0">
+                                            <thead><tr><th>Job</th><th>Failed stage</th><th>Succeeded stages</th><th>Reason</th></tr></thead>
+                                            <tbody>
+                                            {% for item in failed %}
+                                            <tr>
+                                                <td>{{ item.get('job_number') }}</td>
+                                                <td>{{ item.get('failed_stage') }}</td>
+                                                <td>{{ item.get('succeeded_stages', []) | join(', ') or 'None' }}</td>
+                                                <td>{{ item.get('reason') }}</td>
+                                            </tr>
+                                            {% endfor %}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                    {% endif %}
+                                </div>
+                            </details>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="10" class="text-center text-secondary py-4">No client-scoped CCH runs have been logged yet.</td></tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+</main>
+
+<div class="modal fade" id="integrationStatusModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered"><div class="modal-content">
+        <div class="modal-header">
+            <h2 class="modal-title fs-5">{{ 'Inactivate' if integration.is_active else 'Activate' }} integration</h2>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">Confirm the status change for {{ integration.display_name }}.</div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+            <form method="post" action="{{ url_for('update_integration_status', integration_id=integration.id) }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="is_active" value="{{ 'false' if integration.is_active else 'true' }}">
+                <input type="hidden" name="return_to" value="integration">
+                <button type="submit" class="btn btn-primary">Confirm</button>
+            </form>
+        </div>
+    </div></div>
+</div>
+{% endblock %}

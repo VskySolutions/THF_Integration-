@@ -20,6 +20,9 @@ from app.features.maconomy_caseware_cloud_intergration.models import (
     MaconomyCasewareRequestLog,
 )
 from app.features.xcm_cch_axcess_integration.models import XCMCCHIntegrationRunLog
+from app.features.xcm_cch_client_scoped_integration.models import (
+    XCMCCHClientScopedRunLog,
+)
 from app.web.templating import templates
 
 router = APIRouter(tags=["dashboard"])
@@ -307,6 +310,51 @@ async def integration_logs(
                     "failed_jobs": sum(
                         _detail_count(log, "failed") for log in run_logs
                     ),
+                    "latest_run": run_logs[0] if run_logs else None,
+                },
+                "flash_message": flash_message,
+                "flash_category": flash_category,
+            },
+        )
+
+    if (
+        integration.identifier_unique_name
+        == IntegrationServiceIdentifier.MACONOMY_CCH_XCM_CLIENT_SCOPED.value
+    ):
+        run_result = await session.execute(
+            select(XCMCCHClientScopedRunLog)
+            .order_by(XCMCCHClientScopedRunLog.started_on_utc.desc())
+            .limit(250)
+        )
+        run_logs = list(run_result.scalars().all())
+        successful_runs = sum(log.status == "SUCCESS" for log in run_logs)
+        total_runs = len(run_logs)
+
+        return templates.TemplateResponse(
+            request=request,
+            name="maconomy_cch_client_scoped_dashboard.html",
+            context={
+                "current_user": current_user,
+                "csrf_token": ensure_csrf_token(request),
+                "integration": integration,
+                "run_logs": run_logs,
+                "status_badges": {
+                    "SUCCESS": "text-bg-success",
+                    "PARTIAL_SUCCESS": "text-bg-warning",
+                    "FAILED": "text-bg-danger",
+                    "RUNNING": "text-bg-primary",
+                },
+                "metrics": {
+                    "total_runs": total_runs,
+                    "success_rate": (
+                        round(successful_runs / total_runs * 100, 1)
+                        if total_runs
+                        else 0
+                    ),
+                    "jobs_succeeded": sum(
+                        log.jobs_succeeded for log in run_logs
+                    ),
+                    "jobs_failed": sum(log.failed_count for log in run_logs),
                     "latest_run": run_logs[0] if run_logs else None,
                 },
                 "flash_message": flash_message,

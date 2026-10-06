@@ -219,11 +219,14 @@ class CCHClientService:
         task_type = job.get("specification2_description")
         if task_type is None or not str(task_type).strip():
             task_type = "Tax - 1040 Individual"
+        description = job.get("description1")
+        if description is None or not str(description).strip():
+            description = job.get("jobnumber")
         required_fields = {
             "account_number": job.get("jobnumber"),
             "task_type": task_type,
             "period_end_date": job.get("periodenddate"),
-            "description": job.get("description"),
+            "description": description,
         }
         values: dict[str, str] = {}
         for name, value in required_fields.items():
@@ -253,7 +256,7 @@ class CCHClientService:
             else "Entity"
         )
         return {
-            "responsiblePerson": "prasad.sawant@vskysolutions.com",#job.get("projectmanager_email"),
+            "responsiblePerson": job.get("projectmanager_email"),
             "emailId": (
                 job.get("electronicmailaddress")
                 if job.get("electronicmailaddress")
@@ -304,7 +307,33 @@ class CCHClientService:
     @staticmethod
     def _safe_error_message(exc: Exception) -> str:
         if isinstance(exc, httpx.HTTPStatusError):
-            return f"CCH/XCM request failed with HTTP {exc.response.status_code}"
+            message = CCHClientService._response_error_message(exc.response)
+            suffix = f": {message}" if message else ""
+            return (
+                f"CCH/XCM request failed with HTTP "
+                f"{exc.response.status_code}{suffix}"
+            )
         if isinstance(exc, httpx.RequestError):
             return "CCH/XCM request failed or timed out"
         return str(exc)
+
+    @staticmethod
+    def _response_error_message(response: httpx.Response) -> str | None:
+        try:
+            payload = response.json()
+        except ValueError:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        for key in ("messages", "message", "detail", "errors"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                message = "; ".join(str(item) for item in value if item is not None)
+            elif value is not None:
+                message = str(value)
+            else:
+                continue
+            normalized = message.strip()
+            if normalized:
+                return normalized[:1000]
+        return None

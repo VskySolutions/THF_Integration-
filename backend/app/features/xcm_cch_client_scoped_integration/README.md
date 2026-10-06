@@ -108,5 +108,28 @@ reports `maconomywritebackstatus` as `updated`, `failed`, or `skipped` in the
 endpoint response. That status is not written into a Maconomy field. A
 writeback failure for one job does not stop later jobs.
 
+## Run logging and monitoring
+
+Every API or scheduler execution creates a row in
+`xcm_cch_client_scoped_run_logs`. The row records the request ID, trigger,
+overall status, Maconomy instance, start and completion times, and counts for
+jobs discovered, jobs succeeded, jobs failed, clients created, tasks created,
+and Maconomy writebacks.
+
+The structured `details` value keeps the discovered and successful job-number
+lists plus every failed job's failure stage, reason, and stages that succeeded
+before the failure. A run summary follows this format:
+
+```text
+10 jobs discovered to sync; 5 succeeded [job numbers];
+5 failed [job number: failure reason]
+```
+
+The client-scoped integration's Monitoring page shows these run totals and
+expandable troubleshooting details. Failures are isolated by job, so partial
+runs show client creation, task creation, and Maconomy writeback outcomes
+separately. Scheduler requests are identified as `SCHEDULER`; direct endpoint
+calls are identified as `API`.
+
 It has its own integration service registration, initially inactive, separate
 from the old CCH task-mapping integration.

@@ -11,6 +11,7 @@ async def run_maconomy_cch_sync(client: httpx.AsyncClient) -> bool:
     try:
         response = await client.post(
             MACONOMY_CCH_SYNC_PATH,
+            headers={"X-Integration-Trigger": "SCHEDULER"},
             json={"jobnumbers": None},
         )
         response.raise_for_status()
