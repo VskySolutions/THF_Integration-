@@ -2,30 +2,115 @@
 
 {% block title %}Maconomy to CCH/XCM client sync{% endblock %}
 
+{% block head %}
+<link href="https://cdn.datatables.net/v/bs5/dt-3.1.2/datatables.min.css" rel="stylesheet">
+<style>
+    .metric-card { min-height: 8rem; }
+    .metric-icon {
+        align-items: center; background: var(--falcon-blue-soft); border-radius: .6rem;
+        color: var(--falcon-blue); display: inline-flex; height: 2.5rem;
+        justify-content: center; width: 2.5rem;
+    }
+    .system-pill {
+        background: #f1f4f8; border: 1px solid var(--falcon-border);
+        border-radius: .45rem; color: #435067; padding: .35rem .65rem;
+    }
+    .dashboard-action-btn {
+        align-items: center; display: inline-flex; height: 2.5rem;
+        justify-content: center; padding: 0; width: 2.5rem;
+    }
+    .metric-card .card-body { display: flex; flex-direction: column; justify-content: space-between; }
+    .metric-card .display-6 { font-size: 1.75rem; letter-spacing: -.04em; }
+    .dashboard-heading {
+        font-size: clamp(1.45rem, 2vw, 1.85rem); font-weight: 720;
+        letter-spacing: -.035em;
+    }
+    .request-id { color: #53627a; font-size: .78rem; }
+    .run-detail-summary {
+        background: #f7f9fc; border: 1px solid var(--falcon-border);
+        border-radius: .65rem; padding: .85rem 1rem;
+    }
+    .run-detail-summary-label {
+        color: var(--falcon-muted); font-size: .65rem; font-weight: 750;
+        letter-spacing: .055em; text-transform: uppercase;
+    }
+    .run-detail-summary-value { font-size: 1.2rem; font-weight: 720; letter-spacing: -.03em; }
+    .job-number-list { line-height: 1.65; overflow-wrap: anywhere; }
+    .detail-reason { min-width: 14rem; max-width: 28rem; white-space: normal; }
+    #clientScopedRunHistoryTable_wrapper .dt-search input { min-width: 13rem; }
+    #clientScopedRunHistoryTable_wrapper .dt-layout-row:first-child {
+        align-items: center; margin-bottom: .75rem;
+    }
+</style>
+{% endblock %}
+
 {% block body %}
-<main class="container-fluid px-3 px-md-4 py-4">
-    <div class="card rounded-3 mb-4">
-        <div class="card-body p-4 d-flex flex-column flex-lg-row justify-content-between gap-3">
-            <div>
-                <div class="text-secondary small mb-1">Integration monitoring</div>
-                <h1 class="h3 fw-bold mb-2">{{ integration.display_name }}</h1>
-                <div class="d-flex flex-wrap gap-2 align-items-center">
-                    <span class="badge {{ 'text-bg-success' if integration.is_active else 'text-bg-secondary' }}">
-                        {{ 'Active' if integration.is_active else 'Inactive' }}
-                    </span>
-                    <span class="badge text-bg-light border">
-                        {{ integration.source_system }} &rarr; {{ integration.target_system }}
-                    </span>
-                </div>
+<main class="container-fluid content-shell py-4 py-lg-5">
+    <nav aria-label="breadcrumb" class="mb-3">
+        <ol class="breadcrumb">
+            <li class="breadcrumb-item"><a href="{{ url_for('dashboard') }}">Integrations</a></li>
+            <li class="breadcrumb-item active" aria-current="page">Maconomy to CCH/XCM client sync</li>
+        </ol>
+    </nav>
+
+    <div class="d-flex flex-column flex-lg-row justify-content-between align-items-lg-end gap-3 mb-4">
+        <div>
+            <div class="d-flex align-items-center gap-2 mb-2">
+                <span class="badge {{ 'text-bg-success' if integration.is_active else 'text-bg-secondary' }}">
+                    {{ 'Active' if integration.is_active else 'Inactive' }}
+                </span>
+                <span class="text-secondary small">{{ integration.identifier_unique_name }}</span>
             </div>
-            <div class="d-flex align-items-start gap-2">
+            <h1 class="dashboard-heading mb-2">{{ integration.display_name }}</h1>
+            <div class="d-flex flex-wrap align-items-center gap-2 text-secondary">
+                <span class="system-pill">{{ integration.source_system or 'Maconomy' }}</span>
+                <span aria-hidden="true">&rarr;</span>
+                <span class="system-pill">{{ integration.target_system or 'CCH/XCM' }}</span>
+            </div>
+        </div>
+        <div class="d-flex flex-column align-items-lg-end gap-3">
+            <div class="d-flex flex-wrap gap-2 justify-content-lg-end">
+                <a href="{{ url_for('dashboard') }}"
+                   class="btn btn-outline-secondary dashboard-action-btn"
+                   data-dashboard-tooltip data-bs-placement="top"
+                   data-bs-title="Back to integrations" aria-label="Back to integrations">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true"><path fill-rule="evenodd" d="M15 8a.5.5 0 0 0-.5-.5H2.707l3.147-3.146a.5.5 0 1 0-.708-.708l-4 4a.5.5 0 0 0 0 .708l4 4a.5.5 0 0 0 .708-.708L2.707 8.5H14.5A.5.5 0 0 0 15 8"/></svg>
+                </a>
                 <a href="{{ url_for('integration_logs', integration_id=integration.id) }}"
-                   class="btn btn-outline-secondary">Refresh</a>
-                <button type="button" class="btn btn-outline-secondary"
-                        data-bs-toggle="modal" data-bs-target="#integrationStatusModal">
-                    {{ 'Inactivate' if integration.is_active else 'Activate' }}
+                   class="btn btn-outline-secondary dashboard-action-btn"
+                   data-dashboard-tooltip data-bs-placement="top"
+                   data-bs-title="Refresh dashboard" aria-label="Refresh dashboard">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3a5 5 0 1 0 4.546 2.914.5.5 0 0 1 .908-.417A6 6 0 1 1 8 2z"/><path d="M8 4.466V.534a.25.25 0 0 1 .41-.192l2.36 1.966a.25.25 0 0 1 0 .384L8.41 4.658A.25.25 0 0 1 8 4.466"/></svg>
+                </a>
+                <button type="button" class="btn btn-outline-secondary dashboard-action-btn"
+                        id="changeClientIntegrationStatusButton"
+                        data-bs-toggle="modal" data-bs-target="#integrationStatusModal"
+                        data-dashboard-tooltip data-bs-placement="top"
+                        data-bs-title="{{ 'Inactivate integration' if integration.is_active else 'Activate integration' }}"
+                        aria-label="{{ 'Inactivate integration' if integration.is_active else 'Activate integration' }}">
+                    {% if integration.is_active %}
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 3.5A1.5 1.5 0 0 1 7 5v6a1.5 1.5 0 0 1-3 0V5a1.5 1.5 0 0 1 1.5-1.5m5 0A1.5 1.5 0 0 1 12 5v6a1.5 1.5 0 0 1-3 0V5a1.5 1.5 0 0 1 1.5-1.5"/></svg>
+                    {% else %}
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true"><path d="M10.804 8 5 11.633V4.367z"/><path d="M0 8a8 8 0 1 1 16 0A8 8 0 0 1 0 8m8-7a7 7 0 1 0 0 14A7 7 0 0 0 8 1"/></svg>
+                    {% endif %}
+                </button>
+                <button type="button" class="btn btn-success dashboard-action-btn"
+                        id="openClientSyncJobButton"
+                        data-bs-toggle="modal" data-bs-target="#clientSyncJobModal"
+                        data-dashboard-tooltip data-bs-placement="top"
+                        data-bs-title="Retry one Maconomy job" aria-label="Retry one Maconomy job">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true"><path d="M8.5 1.5v3a1 1 0 0 0 1 1h3v8a1 1 0 0 1-1 1h-7a1 1 0 0 1-1-1v-12a1 1 0 0 1 1-1h3zm.121-1H4.5a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h7a2 2 0 0 0 2-2V5.379a2 2 0 0 0-.586-1.414l-2.879-2.879A2 2 0 0 0 8.621.5"/><path fill-rule="evenodd" d="M8 12a.5.5 0 0 0 .5-.5V7.707l1.146 1.147a.5.5 0 0 0 .708-.708l-2-2a.5.5 0 0 0-.708 0l-2 2a.5.5 0 1 0 .708.708L7.5 7.707V11.5a.5.5 0 0 0 .5.5"/></svg>
                 </button>
             </div>
+            {% if metrics.latest_run %}
+            <div class="text-lg-end">
+                <div class="text-secondary small">Last run</div>
+                <div class="fw-semibold">{{ metrics.latest_run.started_on_utc.strftime('%d %b %Y, %H:%M:%S') }} UTC</div>
+                <span class="badge {{ status_badges.get(metrics.latest_run.status, 'text-bg-secondary') }}">
+                    {{ metrics.latest_run.status | replace('_', ' ') | title }}
+                </span>
+            </div>
+            {% endif %}
         </div>
     </div>
 
@@ -37,22 +122,42 @@
     {% endif %}
 
     <div class="row g-3 mb-4">
-        <div class="col-6 col-xl-3"><div class="card h-100"><div class="card-body">
-            <div class="text-secondary small">Recent runs</div>
-            <div class="display-6 fw-semibold">{{ metrics.total_runs }}</div>
-        </div></div></div>
-        <div class="col-6 col-xl-3"><div class="card h-100"><div class="card-body">
-            <div class="text-secondary small">Run success rate</div>
-            <div class="display-6 fw-semibold">{{ metrics.success_rate }}%</div>
-        </div></div></div>
-        <div class="col-6 col-xl-3"><div class="card h-100"><div class="card-body">
-            <div class="text-secondary small">Jobs succeeded</div>
-            <div class="display-6 fw-semibold">{{ metrics.jobs_succeeded }}</div>
-        </div></div></div>
-        <div class="col-6 col-xl-3"><div class="card h-100"><div class="card-body">
-            <div class="text-secondary small">Jobs failed</div>
-            <div class="display-6 fw-semibold">{{ metrics.jobs_failed }}</div>
-        </div></div></div>
+        <div class="col-6 col-xl-3">
+            <section class="card metric-card rounded-3 h-100"><div class="card-body p-4">
+                <span class="metric-icon mb-3" aria-hidden="true">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="currentColor" viewBox="0 0 16 16"><path d="M8 3a5 5 0 1 0 4.546 2.914.5.5 0 0 1 .908-.417A6 6 0 1 1 8 2z"/><path d="M8 4.466V.534a.25.25 0 0 1 .41-.192l2.36 1.966a.25.25 0 0 1 0 .384L8.41 4.658A.25.25 0 0 1 8 4.466"/></svg>
+                </span>
+                <div class="text-secondary small">Recent runs</div>
+                <div class="display-6 fw-semibold">{{ metrics.total_runs }}</div>
+            </div></section>
+        </div>
+        <div class="col-6 col-xl-3">
+            <section class="card metric-card rounded-3 h-100"><div class="card-body p-4">
+                <span class="metric-icon mb-3" aria-hidden="true">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="currentColor" viewBox="0 0 16 16"><path d="M2.5 8a5.5 5.5 0 1 1 11 0 .5.5 0 0 1-1 0 4.5 4.5 0 1 0-9 0 .5.5 0 0 1-1 0"/><path d="M7.5 8.5 10.8 5.2l.7.7-3.3 3.3a1 1 0 1 1-.7-.7"/></svg>
+                </span>
+                <div class="text-secondary small">Run success rate</div>
+                <div class="display-6 fw-semibold">{{ metrics.success_rate }}%</div>
+            </div></section>
+        </div>
+        <div class="col-6 col-xl-3">
+            <section class="card metric-card rounded-3 h-100"><div class="card-body p-4">
+                <span class="metric-icon mb-3" aria-hidden="true">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="currentColor" viewBox="0 0 16 16"><path d="M13.854 3.646a.5.5 0 0 1 0 .708l-7 7a.5.5 0 0 1-.708 0l-4-4a.5.5 0 1 1 .708-.708L6.5 10.293l6.646-6.647a.5.5 0 0 1 .708 0"/></svg>
+                </span>
+                <div class="text-secondary small">Jobs succeeded</div>
+                <div class="display-6 fw-semibold">{{ metrics.jobs_succeeded }}</div>
+            </div></section>
+        </div>
+        <div class="col-6 col-xl-3">
+            <section class="card metric-card rounded-3 h-100"><div class="card-body p-4">
+                <span class="metric-icon mb-3" aria-hidden="true">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="currentColor" viewBox="0 0 16 16"><path d="M8 1.45 14.705 13H1.295zM8 0a1 1 0 0 0-.866.5L.43 12.05A1 1 0 0 0 1.295 13.5h13.41a1 1 0 0 0 .866-1.5L8.866.5A1 1 0 0 0 8 0"/><path d="M7.002 5h2L8.75 9h-1.5zM8 12a1 1 0 1 0 0-2 1 1 0 0 0 0 2"/></svg>
+                </span>
+                <div class="text-secondary small">Jobs failed</div>
+                <div class="display-6 fw-semibold">{{ metrics.jobs_failed }}</div>
+            </div></section>
+        </div>
     </div>
 
     <section class="card rounded-3">
@@ -65,11 +170,12 @@
                 Client creation, task creation, and Maconomy writeback outcomes.
             </p>
             <div class="table-responsive">
-                <table class="table table-hover align-middle">
+                <table id="clientScopedRunHistoryTable" class="table table-hover align-middle w-100">
                     <thead><tr>
                         <th>Started (UTC)</th><th>Status</th><th>Trigger</th>
                         <th>Discovered</th><th>Succeeded</th><th>Failed</th>
-                        <th>Clients</th><th>Tasks</th><th>Writebacks</th><th>Details</th>
+                        <th>Clients</th><th>Tasks</th><th>Writebacks</th>
+                        <th data-orderable="false">Details</th>
                     </tr></thead>
                     <tbody>
                     {% for run in run_logs %}
@@ -78,7 +184,7 @@
                     {% set succeeded = details.get('successful_job_numbers', []) %}
                     {% set failed = details.get('failed_jobs', []) %}
                     <tr>
-                        <td class="text-nowrap">
+                        <td class="text-nowrap" data-order="{{ run.started_on_utc.isoformat() }}">
                             {{ run.started_on_utc.strftime('%d %b %Y, %H:%M:%S') }}
                             <div class="small text-secondary">{{ (run.request_id | string)[:8] }}&hellip;</div>
                         </td>
@@ -92,42 +198,18 @@
                         <td>{{ run.clients_created }}</td>
                         <td>{{ run.tasks_created }}</td>
                         <td>{{ run.jobs_updated }}</td>
-                        <td style="min-width: 24rem">
-                            <div>{{ run.summary_message }}</div>
-                            <details class="mt-2">
-                                <summary class="text-primary">Troubleshooting details</summary>
-                                <div class="small mt-2">
-                                    <div><strong>Discovered:</strong> {{ discovered | join(', ') if discovered else 'None' }}</div>
-                                    <div><strong>Succeeded:</strong> {{ succeeded | join(', ') if succeeded else 'None' }}</div>
-                                    {% if run.failure_stage %}
-                                    <div><strong>Run failure stage:</strong> {{ run.failure_stage }}</div>
-                                    {% endif %}
-                                    {% if run.error_message %}
-                                    <div><strong>Run error:</strong> {{ run.error_message }}</div>
-                                    {% endif %}
-                                    {% if failed %}
-                                    <div class="table-responsive mt-2">
-                                        <table class="table table-sm table-bordered mb-0">
-                                            <thead><tr><th>Job</th><th>Failed stage</th><th>Succeeded stages</th><th>Reason</th></tr></thead>
-                                            <tbody>
-                                            {% for item in failed %}
-                                            <tr>
-                                                <td>{{ item.get('job_number') }}</td>
-                                                <td>{{ item.get('failed_stage') }}</td>
-                                                <td>{{ item.get('succeeded_stages', []) | join(', ') or 'None' }}</td>
-                                                <td>{{ item.get('reason') }}</td>
-                                            </tr>
-                                            {% endfor %}
-                                            </tbody>
-                                        </table>
-                                    </div>
-                                    {% endif %}
-                                </div>
-                            </details>
+                        <td style="min-width: 15rem">
+                            <div class="small text-secondary mb-2">{{ run.summary_message }}</div>
+                            <button type="button" class="btn btn-sm btn-outline-secondary"
+                                    data-client-run-details
+                                    data-bs-toggle="modal" data-bs-target="#clientRunDetailsModal"
+                                    data-template-id="clientRunDetails-{{ run.request_id }}"
+                                    data-request-id="{{ run.request_id }}"
+                                    data-started="{{ run.started_on_utc.strftime('%d %b %Y, %H:%M:%S') }} UTC">
+                                View details
+                            </button>
                         </td>
                     </tr>
-                    {% else %}
-                    <tr><td colspan="10" class="text-center text-secondary py-4">No client-scoped CCH runs have been logged yet.</td></tr>
                     {% endfor %}
                     </tbody>
                 </table>
@@ -135,6 +217,195 @@
         </div>
     </section>
 </main>
+
+{% for run in run_logs %}
+{% set details = run.details or {} %}
+{% set discovered = details.get('discovered_job_numbers', []) %}
+{% set succeeded = details.get('successful_job_numbers', []) %}
+{% set failed = details.get('failed_jobs', []) %}
+{% set job_results = details.get('job_results', []) %}
+<template id="clientRunDetails-{{ run.request_id }}">
+    <div class="row g-2 mb-4" aria-label="Run outcome summary">
+        <div class="col-4"><div class="run-detail-summary h-100">
+            <div class="run-detail-summary-label">Discovered</div>
+            <div class="run-detail-summary-value">{{ run.jobs_discovered }}</div>
+        </div></div>
+        <div class="col-4"><div class="run-detail-summary h-100">
+            <div class="run-detail-summary-label">Succeeded</div>
+            <div class="run-detail-summary-value text-success">{{ run.jobs_succeeded }}</div>
+        </div></div>
+        <div class="col-4"><div class="run-detail-summary h-100">
+            <div class="run-detail-summary-label">Failed</div>
+            <div class="run-detail-summary-value text-danger">{{ run.failed_count }}</div>
+        </div></div>
+    </div>
+
+    <div class="row g-3 mb-4">
+        <div class="col-lg-6">
+            <div class="small fw-semibold mb-1">Discovered job numbers</div>
+            <div class="small text-secondary job-number-list">
+                {{ discovered | join(', ') if discovered else 'None recorded' }}
+            </div>
+        </div>
+        <div class="col-lg-6">
+            <div class="small fw-semibold mb-1">Successfully synchronized</div>
+            <div class="small text-secondary job-number-list">
+                {{ succeeded | join(', ') if succeeded else 'None recorded' }}
+            </div>
+        </div>
+    </div>
+
+    {% if run.failure_stage or run.error_message %}
+    <div class="alert alert-danger py-2">
+        {% if run.failure_stage %}<strong>{{ run.failure_stage | replace('_', ' ') | title }}:</strong>{% endif %}
+        {{ run.error_message or 'The run did not complete successfully.' }}
+    </div>
+    {% endif %}
+
+    {% if job_results %}
+    <div class="alert alert-primary py-2 mb-3">
+        <strong>Maconomy writeback:</strong>
+        successful client creation writes the period-end date to <code>date5</code>;
+        successful task creation also writes the CCH task ID to <code>text20</code>.
+        Both values are saved in one Maconomy update.
+    </div>
+    <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0">
+            <thead><tr>
+                <th>Job number</th><th>Outcome</th><th>Client creation</th>
+                <th>Task creation</th><th>Client writeback</th>
+                <th>Task writeback</th><th>Reason</th>
+            </tr></thead>
+            <tbody>
+            {% for item in job_results %}
+            {% set stages = item.get('stages', {}) %}
+            {% set client_stage = stages.get('client_creation', {}) %}
+            {% set task_stage = stages.get('task_creation', {}) %}
+            {% set writeback_stage = stages.get('maconomy_writeback', {}) %}
+            {% set written_fields = writeback_stage.get('written_fields', []) %}
+            {% set item_status = item.get('status', 'FAILED') %}
+            <tr>
+                <td class="fw-semibold">{{ item.get('job_number') }}</td>
+                <td><span class="badge {{ status_badges.get(item_status, 'text-bg-secondary') }}">
+                    {{ item_status | replace('_', ' ') | title }}
+                </span></td>
+                <td>{{ client_stage.get('status') | default('Not recorded', true) | replace('_', ' ') | title }}</td>
+                <td>{{ task_stage.get('status') | default('Not recorded', true) | replace('_', ' ') | title }}</td>
+                <td>
+                    {% if 'date5' in written_fields %}
+                    <span class="badge text-bg-success">Written</span>
+                    <div class="small text-secondary mt-1"><code>date5</code> &larr; period-end date</div>
+                    {% elif writeback_stage.get('status') == 'failed' %}
+                    <span class="badge text-bg-danger">Failed</span>
+                    <div class="small text-secondary mt-1"><code>date5</code> not written</div>
+                    {% else %}
+                    <span class="badge text-bg-secondary">Not written</span>
+                    <div class="small text-secondary mt-1">Client was not created</div>
+                    {% endif %}
+                </td>
+                <td>
+                    {% if 'text20' in written_fields %}
+                    <span class="badge text-bg-success">Written</span>
+                    <div class="small text-secondary mt-1"><code>text20</code> &larr; CCH task ID</div>
+                    {% elif task_stage.get('status') == 'created' and writeback_stage.get('status') == 'failed' %}
+                    <span class="badge text-bg-danger">Failed</span>
+                    <div class="small text-secondary mt-1"><code>text20</code> not written</div>
+                    {% else %}
+                    <span class="badge text-bg-secondary">Not written</span>
+                    <div class="small text-secondary mt-1">Task was not created</div>
+                    {% endif %}
+                </td>
+                <td class="detail-reason">
+                    {{ client_stage.get('error') or task_stage.get('error') or writeback_stage.get('error') or '—' }}
+                </td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% elif failed %}
+    <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0">
+            <thead><tr><th>Job number</th><th>Outcome</th><th>Failed stage</th><th>Completed stages</th><th>Reason</th></tr></thead>
+            <tbody>
+            {% for item in failed %}
+            <tr>
+                <td class="fw-semibold">{{ item.get('job_number') or 'Request level' }}</td>
+                <td><span class="badge {{ status_badges.get(item.get('status'), 'text-bg-danger') }}">
+                    {{ item.get('status', 'FAILED') | replace('_', ' ') | title }}
+                </span></td>
+                <td>{{ item.get('failed_stage') | replace('_', ' ') | title }}</td>
+                <td>{{ item.get('succeeded_stages', []) | join(', ') or 'None' }}</td>
+                <td class="detail-reason">{{ item.get('reason') }}</td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="text-center text-secondary py-4">No job-level records were stored for this run.</div>
+    {% endif %}
+</template>
+{% endfor %}
+
+<div class="modal fade" id="clientRunDetailsModal" tabindex="-1"
+     aria-labelledby="clientRunDetailsModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div>
+                    <h2 class="modal-title fs-5" id="clientRunDetailsModalLabel">Run details</h2>
+                    <div class="text-secondary small mt-1">
+                        <span id="clientRunDetailsStarted"></span>
+                        <span class="mx-1" aria-hidden="true">&middot;</span>
+                        <code class="request-id" id="clientRunDetailsRequestId"></code>
+                    </div>
+                </div>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body p-3 p-md-4" id="clientRunDetailsContent"></div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="clientSyncJobModal" tabindex="-1"
+     aria-labelledby="clientSyncJobModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <form method="post"
+                  action="{{ url_for('sync_caseware_job', integration_id=integration.id) }}"
+                  id="clientSyncJobForm">
+                <div class="modal-header">
+                    <h2 class="modal-title fs-5" id="clientSyncJobModalLabel">
+                        Retry a Maconomy job
+                    </h2>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <p class="text-secondary small">
+                        Enter one Maconomy job number to retry CCH client creation,
+                        task creation, and Maconomy writeback.
+                    </p>
+                    <label for="clientSyncJobNumber" class="form-label">Job number</label>
+                    <input type="text" class="form-control" id="clientSyncJobNumber"
+                           name="job_number" maxlength="100" autocomplete="off"
+                           placeholder="For example, 10101" required>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary" id="submitClientSyncJob">
+                        <span class="spinner-border spinner-border-sm me-1 d-none" aria-hidden="true"></span>
+                        <span class="client-sync-job-label">Retry job</span>
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
 
 <div class="modal fade" id="integrationStatusModal" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog modal-dialog-centered"><div class="modal-content">
@@ -154,4 +425,50 @@
         </div>
     </div></div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.datatables.net/v/bs5/dt-3.1.2/datatables.min.js"></script>
+<script>
+    $(function () {
+        $('#clientScopedRunHistoryTable').DataTable({
+            order: [[0, 'desc']],
+            pageLength: 10,
+            lengthMenu: [10, 25, 50, 100],
+            language: {
+                emptyTable: 'No client-scoped CCH runs have been logged yet.',
+                search: '',
+                searchPlaceholder: 'Search run history'
+            }
+        });
+
+        $('#clientScopedRunHistoryTable').on('click', '[data-client-run-details]', function () {
+            const button = $(this);
+            const template = document.getElementById(button.attr('data-template-id'));
+            $('#clientRunDetailsStarted').text(button.attr('data-started'));
+            $('#clientRunDetailsRequestId').text(button.attr('data-request-id'));
+            const content = document.getElementById('clientRunDetailsContent');
+            content.replaceChildren(template.content.cloneNode(true));
+        });
+
+        $('[data-dashboard-tooltip]').each(function () {
+            new bootstrap.Tooltip(this);
+        });
+
+        $('#changeClientIntegrationStatusButton, #openClientSyncJobButton').on('click', function () {
+            bootstrap.Tooltip.getInstance(this)?.hide();
+        });
+
+        $('#clientSyncJobModal').on('shown.bs.modal', function () {
+            $('#clientSyncJobNumber').trigger('focus');
+        });
+
+        $('#clientSyncJobForm').on('submit', function () {
+            const submitButton = $('#submitClientSyncJob');
+            submitButton.prop('disabled', true);
+            submitButton.find('.spinner-border').removeClass('d-none');
+            submitButton.find('.client-sync-job-label').text('Retrying...');
+        });
+    });
+</script>
 {% endblock %}
