@@ -1,135 +1,348 @@
 # Client-scoped Maconomy to CCH/XCM integration
 
-The first stage exposes `POST /api/v1/xcm-cch-client-scoped/sync` with the
-standard `X-API-KEY` header. The request body accepts `jobnumbers` as an array
-of strings or `null`; omitting the field has the same meaning as `null`.
+## Purpose
 
-```json
-{"jobnumbers": ["12345", "67890"]}
+This integration discovers eligible tax jobs in Maconomy and creates the
+corresponding client and task in CCH/XCM. After CCH processing finishes, it
+writes the processing result back to the Maconomy job and records a monitoring
+run.
+
+The integration is client-scoped: a Maconomy job is processed only when its
+`jobnumber` does not already exist as a CCH client `accountNumber`.
+
+## End-to-end flow
+
+```mermaid
+flowchart LR
+    A[API or scheduler trigger] --> B[Discover eligible Maconomy jobs]
+    B --> C[Search CCH clients by accountNumber]
+    C --> D{Client already exists?}
+    D -- Yes --> E[Exclude job from this run]
+    D -- No --> F[Fetch Maconomy reference data]
+    F --> G[Enrich job and resolve employee emails]
+    G --> H[Create CCH client]
+    H --> I{Client created?}
+    I -- No --> J[Record client failure]
+    I -- Yes --> K[Create CCH task]
+    K --> L[Write date5 and optional text20 to Maconomy]
+    J --> M[Complete run log]
+    L --> M
 ```
 
-The CCH scheduler calls this endpoint with `{"jobnumbers": null}` at the
-configured `scheduler_cch_interval_minutes` interval. This replaces the old
-scheduled CCH task-mapping endpoint. The old integration routes and code stay
-available, but the scheduler no longer calls them. The client-scoped
-integration service must be active for the scheduled request to run.
+## API
 
-The endpoint authenticates with Maconomy once, keeps the reconnect token on
-the Maconomy service instance for subsequent steps in the same request, and
-returns eligible jobs from the Maconomy `jobs/filter` API. With `jobnumbers`
-set to `null`, omitted, or an empty list, it selects eligible jobs created
-since yesterday using `createddate>=date(year,month,day)` in Maconomy's
-zero-based month format. With a non-empty list, it adds grouped `jobnumber`
-alternatives without a created-date condition. Both paths make one filter call
-with `limit: 5000` and `offset: 0`, returning at most 5,000 matching jobs.
+### Endpoint
 
-Both request paths require `template=false`, `locationname='2'`,
-`closed=false`, and `text20=''`. For each returned Maconomy job, the endpoint
-searches CCH clients using the job's `jobnumber` as `AccountNumber`. Distinct
-job numbers are searched in batches of at most 20. For example, 100 numbers
-make five CCH search calls. Each
-`POST /xcmrestservices/vnext/api/v2/Client/search/advanced` call uses OR
-filters for its batch, `pageIndex: 1`, and `pageCount` equal to the batch size
-plus the existing 50-result buffer. Matches are combined before adding
-`is_exist_in_chh` to every Maconomy job. A job is marked `true` only when a
-returned CCH `accountNumber` matches its job number; jobs with no matching
-account number in the returned results are marked `false`. CCH authentication
-is performed once for the run and reused for client creation.
+```http
+POST /api/v1/xcm-cch-client-scoped/sync
+X-API-KEY: <integration API key>
+Content-Type: application/json
+```
 
-For the returned jobs, the endpoint fetches Maconomy reference records to
-enrich each job. It gathers distinct
-`customernumber` values for `customercard/filter` and distinct
-`projectmanagernumber`, `specification5name`, and `employeenumber6` values for
-`employees/filter`. Those calls use OR restrictions, `limit: 5000`, and
-`offset: 0`. The customer fields are `customernumber`, `name1`, and
-`fiscalyearendmonth`; employee fields are `employeenumber` and
-`electronicmailaddress`.
+### Request
 
-The endpoint also fetches `specification2name` and `description` from
-`specification2/filter`, and `specification1name` and `description` from
-`specification1/filter`. Each specification call is unfiltered with
-`limit: 1000` and `offset: 0`. All calls reuse the Maconomy reconnect token.
+`jobnumbers` accepts an array of Maconomy job numbers or `null`.
 
-The response is a list of job objects. Each job includes
-`fiscalyearendmonth` from its customer and `periodenddate` derived from
-`theyear` and the last day of that month in `MM/DD/YYYY` format. Numeric
-months, full month names, and abbreviations are accepted; missing or invalid
-values produce `null`. Jobs also include `specification1_description` and
-`specification2_description` from the matching specifications, plus
-`projectmanager_email`, `employee6_email`, and `spec5_email` from the matching
-employees. A missing match produces `null` for that field. The route currently
-passes the first 40 eligible jobs to the CCH lookup. For each job flagged
-`is_exist_in_chh: false`, it posts a new client to
-`/xcmrestservices/vnext/api/v2.1/Client` using the joined values. It maps job
-`electronicmailaddress` to `emailId`, `name1` to `last_Entity_Name`,
-`telephone` to `phoneNumber`,
-`jobnumber` to `accountNumber`, `specification2_description` to `primaryTask`,
-`periodenddate` to `periodEndDate`, `spec5_email` to `auditStaff`, and
-`employee6_email` to `taxPartner`. `clientType` is `Individual` when
-`specification1_description` is `individual` (case insensitive), or `Entity`
-otherwise. `originatingLocationName` is `HQ` and `active` is `Y`.
+```json
+{
+  "jobnumbers": ["12345", "67890"]
+}
+```
 
-After a client is created, the endpoint directly creates its task through
-`/xcmrestservices/vnext/api/v2/Task`. It does not search for an existing task,
-because this path only processes newly created clients. The task uses the
-client's `jobnumber` account number, `specification2_description` task type,
-`periodenddate`, and `description` as the task description. A blank
-specification description uses `Tax - 1040 Individual` as the task type.
+| Value | Behavior |
+|---|---|
+| Non-empty array | Processes only the requested job numbers |
+| `null` | Performs scheduled discovery |
+| Omitted | Same behavior as `null` |
+| Empty array | Same behavior as `null` |
 
-Each returned job includes `cchclientcreation` and `cchtaskcreation` status
-objects. Client creation failure marks the task as `skipped`. Task failure is
-recorded independently after a successful client creation. A failure for one
-job does not stop processing of later jobs.
+Direct requests are recorded with trigger type `API`. Scheduler requests are
+recorded as `SCHEDULER`.
 
-## CCH processing and Maconomy writeback order
+## Processing sequence
 
-The integration uses two separate phases. It first completes the CCH client
-and task processing loop for every selected job and keeps each result in
-memory. It does not update Maconomy from inside the client creation or task
-creation methods.
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Trigger as API / Scheduler
+    participant Route as Sync route
+    participant Mac as Maconomy
+    participant CCH as CCH/XCM
+    participant Log as Run log
 
-After the CCH loop has finished, the integration starts the Maconomy
-writeback phase. Each eligible job receives at most one Maconomy card update:
+    Trigger->>Route: POST /sync
+    Route->>Log: Start run
+    Route->>Mac: Authenticate
+    Route->>Mac: Filter eligible jobs
+    Mac-->>Route: Jobs
+    Route->>CCH: Authenticate
+    Route->>CCH: Search clients by accountNumber
+    CCH-->>Route: Existing clients
+    Route->>Mac: Fetch customers, employees, specifications
+    Mac-->>Route: Reference records
+    Route->>Route: Enrich jobs
+
+    loop Each missing CCH client
+        Route->>CCH: Create client
+        alt Client created
+            Route->>CCH: Create task
+            CCH-->>Route: Task ID or task failure
+        else Client creation failed
+            Route->>Route: Mark task as skipped
+        end
+    end
+
+    Route->>Mac: Write processing results for all eligible jobs
+    Route->>Log: Complete run with job outcomes
+    Route-->>Trigger: Processed job results
+```
+
+## Job discovery
+
+The integration authenticates with Maconomy once per request and reuses the
+reconnect token throughout the run. It calls the Maconomy `jobs/filter`
+container with `limit: 5000` and `offset: 0`.
+
+Every selected job must satisfy:
+
+| Field | Required value |
+|---|---|
+| `template` | `false` |
+| `locationname` | `2` |
+| `closed` | `false` |
+| `text20` | Empty |
+
+When specific `jobnumbers` are supplied, they are added as grouped OR
+conditions. Scheduled discovery applies the implementation's created-date
+restriction instead.
+
+Only the first 40 eligible jobs are passed to the CCH lookup in one request.
+
+## Existing-client lookup
+
+Maconomy `jobnumber` maps to CCH `accountNumber`. Job numbers are searched in
+batches of 20 through:
+
+```http
+POST /xcmrestservices/vnext/api/v2/Client/search/advanced
+```
+
+Each batch uses OR filters, `pageIndex: 1`, and a result count equal to the
+batch size plus a 50-result buffer. Only exact `accountNumber` matches are
+treated as existing clients.
+
+Jobs with an existing CCH client are excluded. This integration does not
+update existing CCH clients.
+
+## Reference-data enrichment
+
+Reference data is fetched only for jobs that do not already exist in CCH.
+
+| Maconomy container | Lookup values | Returned fields |
+|---|---|---|
+| `customercard/filter` | `customernumber` | `customernumber`, `name1`, `fiscalyearendmonth` |
+| `employees/filter` | `projectmanagernumber`, `specification5name`, `employeenumber6`, `purposename` | `employeenumber`, `electronicmailaddress` |
+| `specification1/filter` | All records | `specification1name`, `description` |
+| `specification2/filter` | All records | `specification2name`, `description` |
+
+Customer and employee requests use `limit: 5000`. Specification requests use
+`limit: 1000`. All requests use `offset: 0` and reuse the same Maconomy
+authentication token.
+
+### Tax-partner resolution
+
+Maconomy `purposename` contains an employee number, not an email address. The
+integration resolves that employee number before building the CCH payload.
+
+```mermaid
+flowchart LR
+    A["Job purposename<br/>employee number"]
+    B["employees/filter<br/>employeenumber = purposename"]
+    C["Employee electronicmailaddress"]
+    D["Enriched job<br/>purposename_email"]
+    E["CCH client payload<br/>taxPartner"]
+
+    A --> B --> C --> D --> E
+```
+
+The exact mapping is:
+
+```text
+job.purposename
+    -> employee.employeenumber
+    -> employee.electronicmailaddress
+    -> job.purposename_email
+    -> CCH taxPartner
+```
+
+If `purposename` is empty, no employee matches, or the matched employee has no
+email, `purposename_email` and `taxPartner` are `null`. The integration does
+not currently stop the job before the CCH request in this situation.
+
+## Enriched job fields
+
+| Enriched field | Source |
+|---|---|
+| `fiscalyearendmonth` | Matching customer `fiscalyearendmonth` |
+| `periodenddate` | Last day of `theyear` and `fiscalyearendmonth`, formatted `MM/DD/YYYY` |
+| `specification1_description` | Matching Specification 1 description |
+| `specification2_description` | Matching Specification 2 description |
+| `projectmanager_email` | Project manager employee email |
+| `employee6_email` | Employee 6 email |
+| `spec5_email` | Specification 5 employee email |
+| `purposename_email` | Purpose employee email used for the tax partner |
+
+Numeric months, full month names, and abbreviated month names are accepted for
+`periodenddate`. Missing or invalid reference values produce `null`.
+
+## CCH client creation
+
+New clients are posted to:
+
+```http
+POST /xcmrestservices/vnext/api/v2.1/Client
+```
+
+### Client field mapping
+
+| CCH field | Maconomy or enriched value |
+|---|---|
+| `responsiblePerson` | `employee6_email` |
+| `emailId` | `electronicmailaddress` |
+| `last_Entity_Name` | `name1` |
+| `clientType` | `Individual` when Specification 1 description is `individual`; otherwise `Entity` |
+| `phoneNumber` | `telephone` |
+| `accountNumber` | `jobnumber` |
+| `originatingLocationName` | Constant `HQ` |
+| `active` | Constant `Y` |
+| `primaryTask` | `specification2_description` |
+| `periodEndDate` | `periodenddate` |
+| `auditPartner` | `spec5_email` |
+| `taxPartner` | `purposename_email` |
+
+## CCH task creation
+
+A task is created only after its client is created successfully:
+
+```http
+POST /xcmrestservices/vnext/api/v2/Task
+```
+
+| CCH task field | Source |
+|---|---|
+| `accountNumber` | `jobnumber` |
+| `taskType` | `specification2_description` |
+| `periodEndDate` | `periodenddate` with `00:00:00` appended |
+| `taskDescription` | `description1`, falling back to `jobnumber` |
+
+When the Specification 2 description is blank, `taskType` defaults to
+`Tax - 1040 Individual`.
+
+The integration does not search for an existing task because task creation is
+performed only for a newly created CCH client.
+
+## Result handling
+
+Each returned job contains `cchclientcreation` and `cchtaskcreation` status
+objects. A failure for one job does not stop later jobs.
+
+```mermaid
+flowchart TD
+    A[Create CCH client] --> B{Successful?}
+    B -- No --> C[Client failed]
+    C --> D[Task skipped]
+    D --> E[Maconomy writeback skipped]
+    B -- Yes --> F[Create CCH task]
+    F --> G{Task successful?}
+    G -- Yes --> H[Write date5 and text20]
+    G -- No --> I[Write date5 only]
+```
+
+## Maconomy writeback
+
+CCH processing finishes for the selected jobs before the separate Maconomy
+writeback phase begins. Each eligible job receives at most one Maconomy card
+update.
 
 | CCH result | Maconomy update |
 |---|---|
 | Client created and task created | Write `date5` and `text20` together |
 | Client created and task failed or skipped | Write only `date5`; leave `text20` unchanged |
-| Client creation failed | Skip the Maconomy update |
+| Client creation failed | Skip Maconomy update |
 
-`date5` receives the calculated `periodenddate`, converted from `MM/DD/YYYY`
-to Maconomy's `YYYY-MM-DD` format. `text20` receives the CCH `taskId` only
-when task creation succeeds.
+`date5` receives `periodenddate`, converted from `MM/DD/YYYY` to `YYYY-MM-DD`.
+`text20` receives the CCH `taskId` only when task creation succeeds.
 
-Before updating, the integration binds the Maconomy job and confirms that its
-`versionnumber` has not changed since it was fetched. After the single update,
-it reads the job again and verifies the new version and saved values. Each job
-reports `maconomywritebackstatus` as `updated`, `failed`, or `skipped` in the
-endpoint response. That status is not written into a Maconomy field. A
-writeback failure for one job does not stop later jobs.
+Before writing, the integration confirms that the Maconomy job
+`versionnumber` has not changed. After writing, it reads the job again and
+verifies the version and saved values.
+
+Each response job reports `maconomywritebackstatus` as `updated`, `failed`, or
+`skipped`. This status is returned by the API and is not stored in a Maconomy
+field.
 
 ## Run logging and monitoring
 
-Every API or scheduler execution creates a row in
-`xcm_cch_client_scoped_run_logs`. The row records the request ID, trigger,
-overall status, Maconomy instance, start and completion times, and counts for
-jobs discovered, jobs succeeded, jobs failed, clients created, tasks created,
-and Maconomy writebacks.
+Every execution creates one row in `xcm_cch_client_scoped_run_logs`.
 
-The structured `details` value keeps the discovered and successful job-number
-lists plus every failed job's failure stage, reason, and stages that succeeded
-before the failure. A run summary follows this format:
+The run log contains:
+
+- Request ID and trigger type
+- Overall status and Maconomy instance
+- Start and completion timestamps
+- Jobs discovered, succeeded, and failed
+- Clients and tasks created
+- Maconomy writebacks
+- Structured success and failure details
+
+The structured `details` value includes discovered and successful job-number
+lists and, for each failed job, the failure stage, reason, and stages completed
+before the failure.
+
+```mermaid
+flowchart LR
+    A[Integration execution] --> B[xcm_cch_client_scoped_run_logs]
+    B --> C[Monitoring dashboard]
+    B --> D[Run totals]
+    B --> E[Job-level troubleshooting]
+```
+
+The monitoring summary follows this format:
 
 ```text
 10 jobs discovered to sync; 5 succeeded [job numbers];
 5 failed [job number: failure reason]
 ```
 
-The client-scoped integration's Monitoring page shows these run totals and
-expandable troubleshooting details. Failures are isolated by job, so partial
-runs show client creation, task creation, and Maconomy writeback outcomes
-separately. Scheduler requests are identified as `SCHEDULER`; direct endpoint
-calls are identified as `API`.
+## Failure stages
 
-It has its own integration service registration, initially inactive, separate
-from the old CCH task-mapping integration.
+| Stage | Meaning |
+|---|---|
+| `MACONOMY_DISCOVERY` | Maconomy authentication or job discovery failed |
+| `CCH_CLIENT_LOOKUP` | CCH authentication or existing-client lookup failed |
+| `MACONOMY_REFERENCE_DATA` | Customer, employee, or specification lookup failed |
+| `CCH_AUTHENTICATION` | CCH processing could not start or complete at the route level |
+| `MACONOMY_WRITEBACK` | The route-level Maconomy writeback operation failed |
+
+Individual client, task, and job writeback failures are isolated and included
+in the processed job result whenever processing can continue.
+
+## Main implementation files
+
+| File | Responsibility |
+|---|---|
+| `routers/sync_router.py` | Orchestrates the integration and run logging |
+| `services/maconomy_service.py` | Maconomy authentication, discovery, enrichment, and writeback |
+| `services/cch_client_service.py` | CCH authentication, client lookup, client creation, and task creation |
+| `services/integration_run_log_service.py` | Persists run-level and job-level monitoring details |
+| `models/integration_run_log.py` | Defines the monitoring log table |
+
+## Current operational limits
+
+- A request sends at most 40 eligible jobs to the CCH lookup.
+- Maconomy filter calls do not paginate beyond their configured limit.
+- Existing CCH clients are detected and excluded; they are not updated.
+- A missing purpose employee email results in `taxPartner: null` rather than an
+  integration-side validation failure.
+- The client-scoped integration has its own service switch and is independent
+  of the older CCH task-mapping integration.
