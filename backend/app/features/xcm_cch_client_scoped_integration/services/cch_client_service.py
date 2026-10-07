@@ -256,7 +256,7 @@ class CCHClientService:
             else "Entity"
         )
         return {
-            "responsiblePerson": job.get("projectmanager_email"),
+            "responsiblePerson": job.get("employee6_email"), #job.get("projectmanager_email"),
             "emailId": (
                 job.get("electronicmailaddress")
                 if job.get("electronicmailaddress")
@@ -273,22 +273,16 @@ class CCHClientService:
             # "originatingLocationId": set by CCH
             "active": "Y",
             # "groupName": to be confirmed
-            "primaryTask": (
-                job.get("specification2_description")
-                if job.get("specification2_description")
-                else "Tax - 1040 Individual"
-            ),
+            "primaryTask": job.get("specification2_description"),
             "periodEndDate": job.get("periodenddate"),
             # "manager": to be confirmed
             # "auditManager": to be confirmed
             # "auditSenior": to be confirmed
-            # "auditPartner": to be confirmed
-            "auditStaff": (
+            "auditPartner": (
                 job.get("spec5_email") if job.get("spec5_email") else None
             ),
-            "taxPartner": (
-                job.get("employee6_email") if job.get("employee6_email") else None
-            ),
+            # "auditStaff": : to be confirmed
+            # "taxPartner": to be confirmed (Its necessary but not confirmed),
         }
 
     def _authorized_headers(self) -> dict[str, str]:
