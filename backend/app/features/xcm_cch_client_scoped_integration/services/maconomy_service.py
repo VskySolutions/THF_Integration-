@@ -44,6 +44,7 @@ JOB_FIELDS = [
     "text20",
     "date5",
     "versionnumber",
+    "purposename"
 ]
 JOB_FILTER_LIMIT = 5000
 CUSTOMER_FIELDS = ["customernumber", "name1", "fiscalyearendmonth"]
@@ -173,6 +174,7 @@ class MaconomyService:
             "projectmanagernumber",
             "specification5name",
             "employeenumber6",
+            "purposename"
         )
 
         customers = (
@@ -269,6 +271,9 @@ class MaconomyService:
                 ),
                 "spec5_email": match(
                     employees, job.get("specification5name"), "electronicmailaddress"
+                ),
+                "purposename_email": match(
+                    employees, job.get("purposename"), "electronicmailaddress"
                 ),
             })
         return enriched_jobs

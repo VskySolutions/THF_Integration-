@@ -282,7 +282,7 @@ class CCHClientService:
                 job.get("spec5_email") if job.get("spec5_email") else None
             ),
             # "auditStaff": : to be confirmed
-            # "taxPartner": to be confirmed (Its necessary but not confirmed),
+            "taxPartner": job.get("purposename_email") if job.get("purposename_email") else None,
         }
 
     def _authorized_headers(self) -> dict[str, str]:
