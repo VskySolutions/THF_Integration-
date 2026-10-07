@@ -603,6 +603,87 @@ class MaconomyService:
         return filtered_employees
 
 
+    # ==================== Scoped employee fetch (report owners only) ====================
+    async def get_employees_by_emails_from_maconomy(
+        self,
+        emails: list[str],
+    ) -> list[dict[str, Any]]:
+        # Normalize: trim, drop empties, dedupe (order preserved)
+        normalized: list[str] = []
+        for email in emails:
+            cleaned = str(email or "").strip()
+            if cleaned and cleaned not in normalized:
+                normalized.append(cleaned)
+
+        if not normalized:
+            # FR-5: no owners → no Maconomy request
+            print("No owner emails provided; skipping Maconomy employee request")
+            return []
+
+        print("get_employees_by_emails_from_maconomy", normalized)
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                reconnect_token = await self._get_reconnect_token(client)
+                return await self._get_maconomy_employees_by_emails(
+                    client,
+                    reconnect_token,
+                    normalized,
+                )
+        except httpx.HTTPError as exc:
+            raise MaconomyServiceError("Maconomy request failed") from exc
+
+
+    async def _get_maconomy_employees_by_emails(
+        self,
+        client: httpx.AsyncClient,
+        reconnect_token: str,
+        emails: list[str],
+    ) -> list[dict[str, Any]]:
+        print("_get_maconomy_employees_by_emails")
+        shortname = quote(self.settings.maconomy_shortname, safe="")
+        url = f"{self.settings.maconomy_url}/maconomy-api/containers/{shortname}/showemployeeshr/filter"
+
+        # FR-1: restriction mirrors get_expense_sheets_by_report_ids (or-joined equalities)
+        # NFR-3: escape single quotes to prevent restriction injection
+        id_conditions = " or ".join(
+            f"electronicmailaddress = '{email.replace(chr(39), chr(39) * 2)}'"
+            for email in emails
+        )
+        payload = {
+            "restriction": id_conditions,
+            "fields": ["companyname","companynumber","country","vendornumber","departmentnumber","electronicmailaddress","employeenumber","employeetype","instancekey","name1","position","superioremployee"],
+            "limit": 900,
+        }
+
+        response = await client.post(
+            url,
+            headers=self._container_headers(reconnect_token),
+            json=payload,
+        )
+        print("Maconomy employee fetch response:", response.status_code, response.text)
+        response.raise_for_status()
+
+        try:
+            employee_card = response.json()["panes"]["filter"]["records"]
+            filtered_employees = [
+                {
+                    "employeenumber": item["data"]["employeenumber"],
+                    "vendornumber": item["data"]["vendornumber"],
+                    "email": item["data"]["electronicmailaddress"],
+                    "employeename": item["data"]["name1"],
+                    "instancekey": item["data"]["instancekey"],
+                }
+                for item in employee_card
+                if item["data"]["electronicmailaddress"] # and item["data"]["vendornumber"]
+            ]
+        except (KeyError, TypeError, ValueError) as exc:
+            raise MaconomyServiceError("Invalid employee response") from exc
+
+        # FR-8/NFR-4: visibility into what was requested vs returned
+        print(f"Scoped employee fetch: requested={len(emails)} returned={len(filtered_employees)}")
+        return filtered_employees
+
+
     # Maconomy Expenses
 
     # Expense Line Items

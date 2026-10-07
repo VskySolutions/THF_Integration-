@@ -86,9 +86,17 @@ async def sync_todays_created_sap_concur_expense_reports_with_maconomy(
             detail=f"Failed to fetch new expense reports from SAP Concur: {str(exc)}",
         ) from exc
 
+    # Owners of reports advanced for creation in this sync window (FR-2)
+    owner_emails: list[str] = []
+    for report in new_expense_reports:
+        owner = str(report.get("OwnerLoginID") or "").strip()
+        if owner and owner not in owner_emails:
+            owner_emails.append(owner)
+    print("Owner emails for scoped employee fetch:", owner_emails)
+
     try:
-        print("Retrieving employees")
-        employees = await MaconomyService().get_all_employees_from_maconomy()
+        print("Retrieving employees for report owners")
+        employees = await MaconomyService().get_employees_by_emails_from_maconomy(owner_emails)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
