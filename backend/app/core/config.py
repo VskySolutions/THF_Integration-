@@ -87,7 +87,7 @@ class Settings(BaseSettings):
         "https://us2concursolutions.com"
     )
     sap_concur_api_base_url: AnyHttpUrl = AnyHttpUrl(
-        "https://us.api.concursolutions.com"
+        "https://us2.api.concursolutions.com"
     )
     sap_concur_client_id: SecretStr
     sap_concur_client_secret: SecretStr
@@ -101,6 +101,7 @@ class Settings(BaseSettings):
     scheduler_api_key: SecretStr
     scheduler_cch_interval_minutes: int = Field(default=5, ge=1)
     scheduler_caseware_interval_minutes: int = Field(default=5, ge=1)
+    scheduler_sap_concur_interval_minutes: int = Field(default=5, ge=1)
     scheduler_paycor_update_interval_minutes: int = Field(
         default=5,
         ge=1,

@@ -103,9 +103,13 @@
                     <span><span class="brand-product d-block">Integration Monitor</span><span class="brand-context d-block">THF operations</span></span>
                 </a>
                 <nav aria-label="Primary navigation">
-                    <a class="top-nav-link active" href="{{ url_for('dashboard') }}">
+                    <a class="top-nav-link {{ 'active' if request.url.path == url_for('dashboard') else '' }}" href="{{ url_for('dashboard') }}">
                         <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 13h6V4H4v9Zm0 7h6v-4H4v4Zm10 0h6v-9h-6v9Zm0-16v4h6V4h-6Z"/></svg>
                         <span>Monitoring</span>
+                    </a>
+                    <a class="top-nav-link {{ 'active' if request.url.path == url_for('user_activities') else '' }}" href="{{ url_for('user_activities') }}">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm-7 8a7 7 0 0 1 14 0"/></svg>
+                        <span>User Activities</span>
                     </a>
                 </nav>
             </div>

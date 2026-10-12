@@ -8,6 +8,10 @@ from app.features.sap_concur_integration.constants import (
 )
 from app.db.session import get_db
 from app.features.auth.dependencies import require_api_key
+from app.features.integration_services import (
+    IntegrationServiceIdentifier,
+    require_active_integration_service,
+)
 from app.features.sap_concur_integration.services.sap_concur_service import SAPConcurService
 from app.features.sap_concur_integration.schemas.sap_concur import ExpenseReportEmailRequest
 from app.features.sap_concur_integration.mappers import (
@@ -29,14 +33,6 @@ router = APIRouter(
 )
 DatabaseSession = Annotated[AsyncSession, Depends(get_db)]
 
-@router.post(
-    "/sap-concur-test", 
-    response_model=dict[str, Any]
-)
-async def sap_concur():
-    return {
-        "message": "SAP Concur Integration"
-    }
 
 @router.post(
     "/get-employee-from-maconomy",
@@ -58,6 +54,13 @@ async def get_employee(
 @router.post(
     "/sync-sap-concur-expense-reports-with-maconomy",
     response_model=list[dict[str, Any]],
+    dependencies=[
+        Depends(
+            require_active_integration_service(
+                IntegrationServiceIdentifier.MACONOMY_SAP_CONCUR_EXPENSE_SYNC
+            )
+        )
+    ],
 )
 async def sync_todays_created_sap_concur_expense_reports_with_maconomy(
     session: DatabaseSession,
@@ -94,35 +97,62 @@ async def sync_todays_created_sap_concur_expense_reports_with_maconomy(
             detail=f"Failed to fetch new expense reports from SAP Concur: {str(exc)}",
         ) from exc
 
+    # Owners of reports advanced for creation in this sync window (FR-2)
+    owner_emails: list[str] = []
+    for report in new_expense_reports:
+        owner = str(report.get("OwnerLoginID") or "").strip()
+        if owner and owner not in owner_emails:
+            owner_emails.append(owner)
+    print("Owner emails for scoped employee fetch:", owner_emails)
+
     try:
-        print("Retrieving employees")
-        employees = await MaconomyService().get_all_employees_from_maconomy()
+        print("Retrieving employees for report owners")
+        employees = await MaconomyService().get_employees_by_emails_from_maconomy(owner_emails)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to fetch Maconomy employees: {str(exc)}",
         ) from exc
 
-    # Fetch all existing expense sheets from Maconomy for duplicate detection
+    # Query Maconomy ONLY for the SAP Concur report IDs in this sync window.
+    # IDs normalized to str (write side stores str(report_id) in expensesheettext5).
+    concur_report_ids = [
+        str(report_id)
+        for report in new_expense_reports
+        if (report_id := report.get("ID"))
+    ]
     try:
-        print("Retrieving expense sheets")
-        maconomy_expense_sheets = await MaconomyService().get_all_expense_sheets_from_maconomy()
+        print("Retrieving synced expense sheets for report IDs")
+        maconomy_expense_sheets = (
+            await MaconomyService().get_expense_sheets_by_report_ids(concur_report_ids)
+            if concur_report_ids
+            else []
+        )
+        # print("maconomy_expense_sheets:",maconomy_expense_sheets)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to fetch Maconomy expense sheets: {str(exc)}",
         ) from exc
 
-    # Build a set of sap_report_id values already synced in Maconomy
+    print("Requested report IDs sent to Maconomy restriction")
+
+    # Build a set of sap_report_id values already synced in Maconomy (normalized)
     synced_report_ids = {
-        sheet["sap_report_id"]
+        str(sheet["sap_report_id"]).strip()
         for sheet in maconomy_expense_sheets
         if sheet.get("sap_report_id")
     }
+    print("Extracted synced report IDs from Maconomy:", sorted(synced_report_ids))
+    unexpected_synced_ids = sorted(synced_report_ids - set(concur_report_ids))
+    if unexpected_synced_ids:
+        print(
+            "WARNING: Maconomy returned report IDs that were NOT requested -",
+            "restriction may not be filtering:",
+            unexpected_synced_ids,
+        )
 
-    owner_employee_map = build_owner_employee_mapping(new_expense_reports, employees)
-    print("For Loop")
-    print("new_expense_reports:", new_expense_reports)
+    # print("new_expense_reports:", new_expense_reports)
     for report in new_expense_reports:
         print("For Loop")
         expense_report_id = report.get("ID")
@@ -133,13 +163,10 @@ async def sync_todays_created_sap_concur_expense_reports_with_maconomy(
                 detail="SAP Concur ReportID is required",
             )
 
-        matched_employee = owner_employee_map.get(expense_report_id)
-        print("matched_employee:", matched_employee)
-
-        if matched_employee is None:
+        # Check if expense sheet already exists in Maconomy via sap_report_id
+        if str(expense_report_id).strip() in synced_report_ids:
             skip_message = (
-                f"No matching Maconomy employee found for OwnerLoginID: "
-                f"{expense_report_login_id}"
+                "Expense sheet already exists in Maconomy (sap_report_id match)"
             )
             results.append({
                 "report_id": expense_report_id,
@@ -156,10 +183,14 @@ async def sync_todays_created_sap_concur_expense_reports_with_maconomy(
             )
             continue
 
-        # Check if expense sheet already exists in Maconomy via sap_report_id
-        if expense_report_id in synced_report_ids:
+        # Employee matching — performed only for reports not yet synced
+        matched_employee = map_owner_to_maconomy_employee(expense_report_login_id, employees)
+        # print("matched_employee:", matched_employee)
+
+        if matched_employee is None:
             skip_message = (
-                "Expense sheet already exists in Maconomy (sap_report_id match)"
+                f"No matching Maconomy employee found for OwnerLoginID: "
+                f"{expense_report_login_id}"
             )
             results.append({
                 "report_id": expense_report_id,
@@ -387,6 +418,10 @@ async def _run_create_maconomy_expense_sheet(
     mapping = None
     is_new_expensesheet = True
     expensesheet_was_reconciled = False
+    # Defensive defaults: the submission block below must never raise
+    # NameError if the creation branch shape changes.
+    expense_sheet_number = ""
+    maconomy_expense_sheet_result: dict[str, Any] = {}
 
     print("======== Maconomy service initiated =========")
 
@@ -494,7 +529,6 @@ async def _run_create_maconomy_expense_sheet(
                 user_id=user_id,
                 context_type="TRAVELER",
             )
-            print("line_item_results:", line_results)
 
         except MaconomyServiceError as exc:
             # Report-level: shared setup failed before any line was processed.
@@ -590,6 +624,124 @@ async def _run_create_maconomy_expense_sheet(
             f"Failed to write integration log for report {report_id}: {log_exc}"
         )
 
+    # --- Submit expense sheet for approval (FR-1 / FR-4) ---
+    submission: dict[str, Any] = {
+        "expense_sheet_number": expense_sheet_number,
+        "submitted": False,
+        "status": "SKIPPED",
+        "message": "",
+    }
+
+    if not expense_sheet_number:
+        submission["message"] = "Submission skipped: no expense sheet number"
+    elif failure_count > 0:
+        submission["message"] = (
+            f"Submission skipped: {failure_count}/{total} expense line(s) failed"
+        )
+    else:
+        try:
+            submission = await maconomy_service.submit_expense_sheet(
+                expense_sheet_number
+            )
+        except MaconomyServiceError as exc:
+            submission.update(
+                {"submitted": False, "status": "FAILED", "message": str(exc)}
+            )
+        except Exception as exc:  # never reach the outer catch-all (R3)
+            submission.update(
+                {"submitted": False, "status": "FAILED", "message": str(exc)}
+            )
+
+    # --- Exactly one submission log row (FR-3, action=UPDATE, no migration) ---
+    submit_log_status = {
+        "SUBMITTED": IntegrationStatus.SUCCESS,
+        "ALREADY_SUBMITTED": IntegrationStatus.SKIPPED,
+        "FAILED": IntegrationStatus.FAILED,
+        "SKIPPED": IntegrationStatus.SKIPPED,
+    }.get(str(submission.get("status", "")), IntegrationStatus.FAILED)
+    submit_log_message = (
+        f"Expense sheet {expense_sheet_number or 'N/A'} submission: "
+        f"{submission.get('status', '')} - {submission.get('message', '')}"
+    )
+    try:
+        await integration_log_service.create_log(
+            session,
+            mapping_id=mapping.id if mapping else None,
+            report_id=report_id,
+            status=submit_log_status,
+            action=IntegrationAction.UPDATE,
+            message=submit_log_message,
+            employeeemail=employee_email,
+        )
+    except Exception as log_exc:
+        print(
+            f"Failed to write submission log for report {report_id}: {log_exc}"
+        )
+
+    # --- Approve expense sheet (Req[#6] FR-10 / FR-11) ---
+    approval: dict[str, Any] = {
+        "expense_sheet_number": expense_sheet_number,
+        "approved": False,
+        "status": "SKIPPED",
+        "message": "",
+    }
+
+    if not expense_sheet_number:
+        approval["message"] = "Approval skipped: no expense sheet number"
+    elif failure_count > 0:
+        approval["message"] = (
+            f"Approval skipped: {failure_count}/{total} expense line(s) failed"
+        )
+    elif str(submission.get("status", "")) not in {
+        "SUBMITTED",
+        "ALREADY_SUBMITTED",
+    }:
+        approval["message"] = (
+            "Approval skipped: submission status "
+            f"{submission.get('status', '')}"
+        )
+    else:
+        try:
+            approval = await maconomy_service.approve_expense_sheet(
+                expense_sheet_number
+            )
+        except MaconomyServiceError as exc:
+            approval.update(
+                {"approved": False, "status": "FAILED", "message": str(exc)}
+            )
+        except Exception as exc:  # never reach the outer catch-all (R4)
+            approval.update(
+                {"approved": False, "status": "FAILED", "message": str(exc)}
+            )
+
+    # --- Exactly one approval log row (FR-12, action=CREATE, no migration) ---
+    approve_log_status = {
+        "APPROVED": IntegrationStatus.SUCCESS,
+        "ALREADY_APPROVED": IntegrationStatus.SKIPPED,
+        "FAILED": IntegrationStatus.FAILED,
+        "SKIPPED": IntegrationStatus.SKIPPED,
+    }.get(str(approval.get("status", "")), IntegrationStatus.FAILED)
+    approve_log_message = (
+        f"Expense sheet {expense_sheet_number or 'N/A'} approval: "
+        f"{approval.get('status', '')} - {approval.get('message', '')}"
+    )
+    try:
+        await integration_log_service.create_log(
+            session,
+            mapping_id=mapping.id if mapping else None,
+            report_id=report_id,
+            status=approve_log_status,
+            action=IntegrationAction.CREATE,
+            message=approve_log_message,
+            employeeemail=employee_email,
+        )
+    except Exception as log_exc:
+        print(
+            f"Failed to write approval log for report {report_id}: {log_exc}"
+        )
+
+    maconomy_expense_sheet_result["submission"] = submission
+    maconomy_expense_sheet_result["approval"] = approval
     return maconomy_expense_sheet_result
 
 
@@ -676,24 +828,6 @@ def map_owner_to_maconomy_employee(
                 "employeename": employee.get("employeename", ""),
             }
     return None
-
-
-def build_owner_employee_mapping(
-    new_expense_reports: list[dict[str, Any]],
-    employees: list[dict[str, Any]],
-) -> dict[str, dict[str, Any] | None]:
-    """Pre-compute the OwnerLoginID-to-Maconomy-employee mapping for all reports."""
-    mapping: dict[str, dict[str, Any] | None] = {}
-    
-    for report in new_expense_reports:
-        report_id = report.get("ID")
-        owner_login_id = report.get("OwnerLoginID")
-        if report_id:
-            mapping[report_id] = map_owner_to_maconomy_employee(
-                owner_login_id, employees
-            )
-    return mapping
-
 
 
 # @router.post(

@@ -21,6 +21,9 @@ from app.features.maconomy_caseware_cloud_intergration.models import (
     MaconomyCasewareRequestLog,
 )
 from app.features.paycor_integration.models import PaycorIntegrationLog
+from app.features.sap_concur_integration.models import SAPConcurIntegrationLog
+from app.features.user_activity.models import UserActivityLog
+from app.features.user_activity.services import log_activity
 from app.features.xcm_cch_axcess_integration.models import XCMCCHIntegrationRunLog
 from app.features.xcm_cch_client_scoped_integration.models import (
     XCMCCHClientScopedRunLog,
@@ -110,6 +113,14 @@ async def update_integration_status(
     integration.is_active = is_active
     integration.updated_on_utc = func.now()
     await session.commit()
+
+    await log_activity(
+        session,
+        action="enabled_service" if is_active else "disabled_service",
+        user=current_user.username,
+        service=integration.identifier_unique_name,
+        status="SUCCESS",
+    )
 
     state = "activated" if is_active else "inactivated"
     request.session["flash_message"] = (
@@ -215,6 +226,14 @@ async def sync_caseware_job(
                 json=request_payload,
             )
     except httpx.RequestError:
+        await log_activity(
+            session,
+            action="manual_retry",
+            user=current_user.username,
+            service=integration.identifier_unique_name,
+            data={"job_number": normalized_job_number, "integration_id": str(integration.id)},
+            status="FAILED",
+        )
         _set_flash(
             request,
             "The integration API could not be reached. Please try again.",
@@ -279,6 +298,14 @@ async def sync_caseware_job(
             "successfully."
         )
 
+    await log_activity(
+        session,
+        action="manual_retry",
+        user=current_user.username,
+        service=integration.identifier_unique_name,
+        data={"job_number": normalized_job_number, "integration_id": str(integration.id)},
+        status="SUCCESS",
+    )
     _set_flash(request, success_message, "success")
     return redirect
 
@@ -307,6 +334,14 @@ async def integration_logs(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Integration service not found.",
         )
+
+    await log_activity(
+        session,
+        action="opened_monitoring",
+        user=current_user.username,
+        service=integration.identifier_unique_name,
+    )
+
     flash_message = request.session.pop("flash_message", None)
     flash_category = request.session.pop("flash_category", "success")
 
@@ -506,6 +541,56 @@ async def integration_logs(
             },
         )
 
+    if (
+        integration.identifier_unique_name
+        == IntegrationServiceIdentifier.MACONOMY_SAP_CONCUR_EXPENSE_SYNC.value
+    ):
+        log_result = await session.execute(
+            select(SAPConcurIntegrationLog)
+            .options(
+                selectinload(SAPConcurIntegrationLog.expensesheet_expensereport_mapping)
+            )
+            .order_by(SAPConcurIntegrationLog.created_on_utc.desc())
+            .limit(1000)
+        )
+        activity_logs = list(log_result.scalars().all())
+        successful_logs = sum(
+            log.status.value == "SUCCESS" for log in activity_logs
+        )
+        total_logs = len(activity_logs)
+
+        return templates.TemplateResponse(
+            request=request,
+            name="sap_concur_dashboard.html",
+            context={
+                "current_user": current_user,
+                "csrf_token": ensure_csrf_token(request),
+                "integration": integration,
+                "activity_logs": activity_logs,
+                "metrics": {
+                    "total_activity": total_logs,
+                    "success_rate": (
+                        round(successful_logs / total_logs * 100, 1)
+                        if total_logs
+                        else 0
+                    ),
+                    "created": sum(
+                        log.action.value == "CREATE"
+                        for log in activity_logs
+                    ),
+                    "failed": sum(
+                        log.status.value == "FAILED"
+                        for log in activity_logs
+                    ),
+                    "latest_activity": (
+                        activity_logs[0] if activity_logs else None
+                    ),
+                },
+                "flash_message": flash_message,
+                "flash_category": flash_category,
+            },
+        )
+
     return templates.TemplateResponse(
         request=request,
         name="integration_logs_pending.html",
@@ -560,6 +645,55 @@ async def caseware_run_jobs(
         "request_id": str(request_id),
         "jobs": [_caseware_job_log_payload(log) for log in logs],
     }
+
+
+@router.get(
+    "/user-activities",
+    response_class=HTMLResponse,
+    name="user_activities",
+    include_in_schema=False,
+)
+async def user_activities(
+    request: Request,
+    current_user: AuthenticatedUser,
+    session: Annotated[AsyncSession, Depends(get_db)],
+    user: str | None = None,
+) -> HTMLResponse:
+    flash_message = request.session.pop("flash_message", None)
+    flash_category = request.session.pop("flash_category", "success")
+
+    query = select(UserActivityLog).order_by(UserActivityLog.created_on_utc.desc())
+    if user:
+        query = query.where(UserActivityLog.user == user)
+    result = await session.execute(query.limit(500))
+    activity_logs = list(result.scalars().all())
+
+    distinct_result = await session.execute(
+        select(UserActivityLog.user)
+        .where(
+            ~(
+                (UserActivityLog.action == "login")
+                & (UserActivityLog.status == "FAILED")
+            )
+        )
+        .distinct()
+        .order_by(UserActivityLog.user)
+    )
+    distinct_users = [row[0] for row in distinct_result.all()]
+
+    return templates.TemplateResponse(
+        request=request,
+        name="user_activities.html",
+        context={
+            "current_user": current_user,
+            "csrf_token": ensure_csrf_token(request),
+            "activity_logs": activity_logs,
+            "distinct_users": distinct_users,
+            "selected_user": user,
+            "flash_message": flash_message,
+            "flash_category": flash_category,
+        },
+    )
 
 
 def _detail_count(log: MaconomyCasewareRequestLog, key: str) -> int:

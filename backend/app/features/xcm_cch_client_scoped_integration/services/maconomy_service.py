@@ -44,6 +44,7 @@ JOB_FIELDS = [
     "text20",
     "date5",
     "versionnumber",
+    "purposename"
 ]
 JOB_FILTER_LIMIT = 5000
 CUSTOMER_FIELDS = ["customernumber", "name1", "fiscalyearendmonth"]
@@ -68,6 +69,10 @@ MONTH_NAME_TO_NUMBER.update(
 
 class MaconomyServiceError(Exception):
     """Raised when Maconomy authentication or job discovery fails."""
+
+
+class MaconomyVersionConflictError(MaconomyServiceError):
+    """Raised when the Maconomy job version changed since discovery."""
 
 
 class MaconomyService:
@@ -173,6 +178,7 @@ class MaconomyService:
             "projectmanagernumber",
             "specification5name",
             "employeenumber6",
+            "purposename"
         )
 
         customers = (
@@ -270,6 +276,9 @@ class MaconomyService:
                 "spec5_email": match(
                     employees, job.get("specification5name"), "electronicmailaddress"
                 ),
+                "purposename_email": match(
+                    employees, job.get("purposename"), "electronicmailaddress"
+                ),
             })
         return enriched_jobs
 
@@ -356,12 +365,39 @@ class MaconomyService:
         period_end_date: str,
         task_id: str | None,
     ) -> int:
+        try:
+            return await self._attempt_job_cch_log(
+                job_number=job_number,
+                expected_version=source_version,
+                period_end_date=period_end_date,
+                task_id=task_id,
+            )
+        except MaconomyVersionConflictError:
+            return await self._attempt_job_cch_log(
+                job_number=job_number,
+                expected_version=None,
+                period_end_date=period_end_date,
+                task_id=task_id,
+            )
+
+    async def _attempt_job_cch_log(
+        self,
+        *,
+        job_number: str,
+        expected_version: int | None,
+        period_end_date: str,
+        task_id: str | None,
+    ) -> int:
         job, instance_id, concurrency_token = await self._bind_job(job_number)
         current_version = self._parse_version(job.get("versionnumber"))
-        if current_version != source_version:
-            raise MaconomyServiceError(
-                f"Maconomy job {job_number} changed before its CCH log could be saved"
-            )
+        if expected_version is None:
+            source_version = current_version
+        else:
+            source_version = expected_version
+            if current_version != source_version:
+                raise MaconomyVersionConflictError(
+                    f"Maconomy job {job_number} changed before its CCH log could be saved"
+                )
 
         if task_id is not None:
             current_task_id = job.get("text20")

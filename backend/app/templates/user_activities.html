@@ -1,0 +1,199 @@
+{% extends "base.html" %}
+
+{% block title %}User Activities{% endblock %}
+
+{% block head %}
+<link href="https://cdn.datatables.net/v/bs5/dt-3.1.2/datatables.min.css" rel="stylesheet">
+<style>
+    .filter-card { min-height: 5rem; }
+    .message-cell { max-width: 30rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .detail-label { color: var(--falcon-muted); font-size: .7rem; font-weight: 750; letter-spacing: .05em; text-transform: uppercase; }
+    .detail-value { color: var(--falcon-ink); overflow-wrap: anywhere; }
+    .detail-message { background: #f7f9fc; border: 1px solid var(--falcon-border); border-radius: .6rem; min-height: 5rem; padding: .9rem; white-space: pre-wrap; }
+    .modal-section + .modal-section { border-top: 1px solid var(--falcon-border); margin-top: 1.25rem; padding-top: 1.25rem; }
+    .user-filter-menu { max-height: 20rem; overflow-y: auto; }
+    .user-filter-item { border-radius: .4rem; font-size: .85rem; padding: .45rem .7rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .user-filter-item.active-filter { background: var(--falcon-blue-soft); color: var(--falcon-blue); font-weight: 650; }
+</style>
+{% endblock %}
+
+{% block body %}
+<main class="container-fluid content-shell py-4 py-lg-5">
+    <nav aria-label="breadcrumb" class="mb-3">
+        <ol class="breadcrumb">
+            <li class="breadcrumb-item"><a href="{{ url_for('dashboard') }}">Monitoring</a></li>
+            <li class="breadcrumb-item active" aria-current="page">User Activities</li>
+        </ol>
+    </nav>
+
+    <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-end gap-3 mb-4">
+        <div>
+            <div class="page-kicker mb-2">Audit trail</div>
+            <h1 class="page-title mb-1">User Activities</h1>
+            <p class="text-secondary mb-0">Track user actions across the monitoring dashboard.</p>
+        </div>
+    </div>
+
+    {% if flash_message %}
+    <div class="alert alert-{{ flash_category }} alert-dismissible fade show" role="alert">
+        {{ flash_message }}
+        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+    </div>
+    {% endif %}
+
+    <div class="row g-3 mb-4">
+        <div class="col-md-6 col-xl-4">
+            <form method="get" action="{{ url_for('user_activities') }}" class="d-flex gap-2" id="userFilterForm">
+                <input type="hidden" name="user" id="userFilterValue" value="{{ selected_user or '' }}">
+                <div class="dropdown flex-grow-1" id="userFilterDropdown">
+                    <button class="btn btn-outline-secondary dropdown-toggle w-100 text-start d-flex align-items-center justify-content-between"
+                            type="button" data-bs-toggle="dropdown" data-bs-auto-close="outside"
+                            aria-expanded="false" id="userFilterButton">
+                        <span class="text-truncate flex-grow-1 text-start" id="userFilterLabel">{{ selected_user or 'All users' }}</span>
+                    </button>
+                    <div class="dropdown-menu p-2 user-filter-menu" style="min-width: 100%;">
+                        <input type="text" class="form-control mb-2" id="userFilterSearch"
+                               placeholder="Search users..." autocomplete="off" aria-label="Search users">
+                        <div id="userFilterList">
+                            <button type="button" class="dropdown-item user-filter-item" data-value="">All users</button>
+                            {% for u in distinct_users %}
+                            <button type="button" class="dropdown-item user-filter-item" data-value="{{ u }}">{{ u }}</button>
+                            {% endfor %}
+                        </div>
+                        <div class="text-secondary small py-2 text-center d-none" id="userFilterEmpty">No matching users</div>
+                    </div>
+                </div>
+                <button type="submit" class="btn btn-primary">Filter</button>
+                {% if selected_user %}
+                <a href="{{ url_for('user_activities') }}" class="btn btn-outline-secondary">Clear</a>
+                {% endif %}
+            </form>
+        </div>
+    </div>
+
+    <section class="card rounded-3">
+        <div class="card-body p-3 p-md-4">
+            <div class="table-responsive">
+                <table id="userActivitiesTable" class="table table-hover align-middle w-100">
+                    <thead><tr><th>Time (UTC)</th><th>User</th><th>Action</th><th>Service</th><th>Status</th><th>Details</th></tr></thead>
+                    <tbody>
+                    {% for log in activity_logs %}
+                    <tr>
+                        <td data-order="{{ log.created_on_utc.isoformat() }}">{{ log.created_on_utc.strftime('%d %b %Y, %H:%M:%S') }}</td>
+                        <td class="fw-semibold">{{ log.user }}</td>
+                        <td><span class="badge {{ 'text-bg-primary' if log.action in ['login', 'manual_retry'] else 'text-bg-secondary' if log.action == 'logout' else 'text-bg-info' if log.action == 'opened_monitoring' else 'text-bg-success' if log.action == 'enabled_service' else 'text-bg-warning' }}">{{ log.action | replace('_', ' ') | title }}</span></td>
+                        <td>{{ log.service or '—' }}</td>
+                        <td>
+                            {% if log.status %}
+                            <span class="badge {{ 'text-bg-success' if log.status == 'SUCCESS' else 'text-bg-danger' }}">{{ log.status }}</span>
+                            {% else %}
+                            —
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if log.data %}
+                            <button type="button" class="btn btn-sm btn-outline-secondary view-activity-detail"
+                                    data-bs-toggle="modal" data-bs-target="#activityDetailModal"
+                                    data-user="{{ log.user }}"
+                                    data-action="{{ log.action | replace('_', ' ') | title }}"
+                                    data-service="{{ log.service or '—' }}"
+                                    data-status="{{ log.status or '—' }}"
+                                    data-data="{{ log.data | tojson }}">
+                                View details
+                            </button>
+                            {% else %}
+                            —
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+</main>
+
+<div class="modal fade" id="activityDetailModal" tabindex="-1" aria-labelledby="activityDetailModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable"><div class="modal-content">
+        <div class="modal-header"><div><div class="page-kicker mb-1">Activity detail</div><h2 class="modal-title fs-5" id="activityDetailModalLabel">User activity detail</h2></div><button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button></div>
+        <div class="modal-body p-4">
+            <section class="modal-section mt-0 pt-0 border-0">
+                <h3 class="h6 fw-bold mb-3">Operation</h3>
+                <div class="row g-3">
+                    <div class="col-sm-6"><div class="detail-label">User</div><div class="detail-value mt-1" id="detailUser"></div></div>
+                    <div class="col-sm-3"><div class="detail-label">Action</div><div class="detail-value mt-1" id="detailAction"></div></div>
+                    <div class="col-sm-3"><div class="detail-label">Status</div><div class="detail-value mt-1" id="detailStatus"></div></div>
+                </div>
+            </section>
+            <section class="modal-section">
+                <h3 class="h6 fw-bold mb-3">Details</h3>
+                <div class="detail-message" id="detailData"></div>
+            </section>
+        </div>
+        <div class="modal-footer"><button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Close</button></div>
+    </div></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.datatables.net/v/bs5/dt-3.1.2/datatables.min.js"></script>
+<script>
+    $(function () {
+        $('#userActivitiesTable').DataTable({
+            order: [[0, 'desc']], pageLength: 10,
+            layout: { topStart: { pageLength: {} }, topEnd: { search: { placeholder: 'Search activities' } }, bottomStart: 'info', bottomEnd: 'paging' },
+            language: { emptyTable: 'No user activities have been logged yet.', search: '' }
+        });
+        $('#userActivitiesTable').on('click', '.view-activity-detail', function () {
+            const button = $(this);
+            $('#detailUser').text(button.attr('data-user'));
+            $('#detailAction').text(button.attr('data-action'));
+            $('#detailStatus').text(button.attr('data-status'));
+            $('#detailData').text(button.attr('data-data'));
+        });
+
+        const $filterDropdown = $('#userFilterDropdown');
+        const $filterSearch = $('#userFilterSearch');
+        const $filterValue = $('#userFilterValue');
+        const $filterLabel = $('#userFilterLabel');
+
+        function markActiveFilterItem() {
+            $('#userFilterList .user-filter-item').removeClass('active-filter');
+            $('#userFilterList .user-filter-item').filter(function () {
+                return $(this).data('value') === ($filterValue.val() || '');
+            }).addClass('active-filter');
+        }
+        markActiveFilterItem();
+
+        function filterUserItems() {
+            const key = $filterSearch.val().trim().toLowerCase();
+            let visible = 0;
+            $('#userFilterList .user-filter-item').each(function () {
+                const match = $(this).text().toLowerCase().includes(key);
+                $(this).toggleClass('d-none', !match);
+                if (match) { visible += 1; }
+            });
+            $('#userFilterEmpty').toggleClass('d-none', visible > 0);
+        }
+
+        $filterSearch.on('input', filterUserItems);
+
+        $filterDropdown.on('show.bs.dropdown', function () {
+            $filterSearch.val('');
+            filterUserItems();
+        });
+        $filterDropdown.on('shown.bs.dropdown', function () {
+            $filterSearch.trigger('focus');
+        });
+
+        $('#userFilterList').on('click', '.user-filter-item', function () {
+            const value = String($(this).data('value') || '');
+            $filterValue.val(value);
+            $filterLabel.text(value || 'All users');
+            markActiveFilterItem();
+            bootstrap.Dropdown.getOrCreateInstance($('#userFilterButton')[0]).hide();
+        });
+    });
+</script>
+{% endblock %}

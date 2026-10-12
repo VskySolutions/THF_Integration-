@@ -19,11 +19,9 @@ def map_concur_expense_report_to_maconomy_expensesheet(
     return {
         "data": {
             "description": str(report_name),
+            "expensesheettext1": str(business_purpose),
             "expensesheettext5": str(report_id),
             "employeenumber": str(employee_number) if employee_number else "",
-            
-            # "expensesheetnumber": str(report_id),
-            # "purposedescriptionvar": str(business_purpose),
             # "approvalstatus": str(approval_status),
         },
         "offset":0,"limit":100
