@@ -1,3 +1,4 @@
+import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Form, Request, status
@@ -14,6 +15,7 @@ from app.authentication.security import (
     verify_password,
 )
 from app.db.session import get_db
+from app.features.user_activity.services import log_activity
 from app.web.templating import templates
 
 router = APIRouter(tags=["dashboard authentication"])
@@ -68,6 +70,12 @@ async def log_in(
     stored_hash = user.password_hash if user is not None else DUMMY_PASSWORD_HASH
 
     if user is None or not verify_password(password, stored_hash):
+        await log_activity(
+            session,
+            action="login",
+            user=identifier,
+            status="FAILED",
+        )
         return templates.TemplateResponse(
             request=request,
             name="login.html",
@@ -82,6 +90,12 @@ async def log_in(
     request.session.clear()
     request.session["user_id"] = str(user.id)
     ensure_csrf_token(request)
+    await log_activity(
+        session,
+        action="login",
+        user=user.username,
+        status="SUCCESS",
+    )
     return RedirectResponse(
         request.url_for("dashboard"), status_code=status.HTTP_303_SEE_OTHER
     )
@@ -91,11 +105,26 @@ async def log_in(
 async def log_out(
     request: Request,
     csrf_token: Annotated[str, Form(min_length=1)],
+    session: Annotated[AsyncSession, Depends(get_db)],
 ) -> RedirectResponse:
     if not valid_csrf_token(request, csrf_token):
         return RedirectResponse(
             request.url_for("dashboard"), status_code=status.HTTP_303_SEE_OTHER
         )
+
+    user_id = request.session.get("user_id")
+    if user_id:
+        result = await session.execute(
+            select(User).where(User.id == uuid.UUID(user_id))
+        )
+        user = result.scalar_one_or_none()
+        if user:
+            await log_activity(
+                session,
+                action="logout",
+                user=user.username,
+                status="SUCCESS",
+            )
 
     request.session.clear()
     return RedirectResponse(

@@ -101,6 +101,7 @@ class Settings(BaseSettings):
     scheduler_api_key: SecretStr
     scheduler_cch_interval_minutes: int = Field(default=5, ge=1)
     scheduler_caseware_interval_minutes: int = Field(default=5, ge=1)
+    scheduler_sap_concur_interval_minutes: int = Field(default=5, ge=1)
     scheduler_paycor_update_interval_minutes: int = Field(
         default=5,
         ge=1,

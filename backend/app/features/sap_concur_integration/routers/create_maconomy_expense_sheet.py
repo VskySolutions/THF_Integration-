@@ -8,6 +8,10 @@ from app.features.sap_concur_integration.constants import (
 )
 from app.db.session import get_db
 from app.features.auth.dependencies import require_api_key
+from app.features.integration_services import (
+    IntegrationServiceIdentifier,
+    require_active_integration_service,
+)
 from app.features.sap_concur_integration.services.sap_concur_service import SAPConcurService
 from app.features.sap_concur_integration.schemas.sap_concur import ExpenseReportEmailRequest
 from app.features.sap_concur_integration.mappers import (
@@ -50,6 +54,13 @@ async def get_employee(
 @router.post(
     "/sync-sap-concur-expense-reports-with-maconomy",
     response_model=list[dict[str, Any]],
+    dependencies=[
+        Depends(
+            require_active_integration_service(
+                IntegrationServiceIdentifier.MACONOMY_SAP_CONCUR_EXPENSE_SYNC
+            )
+        )
+    ],
 )
 async def sync_todays_created_sap_concur_expense_reports_with_maconomy(
     session: DatabaseSession,

@@ -274,8 +274,11 @@ update.
 `text20` receives the CCH `taskId` only when task creation succeeds.
 
 Before writing, the integration confirms that the Maconomy job
-`versionnumber` has not changed. After writing, it reads the job again and
-verifies the version and saved values.
+`versionnumber` has not changed since discovery. If it changed, the writeback
+is retried once: the job is re-bound, the freshly read `versionnumber` becomes
+the expected version, and the write must still increase that version by one.
+If the retry also fails, the job is marked failed. After writing, the
+integration reads the job again and verifies the version and saved values.
 
 Each response job reports `maconomywritebackstatus` as `updated`, `failed`, or
 `skipped`. This status is returned by the API and is not stored in a Maconomy
