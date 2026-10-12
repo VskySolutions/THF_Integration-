@@ -14,6 +14,7 @@ from app.features.paycor_integration.mappers import (
 )
 
 
+
 class PaycorServiceError(Exception):
     """Raised when Paycor employee data cannot be retrieved."""
 
@@ -753,3 +754,6 @@ class PaycorService:
 
         except ValueError:
             return None
+        
+        
+    
