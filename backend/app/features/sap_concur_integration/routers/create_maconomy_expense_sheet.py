@@ -740,8 +740,8 @@ async def _run_create_maconomy_expense_sheet(
             f"Failed to write approval log for report {report_id}: {log_exc}"
         )
 
-    maconomy_expense_sheet_result["submission"] = submission
-    maconomy_expense_sheet_result["approval"] = approval
+    maconomy_expense_sheet_result["submitted"] = bool(submission.get("submitted"))
+    maconomy_expense_sheet_result["approved"] = bool(approval.get("approved"))
     return maconomy_expense_sheet_result
 
 
