@@ -11,6 +11,9 @@
     .detail-value { color: var(--falcon-ink); overflow-wrap: anywhere; }
     .detail-message { background: #f7f9fc; border: 1px solid var(--falcon-border); border-radius: .6rem; min-height: 5rem; padding: .9rem; white-space: pre-wrap; }
     .modal-section + .modal-section { border-top: 1px solid var(--falcon-border); margin-top: 1.25rem; padding-top: 1.25rem; }
+    .user-filter-menu { max-height: 20rem; overflow-y: auto; }
+    .user-filter-item { border-radius: .4rem; font-size: .85rem; padding: .45rem .7rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .user-filter-item.active-filter { background: var(--falcon-blue-soft); color: var(--falcon-blue); font-weight: 650; }
 </style>
 {% endblock %}
 
@@ -40,13 +43,26 @@
 
     <div class="row g-3 mb-4">
         <div class="col-md-6 col-xl-4">
-            <form method="get" action="{{ url_for('user_activities') }}" class="d-flex gap-2">
-                <select name="user" class="form-select" aria-label="Filter by user">
-                    <option value="">All users</option>
-                    {% for u in distinct_users %}
-                    <option value="{{ u }}" {{ 'selected' if selected_user == u else '' }}>{{ u }}</option>
-                    {% endfor %}
-                </select>
+            <form method="get" action="{{ url_for('user_activities') }}" class="d-flex gap-2" id="userFilterForm">
+                <input type="hidden" name="user" id="userFilterValue" value="{{ selected_user or '' }}">
+                <div class="dropdown flex-grow-1" id="userFilterDropdown">
+                    <button class="btn btn-outline-secondary dropdown-toggle w-100 text-start d-flex align-items-center justify-content-between"
+                            type="button" data-bs-toggle="dropdown" data-bs-auto-close="outside"
+                            aria-expanded="false" id="userFilterButton">
+                        <span class="text-truncate flex-grow-1 text-start" id="userFilterLabel">{{ selected_user or 'All users' }}</span>
+                    </button>
+                    <div class="dropdown-menu p-2 user-filter-menu" style="min-width: 100%;">
+                        <input type="text" class="form-control mb-2" id="userFilterSearch"
+                               placeholder="Search users..." autocomplete="off" aria-label="Search users">
+                        <div id="userFilterList">
+                            <button type="button" class="dropdown-item user-filter-item" data-value="">All users</button>
+                            {% for u in distinct_users %}
+                            <button type="button" class="dropdown-item user-filter-item" data-value="{{ u }}">{{ u }}</button>
+                            {% endfor %}
+                        </div>
+                        <div class="text-secondary small py-2 text-center d-none" id="userFilterEmpty">No matching users</div>
+                    </div>
+                </div>
                 <button type="submit" class="btn btn-primary">Filter</button>
                 {% if selected_user %}
                 <a href="{{ url_for('user_activities') }}" class="btn btn-outline-secondary">Clear</a>
@@ -125,7 +141,7 @@
 <script>
     $(function () {
         $('#userActivitiesTable').DataTable({
-            order: [[0, 'desc']], pageLength: 25,
+            order: [[0, 'desc']], pageLength: 10,
             layout: { topStart: { pageLength: {} }, topEnd: { search: { placeholder: 'Search activities' } }, bottomStart: 'info', bottomEnd: 'paging' },
             language: { emptyTable: 'No user activities have been logged yet.', search: '' }
         });
@@ -135,6 +151,48 @@
             $('#detailAction').text(button.attr('data-action'));
             $('#detailStatus').text(button.attr('data-status'));
             $('#detailData').text(button.attr('data-data'));
+        });
+
+        const $filterDropdown = $('#userFilterDropdown');
+        const $filterSearch = $('#userFilterSearch');
+        const $filterValue = $('#userFilterValue');
+        const $filterLabel = $('#userFilterLabel');
+
+        function markActiveFilterItem() {
+            $('#userFilterList .user-filter-item').removeClass('active-filter');
+            $('#userFilterList .user-filter-item').filter(function () {
+                return $(this).data('value') === ($filterValue.val() || '');
+            }).addClass('active-filter');
+        }
+        markActiveFilterItem();
+
+        function filterUserItems() {
+            const key = $filterSearch.val().trim().toLowerCase();
+            let visible = 0;
+            $('#userFilterList .user-filter-item').each(function () {
+                const match = $(this).text().toLowerCase().includes(key);
+                $(this).toggleClass('d-none', !match);
+                if (match) { visible += 1; }
+            });
+            $('#userFilterEmpty').toggleClass('d-none', visible > 0);
+        }
+
+        $filterSearch.on('input', filterUserItems);
+
+        $filterDropdown.on('show.bs.dropdown', function () {
+            $filterSearch.val('');
+            filterUserItems();
+        });
+        $filterDropdown.on('shown.bs.dropdown', function () {
+            $filterSearch.trigger('focus');
+        });
+
+        $('#userFilterList').on('click', '.user-filter-item', function () {
+            const value = String($(this).data('value') || '');
+            $filterValue.val(value);
+            $filterLabel.text(value || 'All users');
+            markActiveFilterItem();
+            bootstrap.Dropdown.getOrCreateInstance($('#userFilterButton')[0]).hide();
         });
     });
 </script>

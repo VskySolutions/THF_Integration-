@@ -669,7 +669,15 @@ async def user_activities(
     activity_logs = list(result.scalars().all())
 
     distinct_result = await session.execute(
-        select(UserActivityLog.user).distinct().order_by(UserActivityLog.user)
+        select(UserActivityLog.user)
+        .where(
+            ~(
+                (UserActivityLog.action == "login")
+                & (UserActivityLog.status == "FAILED")
+            )
+        )
+        .distinct()
+        .order_by(UserActivityLog.user)
     )
     distinct_users = [row[0] for row in distinct_result.all()]
 
