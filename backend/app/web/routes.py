@@ -34,7 +34,7 @@ router = APIRouter(tags=["dashboard"])
 
 _PAYCOR_INTEGRATION_IDENTIFIERS = {
     "PAYCOR_SYNC_EMPLOYEES",
-    IntegrationServiceIdentifier.PAYCOR_SYNC_ONBOARDING_EMPLOYEES.value,
+    IntegrationServiceIdentifier.PAYCOR_SYNC_EMPLOYEES.value,
 }
 
 
