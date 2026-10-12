@@ -92,9 +92,23 @@ async def sync_todays_created_sap_concur_expense_reports_with_maconomy(
             ]
 
     except Exception as exc:
+        detail = f"Failed to fetch new expense reports from SAP Concur: {str(exc)}"
+        try:
+            await _save_integration_log(
+                session,
+                report_id="N/A",
+                action=IntegrationAction.CREATE,
+                integration_status=IntegrationStatus.FAILED,
+                message=detail,
+            )
+        except Exception as log_exc:
+            print(
+                f"Failed to write integration log for Concur report fetch "
+                f"failure (non-fatal): {log_exc}"
+            )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to fetch new expense reports from SAP Concur: {str(exc)}",
+            detail=detail,
         ) from exc
 
     # Owners of reports advanced for creation in this sync window (FR-2)
@@ -109,9 +123,23 @@ async def sync_todays_created_sap_concur_expense_reports_with_maconomy(
         print("Retrieving employees for report owners")
         employees = await MaconomyService().get_employees_by_emails_from_maconomy(owner_emails)
     except Exception as exc:
+        detail = f"Failed to fetch Maconomy employees: {str(exc)}"
+        try:
+            await _save_integration_log(
+                session,
+                report_id="N/A",
+                action=IntegrationAction.CREATE,
+                integration_status=IntegrationStatus.FAILED,
+                message=detail,
+            )
+        except Exception as log_exc:
+            print(
+                f"Failed to write integration log for Maconomy employee fetch "
+                f"failure (non-fatal): {log_exc}"
+            )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to fetch Maconomy employees: {str(exc)}",
+            detail=detail,
         ) from exc
 
     # Query Maconomy ONLY for the SAP Concur report IDs in this sync window.
@@ -130,9 +158,23 @@ async def sync_todays_created_sap_concur_expense_reports_with_maconomy(
         )
         # print("maconomy_expense_sheets:",maconomy_expense_sheets)
     except Exception as exc:
+        detail = f"Failed to fetch Maconomy expense sheets: {str(exc)}"
+        try:
+            await _save_integration_log(
+                session,
+                report_id="N/A",
+                action=IntegrationAction.CREATE,
+                integration_status=IntegrationStatus.FAILED,
+                message=detail,
+            )
+        except Exception as log_exc:
+            print(
+                f"Failed to write integration log for Maconomy expense sheet "
+                f"fetch failure (non-fatal): {log_exc}"
+            )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to fetch Maconomy expense sheets: {str(exc)}",
+            detail=detail,
         ) from exc
 
     print("Requested report IDs sent to Maconomy restriction")
@@ -158,6 +200,23 @@ async def sync_todays_created_sap_concur_expense_reports_with_maconomy(
         expense_report_id = report.get("ID")
         expense_report_login_id = report.get("OwnerLoginID")
         if not expense_report_id:
+            missing_id_message = (
+                "SAP Concur report in sync window is missing a report ID"
+            )
+            try:
+                await _save_integration_log(
+                    session,
+                    report_id="N/A",
+                    action=IntegrationAction.CREATE,
+                    integration_status=IntegrationStatus.FAILED,
+                    message=missing_id_message,
+                    employeeemail=expense_report_login_id,
+                )
+            except Exception as log_exc:
+                print(
+                    f"Failed to write integration log for missing report ID "
+                    f"(non-fatal): {log_exc}"
+                )
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="SAP Concur ReportID is required",
@@ -652,31 +711,28 @@ async def _run_create_maconomy_expense_sheet(
                 {"submitted": False, "status": "FAILED", "message": str(exc)}
             )
 
-    # --- Exactly one submission log row (FR-3, action=UPDATE, no migration) ---
+    # --- Submission status: mapping column only (single-row-per-flow, WO#11.4) ---
     submit_log_status = {
         "SUBMITTED": IntegrationStatus.SUCCESS,
         "ALREADY_SUBMITTED": IntegrationStatus.SKIPPED,
         "FAILED": IntegrationStatus.FAILED,
         "SKIPPED": IntegrationStatus.SKIPPED,
     }.get(str(submission.get("status", "")), IntegrationStatus.FAILED)
-    submit_log_message = (
-        f"Expense sheet {expense_sheet_number or 'N/A'} submission: "
-        f"{submission.get('status', '')} - {submission.get('message', '')}"
-    )
-    try:
-        await integration_log_service.create_log(
-            session,
-            mapping_id=mapping.id if mapping else None,
-            report_id=report_id,
-            status=submit_log_status,
-            action=IntegrationAction.UPDATE,
-            message=submit_log_message,
-            employeeemail=employee_email,
-        )
-    except Exception as log_exc:
-        print(
-            f"Failed to write submission log for report {report_id}: {log_exc}"
-        )
+
+    # --- Persist submission status on the mapping row (FR-2) ---
+    if mapping is not None:
+        try:
+            await expensesheet_expensereport_mapping_service.update_mapping_submission_status(
+                session,
+                mapping_id=mapping.id,
+                status=submit_log_status,
+            )
+        except Exception as status_exc:
+            # Non-fatal: status persistence must not mask the workflow outcome.
+            print(
+                f"Failed to update mapping submission status for report "
+                f"{report_id} (non-fatal): {status_exc}"
+            )
 
     # --- Approve expense sheet (Req[#6] FR-10 / FR-11) ---
     approval: dict[str, Any] = {
@@ -714,31 +770,28 @@ async def _run_create_maconomy_expense_sheet(
                 {"approved": False, "status": "FAILED", "message": str(exc)}
             )
 
-    # --- Exactly one approval log row (FR-12, action=CREATE, no migration) ---
+    # --- Approval status: mapping column only (single-row-per-flow, WO#11.4) ---
     approve_log_status = {
         "APPROVED": IntegrationStatus.SUCCESS,
         "ALREADY_APPROVED": IntegrationStatus.SKIPPED,
         "FAILED": IntegrationStatus.FAILED,
         "SKIPPED": IntegrationStatus.SKIPPED,
     }.get(str(approval.get("status", "")), IntegrationStatus.FAILED)
-    approve_log_message = (
-        f"Expense sheet {expense_sheet_number or 'N/A'} approval: "
-        f"{approval.get('status', '')} - {approval.get('message', '')}"
-    )
-    try:
-        await integration_log_service.create_log(
-            session,
-            mapping_id=mapping.id if mapping else None,
-            report_id=report_id,
-            status=approve_log_status,
-            action=IntegrationAction.CREATE,
-            message=approve_log_message,
-            employeeemail=employee_email,
-        )
-    except Exception as log_exc:
-        print(
-            f"Failed to write approval log for report {report_id}: {log_exc}"
-        )
+
+    # --- Persist approval status on the mapping row (FR-3) ---
+    if mapping is not None:
+        try:
+            await expensesheet_expensereport_mapping_service.update_mapping_approval_status(
+                session,
+                mapping_id=mapping.id,
+                status=approve_log_status,
+            )
+        except Exception as status_exc:
+            # Non-fatal: status persistence must not mask the workflow outcome.
+            print(
+                f"Failed to update mapping approval status for report "
+                f"{report_id} (non-fatal): {status_exc}"
+            )
 
     maconomy_expense_sheet_result["submitted"] = bool(submission.get("submitted"))
     maconomy_expense_sheet_result["approved"] = bool(approval.get("approved"))

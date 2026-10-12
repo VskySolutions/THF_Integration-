@@ -220,39 +220,6 @@ class SAPConcurService:
 
 
     # Get Token from Concur API
-    async def _get_token(self, client: httpx.AsyncClient) -> str:
-        response = await client.post(
-            f"{self.settings.sap_concur_api_base_url}/oauth2/v0/token",
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-            # json={
-            #     "client_id": self.settings.sap_concur_client_id,
-            #     "client_secret": (
-            #         self.settings.sap_concur_client_secret.get_secret_value()
-            #     ),
-            #     "username": self.settings.sap_concur_username,
-            #     "password": self.settings.sap_concur_password.get_secret_value(),
-            #     "grant_type" : "refresh_token",
-            # },
-            payload = f"client_id={self.settings.sap_concur_client_id.get_secret_value()}&client_secret={self.settings.sap_concur_client_secret.get_secret_value()}&username={self.settings.sap_concur_username}&password={self.settings.sap_concur_password.get_secret_value()}&grant_type=authtoken"
-        )
-        print(f"Concur Token Response: {response.status_code} - {response.text}")
-        response.raise_for_status()
-
-        try:
-            token = response.json()["access_token"]
-        except (KeyError, TypeError, ValueError) as exc:
-            raise SAPConcurServiceError(
-                "Invalid SAP Concur authentication response"
-            ) from exc
-
-        if not isinstance(token, str) or not token:
-            raise SAPConcurServiceError(
-                "Invalid SAP Concur authentication response"
-            )
-        return token
-
-
-    # Get Token from Concur API
     async def _get_token_from_refresh_token(
         self, client: httpx.AsyncClient
     ) -> tuple[str, float]:
@@ -377,10 +344,11 @@ class SAPConcurService:
         request_headers = dict(headers or {})
         token = await self._get_valid_access_token(client)
         request_headers["Authorization"] = f"Bearer {token}"
-
+        print("Yes")
         response = await client.request(
             method, url, headers=request_headers, **kwargs
         )
+        print("Bye")
 
         if response.status_code in (
             httpx.codes.UNAUTHORIZED,
@@ -432,10 +400,10 @@ class SAPConcurService:
             "Accept": "application/json"
         }
         params = {
-            "user": "ALL",
-            "modifiedDateAfter": yesterday.isoformat(),
-            "modifiedDateBefore": tomorrow.isoformat(),
-            "approvalStatusCode": "A_APPR ",
+            "user": "cbrown@thf-cpa.com.uat",
+            # "modifiedDateAfter": yesterday.isoformat(),
+            # "modifiedDateBefore": tomorrow.isoformat(),
+            # "approvalStatusCode": "A_APPR",
             # "paymentStatusCode": "P_PROC",
             "limit": 100,
         }
@@ -443,7 +411,7 @@ class SAPConcurService:
         response = await self._request_with_auth(
             client, "GET", url, headers=headers, params=params
         )
-        # print("Response:", response.status_code, response.text)
+        print("Response:", response.status_code, response.text)
         response.raise_for_status()
 
         try:
