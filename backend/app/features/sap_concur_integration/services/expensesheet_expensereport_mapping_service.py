@@ -3,6 +3,7 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.features.sap_concur_integration.constants import IntegrationStatus
 from app.features.sap_concur_integration.models.expensesheet_expensereport_mapping import (
     SAPConcurExpensesheetExpenseReportMapping,
 )
@@ -67,4 +68,30 @@ async def update_mapping_metadata(
     return mapping
 
 
-# {"panes":{"card":{"fields":["amountbase","approvalgroupdatesubmittedvar","approvalgroupinstancekey","approvalgroupsubmittedbyvar","approvalhierarchyenabledheadervar","approvalhierarchyenabledlinesvar","approved","basecurrencyvar","cardrelationtitlevar","copyfromexpensesheetnumber","currency","description","documentarchivedescriptionvar","documentarchivelinecountvar","documentarchivenumber","duplicatedexpensesheetnumbervar","employeecompanynamevar","employeecompanynumbervar","employeeelectronicmailaddressvar","employeename","employeenumber","employeepositionvar","employeetelephonevar","exchangerate","expensesheetnumber","fromdate","headerapprovaldatevar","headerapprovedorrejectedbyvar","headercurrentapprovalstatusdescriptionvar","headercustomernamevar","headercustomernumbervar","headerremarkvar","jobname","jobnumber","nextheaderapproverdescriptionvar","nextheaderapproveremployeenumbervar","nextheaderapprovernamevar","numberoflinesmissingapprovalvar","numberofrejectedlinesvar","projectmanagernamevar","projectmanagernumbervar","submitted","tablerelationtitlevar","todate","vendorsettlementstatusvar","workflowstatusvar"]},"table":{"fields":["amountcurrency","currency","customernamevar","customernumbervar","documentname","entrydate","favorite","financevatcode","financevatcode2","financevatcode3","instancekey","jobnamevar","jobnumber","justificationcompletevar","justificationrequiredvar","lineapprovaldatevar","lineapprovedorrejectedbyvar","linecurrentapprovalstatusvar","linecurrentstatusvar","linenumber","lineremarkvar","nextlineapproverdescriptionvar","nextlineapproveremployeenumbervar","nextlineapprovernamevar","numberof","purposedescriptionvar","purposename","specification4name","submitted","unitpricecurrency","vat1currency","vat2currency","vat3currency"]}}}
+async def update_mapping_submission_status(
+    session: AsyncSession,
+    mapping_id: uuid.UUID,
+    status: IntegrationStatus,
+) -> SAPConcurExpensesheetExpenseReportMapping | None:
+    mapping = await session.get(SAPConcurExpensesheetExpenseReportMapping, mapping_id)
+    if mapping is None:
+        return None
+    mapping.submitted = status
+    await session.commit()
+    await session.refresh(mapping)
+    return mapping
+
+
+async def update_mapping_approval_status(
+    session: AsyncSession,
+    mapping_id: uuid.UUID,
+    status: IntegrationStatus,
+) -> SAPConcurExpensesheetExpenseReportMapping | None:
+    mapping = await session.get(SAPConcurExpensesheetExpenseReportMapping, mapping_id)
+    if mapping is None:
+        return None
+    mapping.approved = status
+    await session.commit()
+    await session.refresh(mapping)
+    return mapping
+

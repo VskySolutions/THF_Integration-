@@ -43,8 +43,9 @@ class MaconomyService:
         Example: "(75674.T0) 1130 SUCCESS AVE LLC" -> "75674"
         """
         import re
-        # match = re.search(r'\(([^.]+)\.', value)
-        match = re.search(r'^([^.]+)', value)
+        # Prefer the parenthesized form per docstring: "(75674.T0) ..." -> "75674";
+        # fall back to the legacy prefix match for values without parentheses.
+        match = re.search(r'\(([^.]+)\.', value) or re.search(r'^([^.]+)', value)
         if match:
             return match.group(1)
         
@@ -249,84 +250,6 @@ class MaconomyService:
         }
 
 
-    # Check with Maconomy if the expense sheet exists by expense sheet number
-    async def get_expensesheet_by_expensesheetnumber(self, expensesheet_number: str) -> dict[str, Any] | None: 
-        if not expensesheet_number.strip():
-            raise MaconomyServiceError("Invalid expense sheet number")
-
-        try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                reconnect_token = await self._get_reconnect_token(client)
-                url = f"{self._expense_sheet_url()}/filter"
-                payload = {
-                    "panes": {
-                        "card": {
-                            "fields": [
-                                "amountbase",
-                                "basecurrency",
-                                "createddate",
-                                "datesubmitted",
-                                "employeename",
-                                "employeenumber",
-                                "expensesheetnumber",
-                                "jobname",
-                                "jobnumber"
-                            ]
-                        }
-                    }
-                }
-                headers = self._container_headers(reconnect_token)
-                response = await client.get(url, headers=headers, params=payload)
-                response.raise_for_status()
-        except httpx.HTTPError as exc:
-            raise MaconomyServiceError(
-                "Unable to reconcile entity in CaseWare Cloud"
-            ) from exc
-        
-        try:
-            payload = response.json()
-        except (KeyError, TypeError, ValueError) as exc:
-            raise MaconomyServiceError("Invalid Maconomy expense sheet response") from exc
-
-        if not isinstance(payload, dict):
-            raise MaconomyServiceError(
-                "Invalid Maconomy expense sheet response"
-            )
-
-        card = response.json()["panes"]["card"]
-        records = card["records"]
-
-        if not isinstance(records, list):
-            raise MaconomyServiceError(
-                "Invalid Maconomy expense sheet response: invalid records"
-            )
-
-        matching_expense_sheets = []
-
-        for record in records:
-            if not isinstance(record, dict):
-                continue
-
-            data = record.get("data")
-
-            if not isinstance(data, dict):
-                continue
-
-            if data.get("expenseSheetNumber") == expensesheet_number:
-                matching_expense_sheets.append(data)
-
-        if not matching_expense_sheets:
-            return None
-
-        if len(matching_expense_sheets) > 1:
-            raise MaconomyServiceError(
-                "Maconomy reconciliation is ambiguous and requires "
-                "manual resolution"
-            )
-
-        return matching_expense_sheets[0]
-
-
     # Retrieve instance key from maconomy for expense sheet container 
     async def _retrieve_expense_sheet_instance(
             self,
@@ -440,97 +363,6 @@ class MaconomyService:
                 "Invalid Maconomy concurrency token"
             ) from exc
  
-
-    async def get_expensesheet_by_expensesheetnumber(
-        self, maconomy_expensesheet_no: str
-    ) -> dict[str, Any] | None:
-        try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                reconnect_token = await self._get_reconnect_token(client)
-                instance_id, concurrency_token = await self._start_expensesheet_lookup(
-                    client, reconnect_token
-                )
-                return await self._get_expensesheet_record(
-                    client,
-                    reconnect_token,
-                    instance_id,
-                    concurrency_token,
-                    maconomy_expensesheet_no,
-                )
-        except httpx.HTTPError as exc:
-            raise MaconomyServiceError("Maconomy request failed") from exc
-
-
-    async def _start_expensesheet_lookup(
-        self, client: httpx.AsyncClient, reconnect_token: str
-    ) -> tuple[str, str]:
-        url = f"{self._expense_sheet_url()}/instances"
-        payload = {
-            "panes": {
-                "card": {
-                    "fields": [
-                        "expensesheetnumber",
-                        "description",
-                        # "name1",
-                        # "name2",
-                        # "name3",
-                        # "name4",
-                        # "postaldistrict",
-                        # "country",
-                        # "customernumber",
-                        # "template",
-                        # "versionnumber"
-                    ]
-                }
-            }
-        }
-        response = await client.post(
-            url,
-            headers=self._container_headers(reconnect_token),
-            json=payload,
-        )
-
-        response.raise_for_status()
-        concurrency_token = response.headers.get("Maconomy-Concurrency-Control", "")
-        try:
-            instance_id = response.json()["meta"]["containerInstanceId"]
-            instance_id = str(uuid.UUID(instance_id))
-            concurrency_token = str(uuid.UUID(concurrency_token))
-        except (KeyError, TypeError, ValueError) as exc:
-            raise MaconomyServiceError("Invalid Maconomy instance response") from exc
-
-        return instance_id, concurrency_token
-
-
-    async def _get_expensesheet_record(
-        self,
-        client: httpx.AsyncClient,
-        reconnect_token: str,
-        instance_id: str,
-        concurrency_token: str,
-        maconomy_expensesheet_no: str,
-    ) -> dict[str, Any] | None:
-        maconomy_expensesheet_no = quote(maconomy_expensesheet_no, safe="")
-        url = f"{self._jobs_url()}/instances/{instance_id}/data;expensesheetnumber={maconomy_expensesheet_no}"
-        headers = self._container_headers(reconnect_token)
-        headers["Maconomy-Concurrency-Control"] = concurrency_token
-
-        response = await client.post(url, headers=headers, json={})
-        response.raise_for_status()
-
-        try:
-            card = response.json()["panes"]["card"]
-            records = card["records"]
-            if card["meta"]["rowCount"] != 1 or len(records) != 1:
-                return None
-            expensesheet_data = records[0]["data"]
-        except (KeyError, TypeError, ValueError) as exc:
-            raise MaconomyServiceError("Invalid Maconomy job response") from exc
-
-        if not isinstance(expensesheet_data, dict):
-            raise MaconomyServiceError("Invalid Maconomy job response")
-        return expensesheet_data
-
 
     async def get_all_employees_from_maconomy(
             self,
@@ -944,11 +776,12 @@ class MaconomyService:
                             custom_data_values["client_engagement"] = (
                                 client_engagement
                             )
-                            custom_data_values["job_number"] = ( # client_engagement
-                                self.extract_job_number_from_client_engagement(
-                                    client_engagement
-                                )
-                            )
+                            custom_data_values["job_number"] = client_engagement
+                            # ( # client_engagement
+                            #     self.extract_job_number_from_client_engagement(
+                            #         client_engagement
+                            #     )
+                            # )
 
                 if skip_expense:
                     _record_skip(str(expense_id), skip_reason)
