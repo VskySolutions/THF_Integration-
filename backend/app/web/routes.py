@@ -34,7 +34,7 @@ router = APIRouter(tags=["dashboard"])
 
 _PAYCOR_INTEGRATION_IDENTIFIERS = {
     "PAYCOR_SYNC_EMPLOYEES",
-    IntegrationServiceIdentifier.PAYCOR_SYNC_ONBOARDING_EMPLOYEES.value,
+    IntegrationServiceIdentifier.PAYCOR_SYNC_EMPLOYEES.value,
 }
 
 
@@ -310,6 +310,135 @@ async def sync_caseware_job(
     return redirect
 
 
+@router.post(
+    "/integrations/{integration_id}/retry-paycor-employee",
+    name="retry_paycor_employee",
+    include_in_schema=False,
+)
+async def retry_paycor_employee(
+    integration_id: uuid.UUID,
+    request: Request,
+    current_user: AuthenticatedUser,
+    csrf_token: Annotated[str, Form(min_length=1)],
+    retry_action: Annotated[str, Form(min_length=1)],
+    paycor_employee_id: Annotated[str, Form(min_length=1, max_length=36)],
+    session: Annotated[AsyncSession, Depends(get_db)],
+) -> RedirectResponse:
+    """Manually retry a Paycor employee create or update synchronization."""
+    if not valid_csrf_token(request, csrf_token):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired form token.",
+        )
+
+    result = await session.execute(
+        select(IntegrationService).where(
+            IntegrationService.id == integration_id,
+            IntegrationService.identifier_unique_name.in_(
+                _PAYCOR_INTEGRATION_IDENTIFIERS
+            ),
+            IntegrationService.is_deleted.is_(False),
+        )
+    )
+    integration = result.scalar_one_or_none()
+    if integration is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Paycor employee synchronization integration service not found.",
+        )
+
+    redirect = RedirectResponse(
+        request.url_for("integration_logs", integration_id=integration.id),
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+    normalized_employee_id = paycor_employee_id.strip()
+    try:
+        employee_id = uuid.UUID(normalized_employee_id)
+    except ValueError:
+        _set_flash(request, "Enter a valid Paycor employee ID (UUID).", "danger")
+        return redirect
+
+    paths_by_action = {
+        "create": "sync-with-maconomy",
+        "update": "update-with-maconomy",
+    }
+    endpoint_action = paths_by_action.get(retry_action)
+    if endpoint_action is None:
+        _set_flash(request, "Select a valid Paycor retry action.", "danger")
+        return redirect
+
+    settings = get_settings()
+    sync_path = (
+        f"{settings.api_v1_prefix.rstrip('/')}/paycor/employees/"
+        f"{employee_id}/{endpoint_action}"
+    )
+    activity_data = {
+        "paycor_employee_id": str(employee_id),
+        "retry_action": retry_action,
+        "integration_id": str(integration.id),
+    }
+    try:
+        async with httpx.AsyncClient(
+            base_url=settings.scheduler_api_url,
+            headers={
+                "X-API-KEY": settings.scheduler_api_key.get_secret_value(),
+                "X-Request-ID": str(request.state.request_id),
+                "Accept": "*/*",
+            },
+            timeout=httpx.Timeout(settings.scheduler_request_timeout_seconds),
+        ) as client:
+            response = await client.post(sync_path)
+    except httpx.RequestError:
+        await log_activity(
+            session,
+            action="manual_retry",
+            user=current_user.username,
+            service=integration.identifier_unique_name,
+            data=activity_data,
+            status="FAILED",
+        )
+        _set_flash(
+            request,
+            "The Paycor integration API could not be reached. Please try again.",
+            "danger",
+        )
+        return redirect
+
+    payload_value = _json_response_value(response)
+    payload = payload_value if isinstance(payload_value, dict) else {}
+    if not response.is_success:
+        await log_activity(
+            session,
+            action="manual_retry",
+            user=current_user.username,
+            service=integration.identifier_unique_name,
+            data=activity_data,
+            status="FAILED",
+        )
+        _set_flash(
+            request,
+            _internal_api_error(payload, response.status_code),
+            "danger",
+        )
+        return redirect
+
+    await log_activity(
+        session,
+        action="manual_retry",
+        user=current_user.username,
+        service=integration.identifier_unique_name,
+        data=activity_data,
+        status="SUCCESS",
+    )
+    operation = "create" if retry_action == "create" else "update"
+    _set_flash(
+        request,
+        f"Paycor employee {employee_id} {operation} retry completed successfully.",
+        "success",
+    )
+    return redirect
+
+
 @router.get(
     "/integrations/{integration_id}/logs",
     response_class=HTMLResponse,
@@ -344,8 +473,10 @@ async def integration_logs(
 
     flash_message = request.session.pop("flash_message", None)
     flash_category = request.session.pop("flash_category", "success")
-
-    if integration.identifier_unique_name in _PAYCOR_INTEGRATION_IDENTIFIERS:
+    print("Integration Logs", "*"*50)
+    print(integration.identifier_unique_name)
+    if integration.identifier_unique_name == IntegrationServiceIdentifier.PAYCOR_SYNC_EMPLOYEES.value:
+        print("Paycor Logs","*"*50)
         log_result = await session.execute(
             select(PaycorIntegrationLog)
             .options(
@@ -359,7 +490,9 @@ async def integration_logs(
             log.status.value == "SUCCESS" for log in activity_logs
         )
         total_logs = len(activity_logs)
-
+        print("*"*50)
+        print(total_logs)
+        print("*"*50)
         return templates.TemplateResponse(
             request=request,
             name="paycor_dashboard.html",
