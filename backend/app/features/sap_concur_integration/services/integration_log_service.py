@@ -7,6 +7,7 @@ from app.core.config import get_settings
 from app.features.sap_concur_integration.constants import (
     IntegrationAction,
     IntegrationStatus,
+    ProcessingStage,
 )
 
 from app.features.sap_concur_integration.models.integration_log import SAPConcurIntegrationLog
@@ -22,6 +23,7 @@ async def create_log(
     action: IntegrationAction,
     message: str,
     employeeemail: str | None = None,
+    processing_stage: ProcessingStage | None = None,
 ) -> SAPConcurIntegrationLog:
     settings = get_settings()
     integration_log = SAPConcurIntegrationLog(
@@ -32,6 +34,7 @@ async def create_log(
         employeeemail=employeeemail,
         status=status,
         message=message,
+        processing_stage=processing_stage.value if processing_stage else None,
         action=action,
         # jobnumber=job_number,
         report_id=report_id,

@@ -36,6 +36,10 @@ class SAPConcurIntegrationLog(Base):
         Enum(IntegrationStatus, name="sap_concur_integration_status"), nullable=False
     )
     message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Nullable Text (NOT a PG enum) — no second enum type; values defined by
+    # ProcessingStage in constants.py (REPORT_FETCH / EXPENSE_SHEET_CREATION /
+    # EXPENSE_LINE_CREATION / SUBMISSION / APPROVAL / COMPLETED).
+    processing_stage: Mapped[str | None] = mapped_column(Text, nullable=True)
     action: Mapped[IntegrationAction] = mapped_column(
         Enum(IntegrationAction, name="sap_concur_integration_action"), nullable=False
     )

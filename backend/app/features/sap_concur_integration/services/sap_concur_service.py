@@ -400,10 +400,10 @@ class SAPConcurService:
             "Accept": "application/json"
         }
         params = {
-            "user": "ALL",
-            "modifiedDateAfter": yesterday.isoformat(),
-            "modifiedDateBefore": tomorrow.isoformat(),
-            "approvalStatusCode": "A_APPR",
+            "user": "cbrown@thf-cpa.com.uat",
+            # "modifiedDateAfter": yesterday.isoformat(),
+            # "modifiedDateBefore": tomorrow.isoformat(),
+            # "approvalStatusCode": "A_APPR",
             # "paymentStatusCode": "P_PROC",
             "limit": 100,
         }
