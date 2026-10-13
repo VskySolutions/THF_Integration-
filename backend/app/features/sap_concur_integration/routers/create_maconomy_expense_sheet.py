@@ -249,6 +249,13 @@ async def sync_todays_created_sap_concur_expense_reports_with_maconomy(
                 message=skip_message,
                 employeeemail=expense_report_login_id,
                 processing_stage=ProcessingStage.EXPENSE_SHEET_CREATION,
+                details={
+                    "expense_sheet": {
+                        "status": "SKIPPED",
+                        "expensesheetnumber": None,
+                        "error": _truncate_error(skip_message),
+                    }
+                },
             )
             continue
 
@@ -274,6 +281,13 @@ async def sync_todays_created_sap_concur_expense_reports_with_maconomy(
                 message=skip_message,
                 employeeemail=expense_report_login_id,
                 processing_stage=ProcessingStage.EXPENSE_SHEET_CREATION,
+                details={
+                    "expense_sheet": {
+                        "status": "SKIPPED",
+                        "expensesheetnumber": None,
+                        "error": _truncate_error(skip_message),
+                    }
+                },
             )
             continue
 
@@ -440,6 +454,10 @@ async def create_maconomy_expense_sheet(
                 message=f"Expense sheet processing failed: {exc}",
                 employeeemail=employee_email,
                 processing_stage=ProcessingStage.EXPENSE_SHEET_CREATION,
+                details=_build_sheet_not_created_details(
+                    f"Expense sheet processing failed: {exc}",
+                    downstream_error="Unexpected error",
+                ),
             )
         except Exception as log_exc:
             print(
@@ -471,6 +489,7 @@ async def _run_create_maconomy_expense_sheet(
             message=message,
             employeeemail=employee_email,
             processing_stage=ProcessingStage.EXPENSE_SHEET_CREATION,
+            details=_build_sheet_not_created_details(message),
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=message
@@ -486,6 +505,7 @@ async def _run_create_maconomy_expense_sheet(
             message=message,
             employeeemail=employee_email,
             processing_stage=ProcessingStage.EXPENSE_SHEET_CREATION,
+            details=_build_sheet_not_created_details(message),
         )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=message
@@ -804,6 +824,34 @@ async def _run_create_maconomy_expense_sheet(
                 f"{base_message}{line_detail}\n{final_reason}"
             )
 
+    # Structured stage snapshot for the details JSONB column (WO#15.3).
+    # Stable 4-key shape for every processed report; downstream stages remain
+    # present with SKIPPED + reason after a failure/abort.
+    log_details: dict[str, Any] = {
+        "expense_sheet": {
+            "status": "CREATED",
+            "expensesheetnumber": expense_sheet_number,
+            "error": None,
+        },
+        "expense_lines": _build_line_stage_details(
+            line_results, aborted_reason=workflow_abort_reason
+        ),
+        "submission": {
+            "status": submission_status or "SKIPPED",
+            "submitted": bool(submission.get("submitted")),
+            "error": _truncate_error(submission.get("message"))
+            if (submission_status or "SKIPPED") == "FAILED"
+            else None,
+        },
+        "approval": {
+            "status": approval_status or "SKIPPED",
+            "approved": bool(approval.get("approved")),
+            "error": _truncate_error(approval.get("message"))
+            if (approval_status or "SKIPPED") == "FAILED"
+            else None,
+        },
+    }
+
     try:
         await integration_log_service.create_log(
             session,
@@ -814,6 +862,7 @@ async def _run_create_maconomy_expense_sheet(
             message=final_message,
             employeeemail=employee_email,
             processing_stage=final_stage,
+            details=log_details,
         )
     except Exception as log_exc:
         # Safe logging: a logging failure must not mask the processing outcome.
@@ -862,6 +911,59 @@ def _format_line_results(line_results: dict[str, Any]) -> str:
     return "\n".join(parts)
 
 
+def _truncate_error(value: Any) -> str | None:
+    """Truncate error strings to 1000 chars (CCH details convention)."""
+    if value is None:
+        return None
+    text = str(value)
+    return text[:1000]
+
+
+def _build_line_stage_details(
+    line_results: dict[str, Any], *, aborted_reason: str | None
+) -> dict[str, Any]:
+    """Build the structured `expense_lines` node for the details JSON (WO#15.3).
+
+    Stable shape: status/total/succeeded_count/failed_count/succeeded/failed/
+    error. `total == 0` (no Concur expenses) counts as SUCCESS (existing
+    behavior preserved). An aborted workflow records SKIPPED + the abort
+    reason since lines were never processed.
+    """
+    total = int(line_results.get("total", 0))
+    success_count = int(line_results.get("success_count", 0))
+    failure_count = int(line_results.get("failure_count", 0))
+
+    if aborted_reason is not None:
+        line_status = "SKIPPED"
+    elif failure_count > 0:
+        line_status = "PARTIAL" if success_count > 0 else "FAILED"
+    else:
+        line_status = "SUCCESS"
+
+    return {
+        "status": line_status,
+        "total": total,
+        "succeeded_count": success_count,
+        "failed_count": failure_count,
+        "succeeded": [
+            {
+                "expense_id": entry.get("expense_id"),
+                "line_number": entry.get("line_number"),
+            }
+            for entry in line_results.get("succeeded", [])
+        ],
+        "failed": [
+            {
+                "expense_id": entry.get("expense_id"),
+                "message": _truncate_error(entry.get("message")),
+                "error_type": entry.get("error_type"),
+            }
+            for entry in line_results.get("failed", [])
+        ],
+        "error": _truncate_error(aborted_reason),
+    }
+
+
 async def _save_integration_log(
     session: AsyncSession,
     report_id: str,
@@ -870,6 +972,7 @@ async def _save_integration_log(
     message: str,
     employeeemail: str | None = None,
     processing_stage: ProcessingStage | None = None,
+    details: dict[str, Any] | None = None,
 ) -> None:
     
     mapping = await expensesheet_expensereport_mapping_service.get_mapping_by_report_id(
@@ -885,7 +988,26 @@ async def _save_integration_log(
         message=message,
         employeeemail=employeeemail,
         processing_stage=processing_stage,
+        details=details,
     )
+
+
+def _build_sheet_not_created_details(
+    error_reason: str, *, downstream_error: str = "Expense sheet creation failed"
+) -> dict[str, Any]:
+    """Compact details payload for logs written BEFORE/THEREFORE without a
+    created sheet (WO#15.3): sheet FAILED + downstream stages SKIPPED."""
+    truncated = _truncate_error(error_reason)
+    return {
+        "expense_sheet": {
+            "status": "FAILED",
+            "expensesheetnumber": None,
+            "error": truncated,
+        },
+        "expense_lines": {"status": "SKIPPED", "error": downstream_error},
+        "submission": {"status": "SKIPPED", "error": downstream_error},
+        "approval": {"status": "SKIPPED", "error": downstream_error},
+    }
 
 
 async def _raise_expense_sheet_creation_error(
@@ -901,6 +1023,7 @@ async def _raise_expense_sheet_creation_error(
         integration_status=IntegrationStatus.FAILED,
         message=str(exc),
         processing_stage=ProcessingStage.EXPENSE_SHEET_CREATION,
+        details=_build_sheet_not_created_details(str(exc)),
     )
     # await _save_integration_log(
     #     session,

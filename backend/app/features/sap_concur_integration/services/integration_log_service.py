@@ -24,6 +24,7 @@ async def create_log(
     message: str,
     employeeemail: str | None = None,
     processing_stage: ProcessingStage | None = None,
+    details: dict | None = None,
 ) -> SAPConcurIntegrationLog:
     settings = get_settings()
     integration_log = SAPConcurIntegrationLog(
@@ -35,6 +36,7 @@ async def create_log(
         status=status,
         message=message,
         processing_stage=processing_stage.value if processing_stage else None,
+        details=details,
         action=action,
         # jobnumber=job_number,
         report_id=report_id,
