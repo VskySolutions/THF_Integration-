@@ -102,7 +102,7 @@ class MaconomyTimesheetService:
         period_start_from: date,
         period_start_to: date,
     ) -> list[dict[str, Any]]:
-        """Return approved timesheets for the period range."""
+        """Return approved Maconomy timesheet lines."""
 
         if period_start_to < period_start_from:
             raise MaconomyTimesheetServiceError(
@@ -110,89 +110,11 @@ class MaconomyTimesheetService:
                 "period_start_from"
             )
 
-        restriction = (
-            self._build_approved_restriction(
-                period_start_from,
-                period_start_to,
+        return await (
+            self._get_paginated_timesheet_lines(
+                period_start_from=period_start_from,
+                period_start_to=period_start_to,
             )
-        )
-
-        timesheet_lines: list[
-            dict[str, Any]
-        ] = []
-
-        offset = 0
-
-        for _ in range(
-            MAX_TIMESHEET_FILTER_PAGES
-        ):
-            response = await self._post(
-                "/filter",
-                {
-                    "restriction": restriction,
-                    "fields": TIMESHEET_FIELDS,
-                    "limit": TIMESHEET_PAGE_SIZE,
-                    "offset": offset,
-                },
-            )
-
-            (
-                records,
-                row_count,
-                row_offset,
-                row_total_count,
-            ) = self._parse_filter_page(
-                response
-            )
-
-            timesheet_lines.extend(records)
-
-            next_offset = (
-                row_offset + row_count
-            )
-
-            if (
-                row_total_count is not None
-                and next_offset
-                >= row_total_count
-            ):
-                return timesheet_lines
-
-            if row_count == 0:
-                if row_total_count is None:
-                    return timesheet_lines
-
-                raise (
-                    MaconomyTimesheetServiceError(
-                        "Maconomy timesheet filter "
-                        "ended before all records "
-                        "were returned"
-                    )
-                )
-
-            # Maconomy may not return rowTotalCount.
-            # When the returned page is smaller than
-            # the requested limit, it is the last page.
-            if (
-                row_total_count is None
-                and row_count
-                < TIMESHEET_PAGE_SIZE
-            ):
-                return timesheet_lines
-
-            if next_offset <= offset:
-                raise (
-                    MaconomyTimesheetServiceError(
-                        "Maconomy timesheet filter "
-                        "pagination did not advance"
-                    )
-                )
-
-            offset = next_offset
-
-        raise MaconomyTimesheetServiceError(
-            "Maconomy timesheet filter exceeded "
-            "the maximum page limit"
         )
 
     async def _headers(
@@ -410,6 +332,93 @@ class MaconomyTimesheetService:
             ) from exc
 
         return response
+    
+    async def _get_paginated_timesheet_lines(
+        self,
+        *,
+        period_start_from: date,
+        period_start_to: date,
+    ) -> list[dict[str, Any]]:
+        restriction = (
+            self._build_approved_restriction(
+                period_start_from,
+                period_start_to,
+            )
+        )
+
+        results: list[dict[str, Any]] = []
+        offset = 0
+
+        for _ in range(
+            MAX_TIMESHEET_FILTER_PAGES
+        ):
+            payload = {
+                "fields": TIMESHEET_FIELDS,
+                "restriction": restriction,
+                "offset": offset,
+                "limit": TIMESHEET_PAGE_SIZE,
+            }
+
+            response = await self._post(
+                "/filter",
+                payload,
+            )
+
+            (
+                records,
+                row_count,
+                row_offset,
+                row_total_count,
+            ) = self._parse_filter_page(
+                response
+            )
+
+            results.extend(records)
+
+            next_offset = (
+                row_offset + row_count
+            )
+
+            if (
+                row_total_count is not None
+                and next_offset
+                >= row_total_count
+            ):
+                return results
+
+            if row_count == 0:
+                if row_total_count is None:
+                    return results
+
+                raise (
+                    MaconomyTimesheetServiceError(
+                        "Maconomy timesheet filter "
+                        "ended before all records "
+                        "were returned"
+                    )
+                )
+
+            if (
+                row_total_count is None
+                and row_count
+                < TIMESHEET_PAGE_SIZE
+            ):
+                return results
+
+            if next_offset <= offset:
+                raise (
+                    MaconomyTimesheetServiceError(
+                        "Maconomy timesheet filter "
+                        "pagination did not advance"
+                    )
+                )
+
+            offset = next_offset
+
+        raise MaconomyTimesheetServiceError(
+            "Maconomy timesheet filter exceeded "
+            "the maximum page limit"
+        )
 
     @classmethod
     def _parse_filter_page(

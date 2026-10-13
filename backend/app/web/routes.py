@@ -34,7 +34,7 @@ router = APIRouter(tags=["dashboard"])
 
 _PAYCOR_INTEGRATION_IDENTIFIERS = {
     "PAYCOR_SYNC_EMPLOYEES",
-    IntegrationServiceIdentifier.PAYCOR_SYNC_ONBOARDING_EMPLOYEES.value,
+    IntegrationServiceIdentifier.PAYCOR_SYNC_EMPLOYEES.value,
 }
 
 
@@ -473,8 +473,10 @@ async def integration_logs(
 
     flash_message = request.session.pop("flash_message", None)
     flash_category = request.session.pop("flash_category", "success")
-
-    if integration.identifier_unique_name in _PAYCOR_INTEGRATION_IDENTIFIERS:
+    print("Integration Logs", "*"*50)
+    print(integration.identifier_unique_name)
+    if integration.identifier_unique_name == IntegrationServiceIdentifier.PAYCOR_SYNC_EMPLOYEES.value:
+        print("Paycor Logs","*"*50)
         log_result = await session.execute(
             select(PaycorIntegrationLog)
             .options(
@@ -488,7 +490,9 @@ async def integration_logs(
             log.status.value == "SUCCESS" for log in activity_logs
         )
         total_logs = len(activity_logs)
-
+        print("*"*50)
+        print(total_logs)
+        print("*"*50)
         return templates.TemplateResponse(
             request=request,
             name="paycor_dashboard.html",
