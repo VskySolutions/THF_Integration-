@@ -488,7 +488,9 @@ async def integration_logs(
             log.status.value == "SUCCESS" for log in activity_logs
         )
         total_logs = len(activity_logs)
-
+        print("*"*50)
+        print(total_logs)
+        print("*"*50)
         return templates.TemplateResponse(
             request=request,
             name="paycor_dashboard.html",
