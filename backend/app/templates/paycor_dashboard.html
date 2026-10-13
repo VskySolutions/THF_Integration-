@@ -48,6 +48,16 @@
             </div>
         </div>
         <div class="d-flex align-items-center gap-2">
+            <button type="button" class="btn btn-outline-primary"
+                    data-paycor-retry-action="create"
+                    data-bs-toggle="modal" data-bs-target="#paycorRetryModal">
+                Retry employee create
+            </button>
+            <button type="button" class="btn btn-outline-primary"
+                    data-paycor-retry-action="update"
+                    data-bs-toggle="modal" data-bs-target="#paycorRetryModal">
+                Retry employee update
+            </button>
             <a href="{{ url_for('integration_logs', integration_id=integration.id) }}"
                class="btn btn-outline-secondary dashboard-action-btn" data-dashboard-tooltip
                data-bs-toggle="tooltip" data-bs-title="Refresh activity" aria-label="Refresh activity">
@@ -173,6 +183,36 @@
     </div></div>
 </div>
 
+<div class="modal fade" id="paycorRetryModal" tabindex="-1"
+     aria-labelledby="paycorRetryModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered"><div class="modal-content">
+        <form method="post"
+              action="{{ url_for('retry_paycor_employee', integration_id=integration.id) }}"
+              id="paycorRetryForm">
+            <div class="modal-header">
+                <h2 class="modal-title fs-5" id="paycorRetryModalLabel">Retry Paycor employee</h2>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="retry_action" id="paycorRetryAction">
+                <p class="text-secondary small" id="paycorRetryDescription"></p>
+                <label for="paycorEmployeeId" class="form-label">Paycor employee ID</label>
+                <input type="text" class="form-control font-monospace" id="paycorEmployeeId"
+                       name="paycor_employee_id" maxlength="36" autocomplete="off"
+                       placeholder="Employee UUID" required>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="submit" class="btn btn-primary" id="submitPaycorRetry">
+                    <span class="spinner-border spinner-border-sm me-1 d-none" aria-hidden="true"></span>
+                    <span id="paycorRetrySubmitLabel">Retry employee</span>
+                </button>
+            </div>
+        </form>
+    </div></div>
+</div>
+
 <div class="modal fade" id="integrationStatusModal" tabindex="-1" aria-labelledby="integrationStatusModalLabel" aria-hidden="true">
     <div class="modal-dialog modal-dialog-centered"><div class="modal-content">
         <div class="modal-header"><h2 class="modal-title fs-5" id="integrationStatusModalLabel">{{ 'Pause' if integration.is_active else 'Enable' }} integration</h2><button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button></div>
@@ -210,6 +250,26 @@
             $('#detailMappingId').text(button.attr('data-mapping-id'));
             $('#detailBaseUrl').text(button.attr('data-base-url'));
             $('#detailMessage').text(button.attr('data-message'));
+        });
+        $('[data-paycor-retry-action]').on('click', function () {
+            const action = $(this).attr('data-paycor-retry-action');
+            const isCreate = action === 'create';
+            $('#paycorRetryAction').val(action);
+            $('#paycorRetryModalLabel').text(isCreate ? 'Retry Paycor employee create' : 'Retry Paycor employee update');
+            $('#paycorRetryDescription').text(
+                isCreate
+                    ? 'Enter the Paycor employee ID to retry creating the employee in Maconomy.'
+                    : 'Enter the Paycor employee ID to retry updating the employee in Maconomy.'
+            );
+            $('#paycorRetrySubmitLabel').text(isCreate ? 'Retry create' : 'Retry update');
+        });
+        $('#paycorRetryModal').on('shown.bs.modal', function () {
+            $('#paycorEmployeeId').trigger('focus');
+        });
+        $('#paycorRetryForm').on('submit', function () {
+            const submitButton = $('#submitPaycorRetry');
+            submitButton.prop('disabled', true);
+            submitButton.find('.spinner-border').removeClass('d-none');
         });
         $('#paycorIntegrationStatusForm').on('submit', function () { $('#confirmIntegrationStatus').prop('disabled', true); });
     });
