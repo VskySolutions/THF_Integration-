@@ -474,7 +474,8 @@ async def integration_logs(
     flash_message = request.session.pop("flash_message", None)
     flash_category = request.session.pop("flash_category", "success")
 
-    if integration.identifier_unique_name in _PAYCOR_INTEGRATION_IDENTIFIERS:
+    if integration.identifier_unique_name == IntegrationServiceIdentifier.PAYCOR_SYNC_EMPLOYEES.value:
+        print("Paycor Logs","*"*50)
         log_result = await session.execute(
             select(PaycorIntegrationLog)
             .options(
