@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from sqlalchemy import DateTime, Enum, ForeignKey, Text, func
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -36,6 +37,14 @@ class SAPConcurIntegrationLog(Base):
         Enum(IntegrationStatus, name="sap_concur_integration_status"), nullable=False
     )
     message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Nullable Text (NOT a PG enum) — no second enum type; values defined by
+    # ProcessingStage in constants.py (REPORT_FETCH / EXPENSE_SHEET_CREATION /
+    # EXPENSE_LINE_CREATION / SUBMISSION / APPROVAL / COMPLETED).
+    processing_stage: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Structured per-report stage outcome snapshot (free-form dict by repo
+    # convention — no Pydantic contract; template per WO[#15.3]: expense_sheet /
+    # expense_lines / submission / approval stage nodes).
+    details: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     action: Mapped[IntegrationAction] = mapped_column(
         Enum(IntegrationAction, name="sap_concur_integration_action"), nullable=False
     )
