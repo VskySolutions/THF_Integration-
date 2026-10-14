@@ -14,19 +14,28 @@ from app.features.integration_services import (
     require_active_integration_service,
 )
 from app.features.sap_concur_integration.services.sap_concur_service import SAPConcurService
-from app.features.sap_concur_integration.schemas.sap_concur import ExpenseReportEmailRequest
+from app.features.sap_concur_integration.schemas.sap_concur import (
+    ExpenseReportEmailRequest,
+    RetryExpenseReportRequest,
+)
 from app.features.sap_concur_integration.mappers import (
     map_expense_report_to_summary,
     map_expense_to_summary,
+    map_owner_to_maconomy_employee,
 )
 from app.features.sap_concur_integration.services import (
     MaconomyService,
     MaconomyServiceError,
     expensesheet_expensereport_mapping_service,
     integration_log_service,
+    retry_expense_report_service,
 )
 from app.features.sap_concur_integration.services.integration_status_service import (
+    build_line_stage_details as _build_line_stage_details,
+    build_sheet_not_created_details as _build_sheet_not_created_details,
+    determine_final_stage as _determine_final_stage,
     determine_final_workflow_status,
+    truncate_error as _truncate_error,
 )
 
 
@@ -878,22 +887,6 @@ async def _run_create_maconomy_expense_sheet(
     return maconomy_expense_sheet_result
 
 
-def _determine_final_stage(
-    *,
-    failure_count: int,
-    submission_status: str,
-    approval_status: str,
-) -> ProcessingStage:
-    """Map the failed/non-completed stage to its ProcessingStage label (FR-6)."""
-    if failure_count > 0:
-        return ProcessingStage.EXPENSE_LINE_CREATION
-    if submission_status not in {"SUBMITTED", "ALREADY_SUBMITTED"}:
-        return ProcessingStage.SUBMISSION
-    if approval_status not in {"APPROVED", "ALREADY_APPROVED"}:
-        return ProcessingStage.APPROVAL
-    return ProcessingStage.COMPLETED
-
-
 def _format_line_results(line_results: dict[str, Any]) -> str:
     """Render per-line success/failure detail for the consolidated log message,
     preserving original exception text for failed lines."""
@@ -909,59 +902,6 @@ def _format_line_results(line_results: dict[str, Any]) -> str:
             f"{entry.get('message', '')} ({entry.get('error_type', '')})"
         )
     return "\n".join(parts)
-
-
-def _truncate_error(value: Any) -> str | None:
-    """Truncate error strings to 1000 chars (CCH details convention)."""
-    if value is None:
-        return None
-    text = str(value)
-    return text[:1000]
-
-
-def _build_line_stage_details(
-    line_results: dict[str, Any], *, aborted_reason: str | None
-) -> dict[str, Any]:
-    """Build the structured `expense_lines` node for the details JSON (WO#15.3).
-
-    Stable shape: status/total/succeeded_count/failed_count/succeeded/failed/
-    error. `total == 0` (no Concur expenses) counts as SUCCESS (existing
-    behavior preserved). An aborted workflow records SKIPPED + the abort
-    reason since lines were never processed.
-    """
-    total = int(line_results.get("total", 0))
-    success_count = int(line_results.get("success_count", 0))
-    failure_count = int(line_results.get("failure_count", 0))
-
-    if aborted_reason is not None:
-        line_status = "SKIPPED"
-    elif failure_count > 0:
-        line_status = "PARTIAL" if success_count > 0 else "FAILED"
-    else:
-        line_status = "SUCCESS"
-
-    return {
-        "status": line_status,
-        "total": total,
-        "succeeded_count": success_count,
-        "failed_count": failure_count,
-        "succeeded": [
-            {
-                "expense_id": entry.get("expense_id"),
-                "line_number": entry.get("line_number"),
-            }
-            for entry in line_results.get("succeeded", [])
-        ],
-        "failed": [
-            {
-                "expense_id": entry.get("expense_id"),
-                "message": _truncate_error(entry.get("message")),
-                "error_type": entry.get("error_type"),
-            }
-            for entry in line_results.get("failed", [])
-        ],
-        "error": _truncate_error(aborted_reason),
-    }
 
 
 async def _save_integration_log(
@@ -990,24 +930,6 @@ async def _save_integration_log(
         processing_stage=processing_stage,
         details=details,
     )
-
-
-def _build_sheet_not_created_details(
-    error_reason: str, *, downstream_error: str = "Expense sheet creation failed"
-) -> dict[str, Any]:
-    """Compact details payload for logs written BEFORE/THEREFORE without a
-    created sheet (WO#15.3): sheet FAILED + downstream stages SKIPPED."""
-    truncated = _truncate_error(error_reason)
-    return {
-        "expense_sheet": {
-            "status": "FAILED",
-            "expensesheetnumber": None,
-            "error": truncated,
-        },
-        "expense_lines": {"status": "SKIPPED", "error": downstream_error},
-        "submission": {"status": "SKIPPED", "error": downstream_error},
-        "approval": {"status": "SKIPPED", "error": downstream_error},
-    }
 
 
 async def _raise_expense_sheet_creation_error(
@@ -1039,59 +961,29 @@ async def _raise_expense_sheet_creation_error(
     ) from exc
 
 
-def map_owner_to_maconomy_employee(
-    owner_login_id: str, employees: list[dict[str, Any]]
-) -> dict[str, Any] | None:
-    """Map a SAP Concur OwnerLoginID to a Maconomy employee by matching email."""
-    if not owner_login_id:
-        return None
-    owner_login_id_lower = owner_login_id.lower()
-    for employee in employees:
-        if employee.get("email", "").lower() == owner_login_id_lower:
-            return {
-                "email": employee["email"],
-                "employeenumber": employee["employeenumber"],
-                "employeename": employee.get("employeename", ""),
-            }
-    return None
 
-
-# @router.post(
-#     "/sync-sap-concur-report-into-maconomy-by-report-id",
-#     response_model=list[dict[str, Any]],
-# )
-# async def s(
-#     report_id: str,
-# ) -> list[dict[str, Any]]:
-
-    # # Check if the report is present in the sap concur or not
-    # try:
-    #     expense_reports = await SAPConcurService().get_yesterday_and_todays_new_expense_reports_from_sap_concur()
-    # except Exception as exc:
-    #     raise HTTPException(
-    #         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-    #         detail=f"Failed to fetch expense reports from SAP Concur: {str(exc)}",
-    #     ) from exc
-
-
-
-    # Check if report is present in the retrieved report
-    # for report in expense_reports:
-    #     existing_report_id = report.get("reportId")
-
-    return None
-
-
-    # If no then stop the process and return that report does not exist in the sap concur
-
-    # If yes then retrieve owner login id and check if employee matches with the maconomy email and it has vendor or not
-
-    # If no then stop the process and return that employee not found
-
-    # If yes then check if expense sheet is created for that report
-
-        # If yes then check if all expense lines are created or not
-        # If yes then then check if the expense line item in maconomy are present in the sap concur,stop the process and return that already sync
-        # If not then create all the expense lines in maconomy
-
-    # If no then create the expense sheet and expense line items
+@router.post(
+    "/retry-expense-report-sync",
+    response_model=dict[str, Any],
+    dependencies=[
+        Depends(
+            require_active_integration_service(
+                IntegrationServiceIdentifier.MACONOMY_SAP_CONCUR_EXPENSE_SYNC
+            )
+        )
+    ],
+)
+async def retry_expense_report_sync(
+    session: DatabaseSession,
+    request: RetryExpenseReportRequest,
+) -> dict[str, Any]:
+    """Retry-resume a single SAP Concur report into Maconomy (Req[#16])."""
+    report_id = request.report_id.strip()
+    if not report_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="report_id is required",
+        )
+    return await retry_expense_report_service.retry_expense_report_sync(
+        session, report_id=report_id
+    )

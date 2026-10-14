@@ -400,10 +400,10 @@ class SAPConcurService:
             "Accept": "application/json"
         }
         params = {
-            "user": "cbrown@thf-cpa.com.uat",
-            # "modifiedDateAfter": yesterday.isoformat(),
-            # "modifiedDateBefore": tomorrow.isoformat(),
-            # "approvalStatusCode": "A_APPR",
+            "user": "ALL",
+            "modifiedDateAfter": yesterday.isoformat(),
+            "modifiedDateBefore": tomorrow.isoformat(),
+            "approvalStatusCode": "A_APPR",
             # "paymentStatusCode": "P_PROC",
             "limit": 100,
         }
@@ -412,6 +412,70 @@ class SAPConcurService:
             client, "GET", url, headers=headers, params=params
         )
         print("Response:", response.status_code, response.text)
+        response.raise_for_status()
+
+        try:
+            payload = response.json()
+            items = payload["Items"]
+        except (KeyError, TypeError, ValueError) as exc:
+            raise SAPConcurServiceError(
+                "Invalid Concur expense reports response"
+            ) from exc
+
+        if not isinstance(items, list) or any(
+            not isinstance(item, dict) for item in items
+        ):
+            raise SAPConcurServiceError(
+                "Invalid Concur expense reports response"
+            )
+
+        for item in items:
+            create_date = item.get("CreateDate")
+            if not isinstance(create_date, str) or not create_date:
+                raise SAPConcurServiceError(
+                    "Invalid Concur expense reports response"
+                )
+
+        return items
+
+    # Retry API
+    # Get approved expense reports from SAP Concur for retry processing
+    async def get_retry_candidate_expense_reports_from_sap_concur(
+        self,
+    ) -> list[dict[str, Any]]:
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                return await self._get_retry_candidate_expense_reports(
+                    client,
+                )
+        except httpx.HTTPError as exc:
+            raise SAPConcurServiceError("SAP Concur request failed") from exc
+
+
+    async def _get_retry_candidate_expense_reports(
+        self,
+        client: httpx.AsyncClient,
+    ) -> list[dict[str, Any]]:
+        """
+        Fetch Concur expense reports with approvalStatusCode=A_APPR.
+
+        No date window (retry must reach older failed reports — OQ1).
+        limit=100 kept per user decision (2026-10-14); pagination deferred.
+        """
+        url = f"{self.settings.sap_concur_api_base_url}/api/v3.0/expense/reports"
+        headers = {
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Accept": "application/json",
+        }
+        params = {
+            "user": "ALL",
+            "approvalStatusCode": "A_APPR",
+            "limit": 100,
+        }
+
+        response = await self._request_with_auth(
+            client, "GET", url, headers=headers, params=params
+        )
         response.raise_for_status()
 
         try:

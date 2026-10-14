@@ -1,6 +1,7 @@
 from app.features.sap_concur_integration.services import (
     expensesheet_expensereport_mapping_service,
     integration_log_service,
+    retry_expense_report_service,
     sap_concur_service,
 )
 
@@ -13,5 +14,6 @@ __all__ = [
     "MaconomyServiceError",
     "expensesheet_expensereport_mapping_service",
     "integration_log_service",
+    "retry_expense_report_service",
     "sap_concur_service",
 ]
