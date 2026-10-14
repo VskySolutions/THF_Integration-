@@ -11,6 +11,7 @@ class IntegrationStatus(str, Enum):
 class IntegrationAction(str, Enum):
     CREATE = "CREATE"
     UPDATE = "UPDATE"
+    RETRY_CREATE = "RETRY_CREATE"
 
 
 class ProcessingStage(str, Enum):
