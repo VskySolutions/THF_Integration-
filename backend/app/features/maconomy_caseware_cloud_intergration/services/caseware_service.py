@@ -305,11 +305,12 @@ class CasewareService:
     ) -> dict[str, Any]:
         if not isinstance(address_cw_guid, str) or not address_cw_guid.strip():
             raise CasewareServiceError("Invalid CaseWare address CWGuid")
-        await self._request(
+        response = await self._request(
             "PATCH",
             f"/api/v2/entities/addresses/{address_cw_guid}",
             json=self._address_update_payload(job),
         )
+        response.raise_for_status()
         return {"CWGuid": address_cw_guid}
 
     async def create_entity_address(
@@ -419,11 +420,12 @@ class CasewareService:
             "Address3": job.get("name4", ""),
             "AddressCategory": "Business",
             "City": job.get("postaldistrict", ""),
-            "Country": job.get("country", ""),
-            "CountryCode": CasewareService._country_code(job),
+            "Country": job.get("country", "") if CasewareService._country_code(job) not in ("US", "CA") else CasewareService._country_code(job),
+            #"CountryCode": CasewareService._country_code(job),
             "Name": job.get("name1", ""),
             "PostalCode": job.get("zipcode", ""),
             "PhoneNumber": job.get("telephone", ""),
+            "Province": job.get("country", "") if CasewareService._country_code(job) in ("US", "CA") else "",
         }
 
     @staticmethod

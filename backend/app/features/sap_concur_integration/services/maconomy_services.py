@@ -56,52 +56,63 @@ class MaconomyService:
         self, expense_sheet_data: dict[str, Any], employee_number: str | None = None
     ) -> dict[str, Any]:
         print("=========== create_expense_sheet =============")
-        try:
-            expensesheet_data = map_concur_expense_report_to_maconomy_expensesheet(
-                expense_sheet_data, employee_number=employee_number
-            )
-        except ValueError as exc:
-            raise MaconomyServiceError(str(exc)) from exc
-
-        try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                reconnect_token = await self._get_reconnect_token(client)
-
-                instance_id, concurrency_token = await self._retrieve_expense_sheet_instance(
-                    client=client,
-                    reconnect_token=reconnect_token,
+        # Per-attempt mapping so a retry re-derives the payload from scratch.
+        def _map_sheet() -> dict[str, Any]:
+            try:
+                return map_concur_expense_report_to_maconomy_expensesheet(
+                    expense_sheet_data, employee_number=employee_number
                 )
+            except ValueError as map_exc:
+                raise MaconomyServiceError(str(map_exc)) from map_exc
 
-                _, concurrency_token = await self._initialize_expense_sheet_card(
-                    client=client,
-                    reconnect_token=reconnect_token,
-                    instance_id=instance_id,
-                    concurrency_token=concurrency_token,
-                )
+        # Transient-fault retry (FR-5): up to 2 attempts (initial + one
+        # immediate retry), only on a genuine network failure. Each attempt
+        # re-runs the full sequence (fresh token/instance — FR-10). A mapping
+        # ValueError is a deterministic failure and is NOT retried. Duplicate
+        # safety relies on the upstream pre-create re-check / sap_report_id
+        # dedupe (documented trade-off).
+        for attempt in range(2):
+            try:
+                expensesheet_data = _map_sheet()
+                async with httpx.AsyncClient(timeout=self.timeout) as client:
+                    reconnect_token = await self._get_reconnect_token(client)
 
-
-                print("======== Expense Sheet Creation Started ========")
-                url = f"{self._expense_sheet_url()}/instances/{instance_id}/data/panes/card"
-                headers = self._container_headers(reconnect_token)
-                headers["Maconomy-Concurrency-Control"] = concurrency_token
-                response = await client.post(url, headers=headers, json=expensesheet_data)
-
-                response.raise_for_status()
-
-                try:
-                    payload = response.json()
-                except (KeyError, TypeError, ValueError) as json_exc:
-                    raise MaconomyServiceError("Invalid Maconomy expense sheet response") from json_exc
-        
-                if not isinstance(payload, dict):
-                    raise MaconomyServiceError(
-                        "Invalid Maconomy expense sheet response"
+                    instance_id, concurrency_token = await self._retrieve_expense_sheet_instance(
+                        client=client,
+                        reconnect_token=reconnect_token,
                     )
 
-                print("========= Expense Sheet creation completed ==========")
-                return payload
-        except httpx.HTTPError as exc:
-            raise MaconomyServiceError("Maconomy request failed") from exc
+                    _, concurrency_token = await self._initialize_expense_sheet_card(
+                        client=client,
+                        reconnect_token=reconnect_token,
+                        instance_id=instance_id,
+                        concurrency_token=concurrency_token,
+                    )
+
+                    print("======== Expense Sheet Creation Started ========")
+                    url = f"{self._expense_sheet_url()}/instances/{instance_id}/data/panes/card"
+                    headers = self._container_headers(reconnect_token)
+                    headers["Maconomy-Concurrency-Control"] = concurrency_token
+                    response = await client.post(url, headers=headers, json=expensesheet_data)
+
+                    response.raise_for_status()
+
+                    try:
+                        payload = response.json()
+                    except (KeyError, TypeError, ValueError) as json_exc:
+                        raise MaconomyServiceError("Invalid Maconomy expense sheet response") from json_exc
+
+                    if not isinstance(payload, dict):
+                        raise MaconomyServiceError(
+                            "Invalid Maconomy expense sheet response"
+                        )
+
+                    print("========= Expense Sheet creation completed ==========")
+                    return payload
+            except httpx.HTTPError as http_exc:
+                if attempt >= 1:
+                    # Second failure: surface the original error (NFR-2).
+                    raise MaconomyServiceError("Maconomy request failed") from http_exc
 
 
     async def _get_reconnect_token(self, client: httpx.AsyncClient) -> str:
@@ -453,16 +464,24 @@ class MaconomyService:
             return []
 
         print("get_employees_by_emails_from_maconomy", normalized)
-        try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                reconnect_token = await self._get_reconnect_token(client)
-                return await self._get_maconomy_employees_by_emails(
-                    client,
-                    reconnect_token,
-                    normalized,
-                )
-        except httpx.HTTPError as exc:
-            raise MaconomyServiceError("Maconomy request failed") from exc
+
+        # Transient-fault retry (FR-6): up to 2 attempts (initial + one
+        # immediate retry), only on a genuine network failure. Each attempt
+        # re-runs the full sequence (fresh token — FR-10). On the second
+        # failure the original error is surfaced (NFR-2). Filter stays
+        # electronicmailaddress.
+        for attempt in range(2):
+            try:
+                async with httpx.AsyncClient(timeout=self.timeout) as client:
+                    reconnect_token = await self._get_reconnect_token(client)
+                    return await self._get_maconomy_employees_by_emails(
+                        client,
+                        reconnect_token,
+                        normalized,
+                    )
+            except httpx.HTTPError as http_exc:
+                if attempt >= 1:
+                    raise MaconomyServiceError("Maconomy request failed") from http_exc
 
 
     async def _get_maconomy_employees_by_emails(
