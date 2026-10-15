@@ -71,6 +71,7 @@ async def get_job_candidates(
                     await maconomy.get_country_codes() if candidates else {}
                 )
                 caseware = CasewareService(caseware_client, settings)
+                
                 for candidate in candidates:
                     try:
                         _apply_country_code(candidate, country_codes)
@@ -253,7 +254,6 @@ async def _update_caseware_job(
     owner_id = entity.get("Id")
     if isinstance(owner_id, bool) or not isinstance(owner_id, int):
         raise CasewareServiceError("CaseWare entity has an invalid numeric Id")
-
     addresses = await caseware.get_entity_addresses(entity_id)
     address_id = checkpoint.get("addressId")
     address_no = checkpoint.get("addressNo")
@@ -294,7 +294,6 @@ async def _update_caseware_job(
         await caseware.update_entity_address(candidate, selected_address_id)
         address_id = selected_address_id
         address_no = selected_address_no
-
     address_id = selected_address.get("CWGuid")
     address_no = selected_address.get("Id")
     if not isinstance(address_id, str) or not address_id.strip():
@@ -370,11 +369,21 @@ def _apply_country_code(
     if not isinstance(country_name, str) or not country_name.strip():
         raise MaconomyServiceError("Maconomy country is required")
 
-    country_code = country_codes.get(country_name.strip().casefold())
-    if country_code is None:
+    normalized_codes = {
+        key.strip().lower().replace(" ", "_"): (key, value)
+        for key, value in country_codes.items()
+    }
+
+    normalized_country = country_name.strip().lower().replace(" ", "_")
+    match = normalized_codes.get(normalized_country)
+
+    if match is None:
         raise MaconomyServiceError(
             f"Maconomy country {country_name!r} was not found in the country list"
         )
+
+    original_country, country_code = match
+    candidate["country"] = original_country
     candidate["countryCode"] = country_code
 
 
