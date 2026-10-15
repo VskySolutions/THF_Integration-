@@ -420,11 +420,12 @@ class CasewareService:
             "Address3": job.get("name4", ""),
             "AddressCategory": "Business",
             "City": job.get("postaldistrict", ""),
-            "Country": job.get("country", ""),
+            "Country": job.get("country", "") if CasewareService._country_code(job) not in ("US", "CA") else CasewareService._country_code(job),
             #"CountryCode": CasewareService._country_code(job),
             "Name": job.get("name1", ""),
             "PostalCode": job.get("zipcode", ""),
             "PhoneNumber": job.get("telephone", ""),
+            "Province": job.get("country", "") if CasewareService._country_code(job) in ("US", "CA") else "",
         }
 
     @staticmethod
