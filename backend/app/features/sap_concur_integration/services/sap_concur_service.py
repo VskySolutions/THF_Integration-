@@ -1,6 +1,5 @@
 from datetime import datetime, timedelta
-
-from typing import Any, ClassVar
+from typing import Any, Awaitable, Callable, ClassVar, TypeVar
 
 import asyncio
 import time
@@ -8,6 +7,8 @@ import time
 import httpx
 
 from app.core.config import Settings, get_settings
+
+T = TypeVar("T")
 
 
 class SAPConcurServiceError(Exception):
@@ -348,7 +349,6 @@ class SAPConcurService:
         response = await client.request(
             method, url, headers=request_headers, **kwargs
         )
-        print("Bye")
 
         if response.status_code in (
             httpx.codes.UNAUTHORIZED,
@@ -368,6 +368,219 @@ class SAPConcurService:
         return response
 
 
+    # Safety ceiling for report pagination (NFR-1). A well-behaved Concur
+    # tenant never approaches this; it exists only to guarantee the paging loop
+    # can never run unbounded if the top-level NextPage URL misbehaves.
+    _MAX_REPORT_PAGES: ClassVar[int] = 500
+
+    def _validate_report_items(self, items: Any) -> list[dict[str, Any]]:
+        """Validate one page of Concur expense-report items (FR-11).
+
+        Shared by the batch and retry report-retrieval paths. Preserves the
+        original exception type and message so integration behaviour is
+        unchanged.
+        """
+        if not isinstance(items, list) or any(
+            not isinstance(item, dict) for item in items
+        ):
+            raise SAPConcurServiceError(
+                "Invalid Concur expense reports response"
+            )
+
+        for item in items:
+            create_date = item.get("CreateDate")
+            if not isinstance(create_date, str) or not create_date:
+                raise SAPConcurServiceError(
+                    "Invalid Concur expense reports response"
+                )
+
+        return items
+
+    @staticmethod
+    def _extract_next_url(metadata_next: Any) -> str | None:
+        """Return the next-page URL from a Concur top-level `NextPage` value, if any.
+
+        Concur returns `NextPage` at the response root as an absolute next-page
+        URL with its own paging (offset/page/etc.) already encoded. We follow
+        that URL verbatim rather than constructing an `offset` ourselves, so
+        paging works regardless of the exact param style Concur expects. Returns
+        None when `NextPage` is absent/empty (caller treats that as the terminal
+        page). OQ-3.
+        """
+        if not isinstance(metadata_next, str):
+            return None
+        text = metadata_next.strip()
+        return text or None
+
+    async def _retry_once(
+        self,
+        factory: Callable[[], Awaitable[T]],
+        *,
+        retry_on: tuple[type[BaseException], ...],
+    ) -> T:
+        """Run `factory` once; on a matching failure, retry exactly once.
+
+        Bounded to 2 attempts (initial + one immediate retry), with no sleep or
+        backoff (FR-8). If the second attempt also raises, that exception is
+        re-raised with the original chained via `from` (NFR-2). A clean success
+        is never re-issued, and a failure the caller has already handled
+        internally is never seen here (FR-10).
+        """
+        try:
+            return await factory()
+        except retry_on:
+            return await factory()
+
+    async def _fetch_report_page(
+        self,
+        client: httpx.AsyncClient,
+        url: str,
+        headers: dict[str, str],
+        page_params: dict[str, Any],
+    ) -> httpx.Response:
+        """Issue one authenticated report page request and enforce 2xx.
+
+        A non-2xx is printed (status + body) before `raise_for_status` converts
+        it to `httpx.HTTPError`, so the real Concur failure is visible in the
+        terminal instead of surfacing as the generic "SAP Concur request failed".
+        """
+        response = await self._request_with_auth(
+            client, "GET", url, headers=headers, params=page_params
+        )
+
+        response.raise_for_status()
+        return response
+
+    async def _get_all_expense_reports_paged(
+        self,
+        client: httpx.AsyncClient,
+        params: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        """Retrieve every Concur report matching `params`, paging past limit=100.
+
+        Page 1 sends the original params with NO `offset` (this Concur edition
+        rejects a caller-supplied offset on the first request). Subsequent pages
+        follow the absolute URL Concur returns in the top-level `NextPage` verbatim,
+        so paging works regardless of the exact param style Concur expects.
+        Pagination stops when `NextPage` is null/absent or a page returns no
+        `Items`. Each individual page request is retried at most once on a
+        genuine transport failure (FR-7/FR-8) — a clean success is never
+        re-issued, and the internal 401/403 token-refresh inside
+        `_request_with_auth` stays orthogonal (FR-10). Bounded by
+        `_MAX_REPORT_PAGES` (NFR-1).
+        """
+        url = f"{self.settings.sap_concur_api_base_url}/api/v3.0/expense/reports"
+        headers = {
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Accept": "application/json",
+        }
+
+        # Page 1 uses the original, proven-working params (NO offset): this
+        # Concur edition rejects a caller-supplied `offset` on the first
+        # request ("Invalid offset"), so paging is driven by the URL Concur
+        # returns in the top-level NextPage instead.
+        all_items: list[dict[str, Any]] = []
+        seen_report_ids: set[str] = set()
+        next_url: str | None = None
+        next_params: dict[str, Any] | None = None
+        pages_fetched = 0
+
+        while True:
+            if pages_fetched >= self._MAX_REPORT_PAGES:
+                raise SAPConcurServiceError(
+                    "Concur expense report pagination exceeded the "
+                    f"maximum page ceiling of {self._MAX_REPORT_PAGES}"
+                )
+
+            if next_url is None:
+                request_url = url
+                request_params: dict[str, Any] | None = params
+            else:
+                request_url = next_url
+                request_params = next_params
+
+            # Per-page single retry (FR-7/FR-8): exactly one immediate
+            # re-attempt, only when the request genuinely fails (transport
+            # error or a non-2xx that survived the 401/403 token-refresh).
+            async def _fetch_page() -> httpx.Response:
+                return await self._fetch_report_page(
+                    client, request_url, headers, request_params
+                )
+
+            response = await self._retry_once(
+                _fetch_page,
+                retry_on=(httpx.HTTPError,),
+            )
+
+            pages_fetched += 1
+
+            try:
+                payload = response.json()
+                items = payload["Items"]
+            except (KeyError, TypeError, ValueError) as exc:
+                raise SAPConcurServiceError(
+                    "Invalid Concur expense reports response"
+                ) from exc
+
+            # TESTING: report this page's record count.
+            print(
+                f"[Concur debug] page {pages_fetched}: {len(items)} record(s)"
+            )
+
+            if not isinstance(items, list) or any(
+                not isinstance(item, dict) for item in items
+            ):
+                raise SAPConcurServiceError(
+                    "Invalid Concur expense reports response"
+                )
+
+            # Terminal fallback: an empty page ends pagination regardless of
+            # the NextPage field, so a missing/odd NextPage can never loop forever.
+            if not items:
+                break
+
+            for item in items:
+                report_id = str(item.get("ReportId") or "").strip()
+                if report_id:
+                    if report_id in seen_report_ids:
+                        continue
+                    seen_report_ids.add(report_id)
+                all_items.append(item)
+
+            # Confirmed live (2026-10-14): the next-page URL is exposed as a
+            # TOP-LEVEL `NextPage` field (a URL string when more pages exist,
+            # null on the last page) — NOT under `Metadata`. This endpoint
+            # rejects client-driven `offset`.
+            metadata_next = payload.get("NextPage")
+
+
+            next_page_url = self._extract_next_url(metadata_next)
+
+
+            # Preferred: follow the next-page URL Concur returns verbatim.
+            if next_page_url and next_page_url != request_url:
+                
+                next_url = next_page_url
+                next_params = None
+                continue
+
+            # TESTING: explain why pagination is stopping on this page.
+            if not next_page_url:
+                stop_reason = "next URL is None (no followable NextPage)"
+            else:
+                stop_reason = "next URL == request_url (guard stop)"
+
+            break
+
+        # Validate the accumulated set exactly as the previous single-page
+        # paths did (same exception type/message — FR-11).
+        # TESTING: report the total retrieved count to verify paging past 100.
+        print(
+            f"[Concur debug] pagination complete: {len(all_items)} total report(s) "
+            f"across {pages_fetched} page(s) (beyond 100: {len(all_items) > 100})"
+        )
+        return self._validate_report_items(all_items)
+
     # Get yesterday and today's new expense reports from SAP Concur
     async def get_yesterday_and_todays_new_expense_reports_from_sap_concur(
         self,
@@ -378,7 +591,7 @@ class SAPConcurService:
                     client,
                 )
         except httpx.HTTPError as exc:
-            raise SAPConcurServiceError("SAP Concur request failed") from exc
+            raise SAPConcurServiceError(f"SAP Concur request failed: {exc!r}") from exc
 
 
     async def _get_new_expense_reports(
@@ -394,11 +607,6 @@ class SAPConcurService:
         tomorrow = today + timedelta(days=1)
 
         print(f"Fetching reports from {yesterday} to {tomorrow}")
-        url = f"{self.settings.sap_concur_api_base_url}/api/v3.0/expense/reports"
-        headers = {
-            "Content-Type": "application/x-www-form-urlencoded",
-            "Accept": "application/json"
-        }
         params = {
             "user": "ALL",
             "modifiedDateAfter": yesterday.isoformat(),
@@ -408,35 +616,7 @@ class SAPConcurService:
             "limit": 100,
         }
 
-        response = await self._request_with_auth(
-            client, "GET", url, headers=headers, params=params
-        )
-        print("Response:", response.status_code, response.text)
-        response.raise_for_status()
-
-        try:
-            payload = response.json()
-            items = payload["Items"]
-        except (KeyError, TypeError, ValueError) as exc:
-            raise SAPConcurServiceError(
-                "Invalid Concur expense reports response"
-            ) from exc
-
-        if not isinstance(items, list) or any(
-            not isinstance(item, dict) for item in items
-        ):
-            raise SAPConcurServiceError(
-                "Invalid Concur expense reports response"
-            )
-
-        for item in items:
-            create_date = item.get("CreateDate")
-            if not isinstance(create_date, str) or not create_date:
-                raise SAPConcurServiceError(
-                    "Invalid Concur expense reports response"
-                )
-
-        return items
+        return await self._get_all_expense_reports_paged(client, params)
 
     # Retry API
     # Get approved expense reports from SAP Concur for retry processing
@@ -449,7 +629,7 @@ class SAPConcurService:
                     client,
                 )
         except httpx.HTTPError as exc:
-            raise SAPConcurServiceError("SAP Concur request failed") from exc
+            raise SAPConcurServiceError(f"SAP Concur request failed: {exc!r}") from exc
 
 
     async def _get_retry_candidate_expense_reports(
@@ -460,47 +640,15 @@ class SAPConcurService:
         Fetch Concur expense reports with approvalStatusCode=A_APPR.
 
         No date window (retry must reach older failed reports — OQ1).
-        limit=100 kept per user decision (2026-10-14); pagination deferred.
+        Pages past limit=100 so no matching report is missed (FR-2).
         """
-        url = f"{self.settings.sap_concur_api_base_url}/api/v3.0/expense/reports"
-        headers = {
-            "Content-Type": "application/x-www-form-urlencoded",
-            "Accept": "application/json",
-        }
         params = {
             "user": "ALL",
             "approvalStatusCode": "A_APPR",
             "limit": 100,
         }
 
-        response = await self._request_with_auth(
-            client, "GET", url, headers=headers, params=params
-        )
-        response.raise_for_status()
-
-        try:
-            payload = response.json()
-            items = payload["Items"]
-        except (KeyError, TypeError, ValueError) as exc:
-            raise SAPConcurServiceError(
-                "Invalid Concur expense reports response"
-            ) from exc
-
-        if not isinstance(items, list) or any(
-            not isinstance(item, dict) for item in items
-        ):
-            raise SAPConcurServiceError(
-                "Invalid Concur expense reports response"
-            )
-
-        for item in items:
-            create_date = item.get("CreateDate")
-            if not isinstance(create_date, str) or not create_date:
-                raise SAPConcurServiceError(
-                    "Invalid Concur expense reports response"
-                )
-
-        return items
+        return await self._get_all_expense_reports_paged(client, params)
 
 
     # Get expense reports by email ID from SAP Concur
