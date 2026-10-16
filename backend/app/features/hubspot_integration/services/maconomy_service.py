@@ -228,43 +228,45 @@ class MaconomyService:
             if isinstance(record, dict) and isinstance(record.get("data"), dict)
         ]
 
-    async def _get_recent_contact_persons(
-        self,
-        customers: list[dict[str, Any]],
-    ) -> dict[str, list[dict[str, Any]]]:
-        """Separate customers into create, update, and skip lists."""
+    # async def _get_recent_contact_persons(
+    #     self,
+    #     customers: list[dict[str, Any]],
+    # ) -> dict[str, list[dict[str, Any]]]:
+    #     """Separate customers into create, update, and skip lists."""
 
-        create_list: list[dict[str, Any]] = []
-        update_list: list[dict[str, Any]] = []
-        skip_list: list[dict[str, Any]] = []
+    #     create_list: list[dict[str, Any]] = []
+    #     update_list: list[dict[str, Any]] = []
+    #     skip_list: list[dict[str, Any]] = []
 
-        for customer in customers:
-            current_version = customer.get("versionnumber")
-            synced_version = customer.get("customerremark26")
+    #     for customer in customers:
+    #         current_version = customer.get("versionnumber")
+    #         synced_version = customer.get("customerremark26")
 
-            if synced_version is None or str(synced_version).strip() == "":
-                create_list.append(customer)
-                continue
+    #         if synced_version is None or str(synced_version).strip() == "":
+    #             create_list.append(customer)
+    #             continue
 
-            try:
-                current_version = int(current_version)
-                synced_version = int(synced_version)
-            except (TypeError, ValueError):
-                skip_list.append(customer)
-                continue
+    #         try:
+    #             current_version = int(current_version)
+    #             synced_version = int(synced_version)
+    #         except (TypeError, ValueError):
+    #             skip_list.append(customer)
+    #             continue
 
-            if current_version > synced_version:
-                update_list.append(customer)
-            elif current_version == synced_version:
-                skip_list.append(customer)
-            else:
-                skip_list.append(customer)
+    #         if current_version > synced_version:
+    #             update_list.append(customer)
+    #         elif current_version == synced_version:
+    #             skip_list.append(customer)
+    #         else:
+    #             skip_list.append(customer)
 
-        return {
-            "create": create_list,
-            "update": update_list,
-            "skip": skip_list,
-        }
+    #     return {
+    #         "create": create_list,
+    #         "update": update_list,
+    #         "skip": skip_list,
+    #     }
+
+
 
     def _contactcompanys_url(self) -> str:
         shortname = quote(self.settings.maconomy_shortname, safe="")
@@ -628,3 +630,5 @@ class MaconomyService:
             for record in records
             if isinstance(record, dict) and isinstance(record.get("data"), dict)
         ]
+
+    

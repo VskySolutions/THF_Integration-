@@ -138,11 +138,10 @@ def map_customers_to_contact_upsert(
                 properties[hubspot_property] = text
 
             # Mirror the company pattern: the id key is also a property.
-            properties["contactpersonnumber"] = contact_person_number
 
             inputs.append(
                 {
-                    "idProperty": "contactpersonnumber",
+                    "idProperty": "maconomy_contact_person_number",
                     "id": contact_person_number,
                     "properties": properties,
                 }
