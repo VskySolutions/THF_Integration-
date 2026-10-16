@@ -14,8 +14,8 @@ from app.features.hubspot_integration.services.hubspot_service import (
     HubSpotServiceError,
 )
 from app.features.hubspot_integration.services.maconomy_service import (
-    CustomerCardService,
-    CustomerCardServiceError,
+    MaconomyService,
+    MaconomyServiceError,
 )
 
 
@@ -30,13 +30,13 @@ router = APIRouter(
 async def get_recent_customers() -> dict[str, list[dict[str, Any]]]:
     """Retrieve recent Maconomy customers and classify them for HubSpot sync."""
     async with httpx.AsyncClient(timeout=60.0) as client:
-        service = CustomerCardService(client)
+        service = MaconomyService(client)
 
         try:
             customers = await service.get_recent_customers()
             return service.classify_customers(customers)
 
-        except CustomerCardServiceError as exc:
+        except MaconomyServiceError as exc:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail="Unable to retrieve customers from Maconomy",
@@ -47,14 +47,14 @@ async def get_recent_customers() -> dict[str, list[dict[str, Any]]]:
 async def sync_customers_to_hubspot() -> dict[str, Any]:
     """Fetch recent Maconomy customers; upsert Companies & Contacts."""
     async with httpx.AsyncClient(timeout=60.0) as client:
-        maconomy = CustomerCardService(client)
+        maconomy = MaconomyService(client)
         hubspot = HubSpotService(client)
 
         try:
             print("[Sync] 1/4 Fetching recent Maonomy customers...")
             customers = await maconomy.get_recent_customers()
             print(f"[Sync] 1/4 Fetched {len(customers)} customers")
-        except CustomerCardServiceError as exc:
+        except MaconomyServiceError as exc:
             print(f"[Sync] 1/4 Maonomy fetch FAILED: {exc}")
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
