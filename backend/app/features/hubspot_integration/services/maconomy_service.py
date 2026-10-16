@@ -309,7 +309,7 @@ class MaconomyService:
             )
             instance_response.raise_for_status()
         except httpx.HTTPError as exc:
-            raise CustomerCardServiceError(
+            raise MaconomyServiceError(
                 "Maconomy contact company instance request failed"
             ) from exc
 
@@ -318,12 +318,12 @@ class MaconomyService:
                 "containerInstanceId"
             ]
         except (KeyError, TypeError, ValueError) as exc:
-            raise CustomerCardServiceError(
+            raise MaconomyServiceError(
                 "Invalid Maconomy instance response"
             ) from exc
 
         if not instance_id_value or not str(instance_id_value).strip():
-            raise CustomerCardServiceError(
+            raise MaconomyServiceError(
                 "Invalid Maconomy instance response"
             )
         instance_id = str(instance_id_value).strip()
@@ -333,7 +333,7 @@ class MaconomyService:
             or ""
         ).strip()
         if not concurrency_token:
-            raise CustomerCardServiceError(
+            raise MaconomyServiceError(
                 "Invalid Maconomy instance response"
             )
 
@@ -350,7 +350,7 @@ class MaconomyService:
             )
             bind_response.raise_for_status()
         except httpx.HTTPError as exc:
-            raise CustomerCardServiceError(
+            raise MaconomyServiceError(
                 "Maconomy contact company bind request failed"
             ) from exc
 
@@ -358,7 +358,7 @@ class MaconomyService:
             bind_response.headers.get("Maconomy-Concurrency-Control") or ""
         ).strip()
         if not bound_token:
-            raise CustomerCardServiceError(
+            raise MaconomyServiceError(
                 "Invalid Maconomy bind response"
             )
 
@@ -366,7 +366,7 @@ class MaconomyService:
             pane = bind_response.json()["panes"]["card"]
             records = [item["data"] for item in pane["records"]]
         except (KeyError, TypeError, ValueError) as exc:
-            raise CustomerCardServiceError(
+            raise MaconomyServiceError(
                 "Invalid Maconomy bind response"
             ) from exc
 
@@ -378,7 +378,7 @@ class MaconomyService:
             == str(customer_number).strip()
         ]
         if len(matching) != 1:
-            raise CustomerCardServiceError(
+            raise MaconomyServiceError(
                 f"Maconomy contact company {customer_number} was not found"
             )
 
@@ -401,7 +401,7 @@ class MaconomyService:
         try:
             new_remarks5 = str(int(current_version_number) + 1)
         except (TypeError, ValueError) as exc:
-            raise CustomerCardServiceError(
+            raise MaconomyServiceError(
                 "Invalid version number for remarks5 update"
             ) from exc
 
@@ -425,7 +425,7 @@ class MaconomyService:
             )
             response.raise_for_status()
         except httpx.HTTPError as exc:
-            raise CustomerCardServiceError(
+            raise MaconomyServiceError(
                 "Maconomy contact company remarks5 update failed"
             ) from exc
 
@@ -474,7 +474,7 @@ class MaconomyService:
             )
             instance_response.raise_for_status()
         except httpx.HTTPError as exc:
-            raise CustomerCardServiceError(
+            raise MaconomyServiceError(
                 "Maconomy contact person instance request failed"
             ) from exc
 
@@ -483,12 +483,12 @@ class MaconomyService:
                 "containerInstanceId"
             ]
         except (KeyError, TypeError, ValueError) as exc:
-            raise CustomerCardServiceError(
+            raise MaconomyServiceError(
                 "Invalid Maconomy instance response"
             ) from exc
 
         if not instance_id_value or not str(instance_id_value).strip():
-            raise CustomerCardServiceError(
+            raise MaconomyServiceError(
                 "Invalid Maconomy instance response"
             )
         instance_id = str(instance_id_value).strip()
@@ -498,7 +498,7 @@ class MaconomyService:
             or ""
         ).strip()
         if not concurrency_token:
-            raise CustomerCardServiceError(
+            raise MaconomyServiceError(
                 "Invalid Maconomy instance response"
             )
 
@@ -516,7 +516,7 @@ class MaconomyService:
             )
             bind_response.raise_for_status()
         except httpx.HTTPError as exc:
-            raise CustomerCardServiceError(
+            raise MaconomyServiceError(
                 "Maconomy contact person bind request failed"
             ) from exc
 
@@ -524,7 +524,7 @@ class MaconomyService:
             bind_response.headers.get("Maconomy-Concurrency-Control") or ""
         ).strip()
         if not bound_token:
-            raise CustomerCardServiceError(
+            raise MaconomyServiceError(
                 "Invalid Maconomy bind response"
             )
 
@@ -532,7 +532,7 @@ class MaconomyService:
             pane = bind_response.json()["panes"]["card"]
             records = [item["data"] for item in pane["records"]]
         except (KeyError, TypeError, ValueError) as exc:
-            raise CustomerCardServiceError(
+            raise MaconomyServiceError(
                 "Invalid Maconomy bind response"
             ) from exc
 
@@ -544,7 +544,7 @@ class MaconomyService:
             == str(contact_person_number).strip()
         ]
         if len(matching) != 1:
-            raise CustomerCardServiceError(
+            raise MaconomyServiceError(
                 f"Maconomy contact person {contact_person_number} "
                 "was not found"
             )
@@ -568,7 +568,7 @@ class MaconomyService:
         try:
             new_remarks5 = str(int(current_version_number) + 1)
         except (TypeError, ValueError) as exc:
-            raise CustomerCardServiceError(
+            raise MaconomyServiceError(
                 "Invalid version number for remarks5 update"
             ) from exc
 
@@ -592,12 +592,14 @@ class MaconomyService:
             )
             response.raise_for_status()
         except httpx.HTTPError as exc:
-            raise CustomerCardServiceError(
+            raise MaconomyServiceError(
                 "Maconomy contact person remarks5 update failed"
             ) from exc
 
         return {"instance_id": instance_id, "remarks5": new_remarks5}
 
+    async def _get_recent_contact_persons(
+        self,
         client: httpx.AsyncClient,
         reconnect_token: str,
     ) -> list[dict[str, Any]]:
@@ -608,19 +610,19 @@ class MaconomyService:
             "fields": CONTACT_PERSON_FIELDS,
             "limit": 5000,
         }
-
+ 
         response = await client.post(
             f"{self._contact_persons_url()}/filter",
             headers=self._container_headers(reconnect_token),
             json=payload,
         )
         response.raise_for_status()
-
+ 
         try:
             records = response.json()["panes"]["filter"]["records"]
         except (KeyError, TypeError, ValueError) as exc:
             raise MaconomyServiceError("Invalid Maconomy contact persons response") from exc
-
+ 
         return [
             record["data"]
             for record in records
