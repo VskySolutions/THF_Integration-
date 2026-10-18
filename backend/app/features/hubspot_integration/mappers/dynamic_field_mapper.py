@@ -12,8 +12,7 @@ input per contact, keyed by ``contactpersonnumber``
 (``idProperty="contactpersonnumber"``). The contact's ``contactcompanynumber``
 (== parent ``customernumber``) is carried as ``maconomy_customer_number``.
 
-Not yet wired into the sync flow (Req[#20] FR-8); a later requirement
-consumes these functions.
+These functions are used by the registered HubSpot synchronization endpoint.
 """
 
 from typing import Any
@@ -84,6 +83,7 @@ def map_customers_to_company_upsert(
             {
                 "idProperty": "maconomy_customer_number",
                 "id": customer_number,
+                "objectWriteTraceId": f"company-{customer_number}",
                 "properties": properties,
             }
         )
@@ -105,46 +105,49 @@ def map_customers_to_contact_upsert(
 
     Returns ``{"inputs": [...], "skipped": [...]}``.
     """
+    contacts: list[dict[str, Any]] = []
+    for customer in [*create_customers, *update_customers]:
+        contacts.extend(customer.get("contactperson") or [])
+    return map_contacts_to_upsert(contacts)
+
+
+def map_contacts_to_upsert(
+    contacts: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Build one HubSpot Contact upsert payload from classified contacts."""
     inputs: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
 
-    for customer in [*create_customers, *update_customers]:
-        contactpersons = customer.get("contactperson") or []
-
-        for contact in contactpersons:
-            contact_person_number = str(
-                contact.get("contactpersonnumber") or ""
-            ).strip()
-            if not contact_person_number:
-                skipped.append(
-                    {
-                        "record": contact,
-                        "reason": "missing or empty contactpersonnumber",
-                    }
-                )
-                continue
-
-            properties: dict[str, str] = {}
-            for (
-                maconomy_field,
-                hubspot_property,
-            ) in CONTACT_FIELD_MAPPING.items():
-                value = contact.get(maconomy_field)
-                if value is None:
-                    continue
-                text = str(value).strip()
-                if not text:
-                    continue
-                properties[hubspot_property] = text
-
-            # Mirror the company pattern: the id key is also a property.
-
-            inputs.append(
+    for contact in contacts:
+        contact_person_number = str(
+            contact.get("contactpersonnumber") or ""
+        ).strip()
+        if not contact_person_number:
+            skipped.append(
                 {
-                    "idProperty": "maconomy_contact_person_number",
-                    "id": contact_person_number,
-                    "properties": properties,
+                    "record": contact,
+                    "reason": "missing or empty contactpersonnumber",
                 }
             )
+            continue
+
+        properties: dict[str, str] = {}
+        for maconomy_field, hubspot_property in CONTACT_FIELD_MAPPING.items():
+            value = contact.get(maconomy_field)
+            if value is None:
+                continue
+            text = str(value).strip()
+            if not text:
+                continue
+            properties[hubspot_property] = text
+
+        inputs.append(
+            {
+                "idProperty": "maconomy_contact_person_number",
+                "id": contact_person_number,
+                "objectWriteTraceId": f"contact-{contact_person_number}",
+                "properties": properties,
+            }
+        )
 
     return {"inputs": inputs, "skipped": skipped}

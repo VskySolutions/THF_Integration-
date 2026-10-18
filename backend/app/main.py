@@ -35,6 +35,9 @@ from app.features.paycor_integration.routers import paycor_router,paycor_update_
 from app.features.hubspot_integration.routers.get_recent_customers_contacts import (
     router as maconomy_customers_contacts_router,
 )
+from app.features.hubspot_integration.routers.get_recent_customers import (
+    router as hubspot_manual_sync_router,
+)
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     # Database connections are created lazily by SQLAlchemy and disposed on exit.
@@ -99,3 +102,4 @@ app.include_router(paycor_timesheets_router, prefix=settings.api_v1_prefix)
 
 # HubSpot router
 app.include_router(maconomy_customers_contacts_router, prefix=settings.api_v1_prefix)
+app.include_router(hubspot_manual_sync_router, prefix=settings.api_v1_prefix)
