@@ -30,7 +30,7 @@ COMPANY_FIELD_MAPPING: dict[str, str] = {
 
 CONTACT_FIELD_MAPPING: dict[str, str] = {
     "contactpersonnumber": "maconomy_contact_person_number",
-    # "contactcompanynumber": "maconomy_customer_number",
+    "contactcompanynumber": "maconomy_customer_number",
     "electronicmailaddress": "email",
     "firstname": "firstname",
     "lastname": "lastname",
