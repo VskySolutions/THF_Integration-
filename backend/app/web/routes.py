@@ -1,5 +1,6 @@
 import uuid
 from typing import Annotated
+from urllib.parse import quote
 
 import httpx
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
@@ -17,6 +18,7 @@ from app.core.config import get_settings
 from app.db.session import get_db
 from app.features.integration_services.constants import IntegrationServiceIdentifier
 from app.features.integration_services.models import IntegrationService
+from app.features.hubspot_integration.models import HubSpotIntegrationRunLog
 from app.features.maconomy_caseware_cloud_intergration.models import (
     MaconomyCasewareRequestLog,
 )
@@ -439,6 +441,141 @@ async def retry_paycor_employee(
     return redirect
 
 
+@router.post(
+    "/integrations/{integration_id}/retry-hubspot-record",
+    name="retry_hubspot_record",
+    include_in_schema=False,
+)
+async def retry_hubspot_record(
+    integration_id: uuid.UUID,
+    request: Request,
+    current_user: AuthenticatedUser,
+    csrf_token: Annotated[str, Form(min_length=1)],
+    record_type: Annotated[str, Form(min_length=1)],
+    record_number: Annotated[str, Form(min_length=1, max_length=100)],
+    session: Annotated[AsyncSession, Depends(get_db)],
+) -> RedirectResponse:
+    """Manually retry one HubSpot Customer or Contact Person sync."""
+    if not valid_csrf_token(request, csrf_token):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired form token.",
+        )
+
+    result = await session.execute(
+        select(IntegrationService).where(
+            IntegrationService.id == integration_id,
+            IntegrationService.identifier_unique_name
+            == IntegrationServiceIdentifier.MACONOMY_HUBSPOT_SYNC.value,
+            IntegrationService.is_deleted.is_(False),
+        )
+    )
+    integration = result.scalar_one_or_none()
+    if integration is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="HubSpot synchronization integration service not found.",
+        )
+
+    redirect = RedirectResponse(
+        request.url_for("integration_logs", integration_id=integration.id),
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+    normalized_type = record_type.strip().lower()
+    normalized_number = record_number.strip()
+    path_segments = {
+        "customer": "customers",
+        "contact": "contacts",
+    }
+    path_segment = path_segments.get(normalized_type)
+    if path_segment is None or not normalized_number:
+        _set_flash(
+            request,
+            "Select Customer or Contact Person and enter a valid number.",
+            "danger",
+        )
+        return redirect
+
+    settings = get_settings()
+    encoded_number = quote(normalized_number, safe="")
+    sync_path = (
+        f"{settings.api_v1_prefix.rstrip('/')}/hubspot/"
+        f"{path_segment}/{encoded_number}/sync"
+    )
+    activity_data = {
+        "record_type": normalized_type,
+        "integration_id": str(integration.id),
+    }
+    try:
+        async with httpx.AsyncClient(
+            base_url=settings.scheduler_api_url,
+            headers={
+                "X-API-KEY": settings.scheduler_api_key.get_secret_value(),
+                "X-Request-ID": str(request.state.request_id),
+                "Accept": "application/json",
+            },
+            timeout=httpx.Timeout(settings.scheduler_request_timeout_seconds),
+        ) as client:
+            response = await client.post(sync_path)
+    except httpx.RequestError:
+        await log_activity(
+            session,
+            action="manual_retry",
+            user=current_user.username,
+            service=integration.identifier_unique_name,
+            data=activity_data,
+            status="FAILED",
+        )
+        _set_flash(
+            request,
+            "The HubSpot integration API could not be reached. Please try again.",
+            "danger",
+        )
+        return redirect
+
+    payload_value = _json_response_value(response)
+    payload = payload_value if isinstance(payload_value, dict) else {}
+    if not response.is_success:
+        await log_activity(
+            session,
+            action="manual_retry",
+            user=current_user.username,
+            service=integration.identifier_unique_name,
+            data=activity_data,
+            status="FAILED",
+        )
+        _set_flash(
+            request,
+            _internal_api_error(payload, response.status_code),
+            "danger",
+        )
+        return redirect
+
+    retry_status = str(payload.get("status") or "success")
+    await log_activity(
+        session,
+        action="manual_retry",
+        user=current_user.username,
+        service=integration.identifier_unique_name,
+        data=activity_data,
+        status="SUCCESS" if retry_status == "success" else "PARTIAL_SUCCESS",
+    )
+    record_label = "Customer" if normalized_type == "customer" else "Contact Person"
+    if retry_status == "partial_success":
+        _set_flash(
+            request,
+            f"{record_label} retry completed with some synchronization errors.",
+            "warning",
+        )
+    else:
+        _set_flash(
+            request,
+            f"{record_label} was synchronized with HubSpot successfully.",
+            "success",
+        )
+    return redirect
+
+
 @router.get(
     "/integrations/{integration_id}/logs",
     response_class=HTMLResponse,
@@ -665,6 +802,55 @@ async def integration_logs(
                             log.manual_review_count + log.failed_count,
                             1 if log.failure_stage else 0,
                         )
+                        for log in run_logs
+                    ),
+                    "latest_run": run_logs[0] if run_logs else None,
+                },
+                "flash_message": flash_message,
+                "flash_category": flash_category,
+            },
+        )
+
+    if (
+        integration.identifier_unique_name
+        == IntegrationServiceIdentifier.MACONOMY_HUBSPOT_SYNC.value
+    ):
+        run_result = await session.execute(
+            select(HubSpotIntegrationRunLog)
+            .order_by(HubSpotIntegrationRunLog.started_on_utc.desc())
+            .limit(250)
+        )
+        run_logs = list(run_result.scalars().all())
+        successful_runs = sum(log.status == "SUCCESS" for log in run_logs)
+        total_runs = len(run_logs)
+
+        return templates.TemplateResponse(
+            request=request,
+            name="maconomy_hubspot_dashboard.html",
+            context={
+                "current_user": current_user,
+                "csrf_token": ensure_csrf_token(request),
+                "integration": integration,
+                "run_logs": run_logs,
+                "status_badges": {
+                    "SUCCESS": "text-bg-success",
+                    "PARTIAL_SUCCESS": "text-bg-warning",
+                    "FAILED": "text-bg-danger",
+                    "RUNNING": "text-bg-primary",
+                },
+                "metrics": {
+                    "total_runs": total_runs,
+                    "success_rate": (
+                        round(successful_runs / total_runs * 100, 1)
+                        if total_runs
+                        else 0
+                    ),
+                    "records_succeeded": sum(
+                        log.customers_succeeded + log.contacts_succeeded
+                        for log in run_logs
+                    ),
+                    "attention_required": sum(
+                        log.failed_count + log.skipped_count
                         for log in run_logs
                     ),
                     "latest_run": run_logs[0] if run_logs else None,
