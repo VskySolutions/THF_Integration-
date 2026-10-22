@@ -29,11 +29,11 @@ CONTAINER_CONTENT_TYPE = (
 
 
 TIMESHEET_FIELDS = [
-    "activitynumber",
+    # "activitynumber",
     "approvedbysuperior",
     "employeenumber",
     "instancekey",
-    "jobnumber",
+    # "jobnumber",
     "linenumber",
     "numberday1",
     "numberday2",
@@ -42,18 +42,17 @@ TIMESHEET_FIELDS = [
     "numberday5",
     "numberday6",
     "numberday7",
-    "descriptionday1",
-    "descriptionday2",
-    "descriptionday3",
-    "descriptionday4",
-    "descriptionday5",
-    "descriptionday6",
-    "descriptionday7",
+    # "descriptionday1",
+    # "descriptionday2",
+    # "descriptionday3",
+    # "descriptionday4",
+    # "descriptionday5",
+    # "descriptionday6",
+    # "descriptionday7",
     "periodstart",
     "taskname",
-    "weektotal",
     "entityname",
-    "specification4name",
+    
 ]
 
 

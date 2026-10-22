@@ -1,6 +1,5 @@
 """Service for writing timesheet data to Paycor."""
 
-import uuid
 from typing import Any
 from urllib.parse import urljoin
 
@@ -24,7 +23,7 @@ class PaycorTimesheetService:
         self.timeout = 60.0
         self.max_pages = 1000
 
-    async def get_earning_ids_by_code(
+    async def get_earning_codes(
         self,
     ) -> dict[str, str]:
         """Return earning UUIDs indexed by normalized code."""
@@ -294,6 +293,159 @@ class PaycorTimesheetService:
             "Paycor earnings pagination exceeded "
             "the maximum page limit"
         )
+     
+    async def _get_all_departments(
+        self,
+        *,
+        client: httpx.AsyncClient,
+        access_token: str,
+    ) -> list[dict[str, Any]]:
+        """Retrieve all Paycor legal-entity departments."""
+
+        initial_url = (
+            f"{self.settings.paycor_url.rstrip('/')}"
+            "/v1/legalentities/"
+            f"{self.settings.paycor_legal_entity_id}"
+            "/departments"
+        )
+
+        url = initial_url
+        params: list[tuple[str, str]] | None = None
+
+        headers = self._get_api_headers(
+            access_token
+        )
+
+        department_records: list[
+            dict[str, Any]
+        ] = []
+
+        seen_cursors: set[str] = set()
+
+        for _ in range(self.max_pages):
+            response = await client.get(
+                url,
+                headers=headers,
+                params=params,
+            )
+
+            if response.is_error:
+                response_body = (
+                    response.text.strip()
+                )
+
+                message = (
+                    "Paycor departments request "
+                    f"failed with HTTP "
+                    f"{response.status_code}"
+                )
+
+                if response_body:
+                    message = (
+                        f"{message}: "
+                        f"{response_body[:2000]}"
+                    )
+
+                raise PaycorTimesheetServiceError(
+                    message
+                )
+
+            try:
+                response_data = response.json()
+
+            except (TypeError, ValueError) as exc:
+                raise PaycorTimesheetServiceError(
+                    "Invalid Paycor departments response"
+                ) from exc
+
+            if not isinstance(response_data, dict):
+                raise PaycorTimesheetServiceError(
+                    "Invalid Paycor departments response"
+                )
+
+            page_records = response_data.get(
+                "records"
+            )
+
+            if not isinstance(page_records, list):
+                raise PaycorTimesheetServiceError(
+                    "Invalid Paycor departments response"
+                )
+
+            if any(
+                not isinstance(record, dict)
+                for record in page_records
+            ):
+                raise PaycorTimesheetServiceError(
+                    "Invalid Paycor department record"
+                )
+
+            department_records.extend(
+                page_records
+            )
+
+            if not self._has_more_results(
+                response_data
+            ):
+                return department_records
+
+            (
+                url,
+                params,
+                cursor,
+            ) = self._get_next_page_request(
+                response_data=response_data,
+                initial_url=initial_url,
+            )
+
+            if cursor in seen_cursors:
+                raise PaycorTimesheetServiceError(
+                    "Paycor departments pagination "
+                    "returned a repeated cursor"
+                )
+
+            seen_cursors.add(cursor)
+
+        raise PaycorTimesheetServiceError(
+            "Paycor departments pagination exceeded "
+            "the maximum page limit"
+        )
+     
+        
+    async def get_department_codes_by_name(
+        self,
+    ) -> dict[str, str]:
+        """Return Paycor department codes indexed by name."""
+
+        try:
+            async with httpx.AsyncClient(
+                timeout=self.timeout
+            ) as client:
+                access_token = (
+                    await self._get_access_token(
+                        client
+                    )
+                )
+
+                department_records = (
+                    await self._get_all_departments(
+                        client=client,
+                        access_token=access_token,
+                    )
+                )
+
+        except PaycorTimesheetServiceError:
+            raise
+
+        except httpx.HTTPError as exc:
+            raise PaycorTimesheetServiceError(
+                "Unable to retrieve departments "
+                "from Paycor"
+            ) from exc
+
+        return self._build_department_code_lookup(
+            department_records
+        )
 
     def _get_next_page_request(
         self,
@@ -366,9 +518,8 @@ class PaycorTimesheetService:
             )
 
         raise PaycorTimesheetServiceError(
-            "Paycor earnings response indicates "
-            "more results, but no continuation "
-            "information was provided"
+            "Paycor response indicates more results, "
+            "but no continuation information was provided"
         )
 
     @staticmethod
@@ -393,101 +544,84 @@ class PaycorTimesheetService:
         return False
 
     @staticmethod
-    def _build_earning_id_lookup(
-        earning_records: list[dict[str, Any]],
+    def _build_department_code_lookup(
+        department_records: list[
+            dict[str, Any]
+        ],
     ) -> dict[str, str]:
-        """Build earning-code to earning-UUID lookup."""
+        """
+        Index Paycor department codes by department name.
 
-        earning_ids_by_code: dict[
+        Both name and description are accepted because the
+        Paycor response may use either field.
+        """
+
+        department_codes_by_name: dict[
             str,
             str,
         ] = {}
 
-        for earning_record in earning_records:
-            if not isinstance(
-                earning_record,
-                dict,
-            ):
+        for department in department_records:
+            department_code = str(
+                department.get("code")
+                or department.get(
+                    "departmentCode"
+                )
+                or ""
+            ).strip()
+
+            if not department_code:
                 raise PaycorTimesheetServiceError(
-                    "Invalid Paycor earning record"
+                    "Paycor department has no code"
                 )
 
-            earning_code_value = (
-                earning_record.get("code")
-            )
+            aliases = {
+                str(
+                    department.get("name")
+                    or ""
+                ).strip(),
+                str(
+                    department.get("description")
+                    or ""
+                ).strip(),
 
-            if not str(
-                earning_code_value or ""
-            ).strip():
-                earning_code_value = (
-                    earning_record.get(
-                        "globalEarningCode"
+                # Also allow Maconomy entityname to
+                # contain the department code itself.
+                department_code,
+            }
+
+            for alias in aliases:
+                if not alias:
+                    continue
+
+                normalized_alias = (
+                    alias.casefold()
+                )
+
+                existing_code = (
+                    department_codes_by_name.get(
+                        normalized_alias
                     )
                 )
 
-            earning_id_value = (
-                earning_record.get("id")
-            )
+                if (
+                    existing_code is not None
+                    and existing_code
+                    != department_code
+                ):
+                    raise PaycorTimesheetServiceError(
+                        "Multiple Paycor departments "
+                        f"match {alias}"
+                    )
 
-            earning_code = str(
-                earning_code_value or ""
-            ).strip().upper()
+                department_codes_by_name[
+                    normalized_alias
+                ] = department_code
 
-            earning_id = str(
-                earning_id_value or ""
-            ).strip()
-
-            if not earning_code:
-                raise PaycorTimesheetServiceError(
-                    "Paycor earning record has "
-                    "no earning code"
-                )
-
-            if not earning_id:
-                raise PaycorTimesheetServiceError(
-                    "Paycor earning record has no ID: "
-                    f"{earning_code}"
-                )
-
-            try:
-                normalized_earning_id = str(
-                    uuid.UUID(earning_id)
-                )
-
-            except (
-                TypeError,
-                ValueError,
-            ) as exc:
-                raise PaycorTimesheetServiceError(
-                    "Paycor earning record contains "
-                    "an invalid UUID: "
-                    f"{earning_code}"
-                ) from exc
-
-            existing_earning_id = (
-                earning_ids_by_code.get(
-                    earning_code
-                )
-            )
-
-            if (
-                existing_earning_id is not None
-                and existing_earning_id
-                != normalized_earning_id
-            ):
-                raise PaycorTimesheetServiceError(
-                    "Paycor returned multiple "
-                    "earning IDs for earning code "
-                    f"{earning_code}"
-                )
-
-            earning_ids_by_code[
-                earning_code
-            ] = normalized_earning_id
-
-        if not earning_ids_by_code:
+        if not department_codes_by_name:
             raise PaycorTimesheetServiceError(
-                "Paycor returned no usable earnings"
+                "Paycor returned no usable departments"
             )
 
-        return earning_ids_by_code
+        return department_codes_by_name
+        

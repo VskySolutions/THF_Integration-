@@ -1,14 +1,10 @@
-"""Map Maconomy tasks to Paycor earning types."""
+"""Map Maconomy tasks to Paycor earning codes."""
 
 from typing import Any
 
 
 class TimesheetTaskNotMappedError(ValueError):
     """Raised when a Maconomy task has no Paycor mapping."""
-
-
-class PaycorEarningNotAvailableError(ValueError):
-    """Raised when the earning code is unavailable in Paycor."""
 
 
 REGULAR_EARNING_TASKS = {
@@ -70,12 +66,10 @@ TASK_TO_PAYCOR_EARNING_CODE.update(
 )
 
 
-def resolve_paycor_earning(
-    *,
+def resolve_paycor_earning_code(
     task_name: Any,
-    earning_ids_by_code: dict[str, str],
-) -> tuple[str, str]:
-    """Resolve one Maconomy task into a Paycor earning UUID."""
+) -> str:
+    """Resolve a Maconomy task into a Paycor earning code."""
 
     normalized_task_name = str(
         task_name or ""
@@ -98,15 +92,4 @@ def resolve_paycor_earning(
             f"for Maconomy task {normalized_task_name}"
         )
 
-    earning_id = earning_ids_by_code.get(
-        earning_code.upper()
-    )
-
-    if earning_id is None:
-        raise PaycorEarningNotAvailableError(
-            "Paycor earning code "
-            f"{earning_code} is not available in "
-            "the current Paycor environment"
-        )
-
-    return earning_code, earning_id
+    return earning_code
