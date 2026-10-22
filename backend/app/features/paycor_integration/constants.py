@@ -8,3 +8,9 @@ class IntegrationStatus(str, Enum):
 class IntegrationAction(str, Enum):
     CREATE = "CREATE"
     UPDATE = "UPDATE"
+
+
+class EmpVendorCreationStatus(str, Enum):
+    SUCCESS = "SUCCESS"
+    FAILURE = "FAILURE"
+    SKIPPED = "SKIPPED"
