@@ -81,6 +81,16 @@ class Settings(BaseSettings):
     paycor_legal_entity_id: str 
     paycor_tenant_id: str
     maconomy_send_name_components: bool = False
+
+    # Paycor Live integration settings
+    paycor_base_url_live: AnyHttpUrl | None = None
+    paycor_client_id_live: SecretStr | None = None
+    paycor_client_secret_live: SecretStr | None = None
+    paycor_refresh_token_live: SecretStr | None = None
+    paycor_subscription_key_live: SecretStr | None = None
+    paycor_legal_entity_id_live: str | None = None
+    paycor_tenant_id_live: str | None = None
+    maconomy_send_name_components_live: bool = False
     
     # SAP Concur integration settings
     sap_concur_url: AnyHttpUrl = AnyHttpUrl(

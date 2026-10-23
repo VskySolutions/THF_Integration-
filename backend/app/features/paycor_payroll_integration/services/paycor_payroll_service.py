@@ -30,6 +30,48 @@ class PaycorPayrollService:
         self._external_client = client
         self.timeout = 60.0
 
+    @property
+    def base_url(self) -> str:
+        """Get Paycor base URL (prefers LIVE)."""
+        if self.settings.paycor_base_url_live:
+            return str(self.settings.paycor_base_url_live).rstrip("/")
+        return str(self.settings.paycor_base_url).rstrip("/")
+
+    @property
+    def client_id(self) -> str:
+        """Get Paycor client ID (prefers LIVE)."""
+        if self.settings.paycor_client_id_live:
+            return self.settings.paycor_client_id_live.get_secret_value().strip()
+        return self.settings.paycor_client_id.get_secret_value().strip()
+
+    @property
+    def client_secret(self) -> str:
+        """Get Paycor client secret (prefers LIVE, strips any 'Secret :' prefix)."""
+        if self.settings.paycor_client_secret_live:
+            raw = self.settings.paycor_client_secret_live.get_secret_value()
+        else:
+            raw = self.settings.paycor_client_secret.get_secret_value()
+        # Clean up any potential 'Secret :' copy-paste prefix
+        if "Secret :" in raw:
+            raw = raw.split("Secret :")[-1]
+        elif "Secret:" in raw:
+            raw = raw.split("Secret:")[-1]
+        return raw.strip()
+
+    @property
+    def refresh_token(self) -> str:
+        """Get Paycor refresh token (prefers LIVE)."""
+        if self.settings.paycor_refresh_token_live:
+            return self.settings.paycor_refresh_token_live.get_secret_value().strip()
+        return self.settings.paycor_refresh_token.get_secret_value().strip()
+
+    @property
+    def subscription_key(self) -> str:
+        """Get Paycor subscription key (prefers LIVE)."""
+        if self.settings.paycor_subscription_key_live:
+            return self.settings.paycor_subscription_key_live.get_secret_value().strip()
+        return self.settings.paycor_subscription_key.get_secret_value().strip()
+
     async def _get_client(self) -> httpx.AsyncClient:
         if self._external_client is not None:
             return self._external_client
@@ -37,9 +79,9 @@ class PaycorPayrollService:
 
     async def get_access_token(self, client: httpx.AsyncClient) -> str:
         """Obtain OAuth access token from Paycor STS using refresh token."""
-        token_url = f"{str(self.settings.paycor_base_url).rstrip('/')}/sts/v1/common/token"
+        token_url = f"{self.base_url}/sts/v1/common/token"
         params = {
-            "subscription-key": self.settings.paycor_subscription_key.get_secret_value(),
+            "subscription-key": self.subscription_key,
         }
         headers = {
             "Accept": "application/json",
@@ -47,9 +89,9 @@ class PaycorPayrollService:
         }
         data = {
             "grant_type": "refresh_token",
-            "client_id": self.settings.paycor_client_id.get_secret_value(),
-            "client_secret": self.settings.paycor_client_secret.get_secret_value(),
-            "refresh_token": self.settings.paycor_refresh_token.get_secret_value(),
+            "client_id": self.client_id,
+            "client_secret": self.client_secret,
+            "refresh_token": self.refresh_token,
         }
 
         try:
@@ -106,7 +148,7 @@ class PaycorPayrollService:
         try:
             access_token = await self.get_access_token(client)
             url = (
-                f"{str(self.settings.paycor_base_url).rstrip('/')}/v1/legalentities/"
+                f"{self.base_url}/v1/legalentities/"
                 f"{legal_entity_id}/payrollProcessing"
             )
 
@@ -122,7 +164,7 @@ class PaycorPayrollService:
             headers = {
                 "Accept": "application/json",
                 "Authorization": f"Bearer {access_token}",
-                "Ocp-Apim-Subscription-Key": self.settings.paycor_subscription_key.get_secret_value(),
+                "Ocp-Apim-Subscription-Key": self.subscription_key,
             }
 
             response = await client.get(
@@ -172,7 +214,7 @@ class PaycorPayrollService:
                 access_token = await self.get_access_token(http_client)
 
             url = (
-                f"{str(self.settings.paycor_base_url).rstrip('/')}/v1/legalentities/"
+                f"{self.base_url}/v1/legalentities/"
                 f"{legal_entity_id}/generalledgerwithemployee"
             )
 
@@ -185,7 +227,7 @@ class PaycorPayrollService:
             headers = {
                 "Accept": "application/json",
                 "Authorization": f"Bearer {access_token}",
-                "Ocp-Apim-Subscription-Key": self.settings.paycor_subscription_key.get_secret_value(),
+                "Ocp-Apim-Subscription-Key": self.subscription_key,
             }
 
             response = await http_client.get(
