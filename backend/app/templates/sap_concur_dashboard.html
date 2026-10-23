@@ -73,6 +73,14 @@
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true"><path d="M10.804 8 5 11.633V4.367z"/><path d="M0 8a8 8 0 1 1 16 0A8 8 0 0 1 0 8m8-7a7 7 0 1 0 0 14A7 7 0 0 0 8 1"/></svg>
                     {% endif %}
                 </button>
+                <button type="button" class="btn btn-success dashboard-action-btn"
+                        id="openSapConcurRetryButton"
+                        data-bs-toggle="modal" data-bs-target="#sapConcurRetryModal"
+                        data-dashboard-tooltip data-bs-placement="top"
+                        data-bs-title="Retry one SAP Concur expense report"
+                        aria-label="Retry one SAP Concur expense report">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true"><path d="M8.5 1.5v3a1 1 0 0 0 1 1h3v8a1 1 0 0 1-1 1h-7a1 1 0 0 1-1-1v-12a1 1 0 0 1 1-1h3zm.121-1H4.5a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h7a2 2 0 0 0 2-2V5.379a2 2 0 0 0-.586-1.414l-2.879-2.879A2 2 0 0 0 8.621.5"/><path fill-rule="evenodd" d="M8 12a.5.5 0 0 0 .5-.5V7.707l1.146 1.147a.5.5 0 0 0 .708-.708l-2-2a.5.5 0 0 0-.708 0l-2 2a.5.5 0 1 0 .708.708L7.5 7.707V11.5a.5.5 0 0 0 .5.5"/></svg>
+                </button>
             </div>
             {% if metrics.latest_activity %}
             <div class="text-lg-end">
@@ -199,6 +207,37 @@
     </div></div>
 </div>
 
+<div class="modal fade" id="sapConcurRetryModal" tabindex="-1"
+     aria-labelledby="sapConcurRetryModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered"><div class="modal-content">
+        <form method="post"
+              action="{{ url_for('retry_sap_concur_expense_report', integration_id=integration.id) }}"
+              id="sapConcurRetryForm">
+            <div class="modal-header">
+                <h2 class="modal-title fs-5" id="sapConcurRetryModalLabel">Retry SAP Concur expense report</h2>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <p class="text-secondary small">
+                    Enter the SAP Concur expense report ID to resume its synchronization with Maconomy.
+                </p>
+                <label for="sapConcurReportId" class="form-label">SAP Concur report ID</label>
+                <input type="text" class="form-control font-monospace" id="sapConcurReportId"
+                       name="report_id" maxlength="200" autocomplete="off"
+                       placeholder="Expense report ID" required>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="submit" class="btn btn-primary" id="submitSapConcurRetry">
+                    <span class="spinner-border spinner-border-sm me-1 d-none" aria-hidden="true"></span>
+                    <span class="sap-concur-retry-label">Retry report</span>
+                </button>
+            </div>
+        </form>
+    </div></div>
+</div>
+
 <div class="modal fade" id="integrationStatusModal" tabindex="-1" aria-labelledby="integrationStatusModalLabel" aria-hidden="true">
     <div class="modal-dialog modal-dialog-centered"><div class="modal-content">
         <div class="modal-header"><h2 class="modal-title fs-5" id="integrationStatusModal">{{ 'Pause' if integration.is_active else 'Enable' }} integration</h2><button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button></div>
@@ -224,6 +263,9 @@
             language: { emptyTable: 'No SAP Concur expense activity has been logged yet.', search: '' }
         });
         $('[data-dashboard-tooltip]').each(function () { new bootstrap.Tooltip(this); });
+        $('#changeIntegrationStatusButton, #openSapConcurRetryButton').on('click', function () {
+            bootstrap.Tooltip.getInstance(this)?.hide();
+        });
         $('#sapConcurActivityTable').on('click', '.view-sap-concur-detail', function () {
             const button = $(this);
             $('#detailCreated').text(button.attr('data-created'));
@@ -236,6 +278,15 @@
             $('#detailMappingId').text(button.attr('data-mapping-id'));
             $('#detailBaseUrl').text(button.attr('data-base-url'));
             $('#detailMessage').text(button.attr('data-message'));
+        });
+        $('#sapConcurRetryModal').on('shown.bs.modal', function () {
+            $('#sapConcurReportId').trigger('focus');
+        });
+        $('#sapConcurRetryForm').on('submit', function () {
+            const submitButton = $('#submitSapConcurRetry');
+            submitButton.prop('disabled', true);
+            submitButton.find('.spinner-border').removeClass('d-none');
+            submitButton.find('.sap-concur-retry-label').text('Retrying...');
         });
         $('#sapConcurIntegrationStatusForm').on('submit', function () { $('#confirmIntegrationStatus').prop('disabled', true); });
     });
