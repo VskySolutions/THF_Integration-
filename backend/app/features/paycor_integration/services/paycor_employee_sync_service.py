@@ -14,6 +14,7 @@ from app.features.integration_services.services.integration_service import (
     get_active_service,
 )
 from app.features.paycor_integration.constants import (
+    EmpVendorCreationStatus,
     IntegrationAction,
     IntegrationStatus,
 )
@@ -27,6 +28,10 @@ from app.features.paycor_integration.services import (
 from app.features.paycor_integration.services.maconomy_employee_service import (
     MaconomyEmployeeService,
     MaconomyEmployeeServiceError,
+)
+from app.features.paycor_integration.services.maconomy_vendor_service import (
+    MaconomyVendorService,
+    MaconomyVendorServiceError,
 )
 from app.features.paycor_integration.services.paycor_employee_service import (
     PaycorService,
@@ -67,6 +72,7 @@ class PaycorEmployeeSyncService:
         self.maconomy_service = (
             MaconomyEmployeeService()
         )
+        self.vendor_service = MaconomyVendorService()
 
     async def sync_recent_hires(
         self,
@@ -839,6 +845,10 @@ class PaycorEmployeeSyncService:
                 "mapping reconciled and creation skipped"
             )
 
+            mapping.is_emp_vendor_created = (
+                EmpVendorCreationStatus.SKIPPED
+            )
+
             await self._write_log(
                 session,
                 mapping_id=mapping.id,
@@ -898,6 +908,10 @@ class PaycorEmployeeSyncService:
                         "Employee was mapped by another "
                         "synchronization run; creation "
                         "skipped"
+                    )
+
+                    mapping.is_emp_vendor_created = (
+                        EmpVendorCreationStatus.SKIPPED
                     )
 
                     await self._write_log(
@@ -1135,6 +1149,71 @@ class PaycorEmployeeSyncService:
             )
 
         message_notes: list[str] = []
+
+        # Employee vendor creation (Req FR-1..FR-8). Runs only for
+        # freshly created employees; a vendor failure must never
+        # fail the already-created employee record.
+        vendor_number = f"E-{maconomy_employee_number}"
+        vendor_employee_name = str(
+            created_employee.get("name1") or ""
+        ).strip()
+
+        if not vendor_employee_name:
+            vendor_employee_name = " ".join(
+                part
+                for part in (
+                    str(created_employee.get("firstname") or "").strip(),
+                    str(created_employee.get("middlename") or "").strip(),
+                    str(created_employee.get("lastname") or "").strip(),
+                )
+                if part
+            )
+
+        try:
+            print("In create employee vendor")
+            created_vendor = (
+                await self.vendor_service.create_employee_vendor(
+                    employee_number=maconomy_employee_number,
+                    employee_name=vendor_employee_name,
+                )
+            )
+
+        except Exception as exc:  # deliberate: FR-8 — never fail employee
+            vendor_failure_message = (
+                f"Employee vendor creation failed for "
+                f"{vendor_number}: {exc}"
+            )
+            message_notes.append(vendor_failure_message)
+
+            mapping.is_emp_vendor_created = (
+                EmpVendorCreationStatus.FAILURE
+            )
+
+            await self._write_log(
+                session,
+                mapping_id=mapping_id,
+                paycor_employee_id=paycor_employee_id,
+                paycor_employee_number=paycor_employee_number,
+                legal_entity_id=legal_entity_id,
+                status=IntegrationStatus.FAILED,
+                action=IntegrationAction.CREATE,
+                message=vendor_failure_message,
+            )
+
+        else:
+            mapping.is_emp_vendor_created = (
+                EmpVendorCreationStatus.SUCCESS
+            )
+            mapping.maconomy_emp_vendor_number = (
+                str(
+                    created_vendor.get("vendornumber")
+                    or ""
+                ).strip()
+                or None
+            )
+            message_notes.append(
+                f"Employee vendor {vendor_number} created"
+            )
 
         if omitted_department_name is not None:
             message_notes.append(

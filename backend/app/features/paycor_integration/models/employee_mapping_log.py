@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     DateTime,
+    Enum,
     Integer,
     Text,
     UniqueConstraint,
@@ -18,6 +19,9 @@ from sqlalchemy.orm import (
 )
 
 from app.db.base import Base
+from app.features.paycor_integration.constants import (
+    EmpVendorCreationStatus,
+)
 
 if TYPE_CHECKING:
     from app.features.paycor_integration.models.integration_log import (
@@ -56,6 +60,23 @@ class PaycorEmployeeMappingLog(Base):
     )
 
     maconomy_employee_number: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    is_emp_vendor_created: Mapped[
+        EmpVendorCreationStatus | None
+    ] = mapped_column(
+        Enum(
+            EmpVendorCreationStatus,
+            name="paycor_emp_vendor_creation_status",
+        ),
+        nullable=True,
+    )
+
+    maconomy_emp_vendor_number: Mapped[
+        str | None
+    ] = mapped_column(
         Text,
         nullable=True,
     )
