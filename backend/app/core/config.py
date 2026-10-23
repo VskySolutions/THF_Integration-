@@ -81,6 +81,12 @@ class Settings(BaseSettings):
     paycor_legal_entity_id: str 
     paycor_tenant_id: str
     maconomy_send_name_components: bool = False
+    #temp
+    paycor_pay_group_id: str
+    paycor_integration_vendor: str = (
+        "THF Maconomy"
+    )
+    paycor_pay_number: int = 0
     
     # SAP Concur integration settings
     sap_concur_url: AnyHttpUrl = AnyHttpUrl(

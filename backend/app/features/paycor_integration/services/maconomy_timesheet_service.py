@@ -352,7 +352,7 @@ class MaconomyTimesheetService:
             MAX_TIMESHEET_FILTER_PAGES
         ):
             payload = {
-                "fields": TIMESHEET_FIELDS,
+                "fields": list(TIMESHEET_FIELDS),
                 "restriction": restriction,
                 "offset": offset,
                 "limit": TIMESHEET_PAGE_SIZE,
@@ -371,6 +371,13 @@ class MaconomyTimesheetService:
             ) = self._parse_filter_page(
                 response
             )
+            
+            if row_offset != offset:
+                raise MaconomyTimesheetServiceError(
+                    "Maconomy timesheet filter returned "
+                    f"offset {row_offset}; expected {offset}"
+                )
+            
 
             results.extend(records)
 
@@ -596,8 +603,23 @@ class MaconomyTimesheetService:
         value: Any,
         field_name: str,
     ) -> int | None:
-        if value is None or value == "":
+        if value is None:
             return None
+
+        if isinstance(value, int) and value == -1:
+            return None
+
+        if isinstance(value, str):
+            normalized_value = value.strip()
+
+            if normalized_value in {"", "-1"}:
+                return None
+
+            if (
+                normalized_value.endswith("+")
+                and normalized_value[:-1].isdigit()
+            ):
+                return None
 
         return cls._parse_filter_count(
             value,

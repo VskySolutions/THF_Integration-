@@ -1,5 +1,6 @@
 """Apply THF weekly time-calculation rules."""
 
+from collections import defaultdict
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -27,9 +28,8 @@ def calculate_weekly_earnings(
     """
     Apply THF REG, ST, and OT rules.
 
-    The input must already contain normalized daily records
-    with employeeNumber, dateWorked, earningCode,
-    earningHours and departmentCode.
+    The input must contain normalized daily records
+    for exactly one employee and one week.
     """
 
     if not daily_entries:
@@ -45,8 +45,16 @@ def calculate_weekly_earnings(
     entries.sort(
         key=lambda entry: (
             str(entry.get("dateWorked", "")),
-            str(entry.get("sourceLineNumber", "")),
-            str(entry.get("sourceInstanceKey", "")),
+            int(
+                entry.get("sourceLineNumber")
+                or 0
+            ),
+            str(
+                entry.get(
+                    "sourceInstanceKey",
+                    "",
+                )
+            ),
         )
     )
 
@@ -80,19 +88,19 @@ def calculate_weekly_earnings(
         paid_leave_hours,
     )
 
-    overtime_hours = max(
+    overtime_hours = (
         excess_worked_hours
-        - straight_time_hours,
-        Decimal("0"),
+        - straight_time_hours
     )
 
-    remaining_reg = min(
-        worked_hours,
-        WEEKLY_REGULAR_THRESHOLD,
-    )
-
-    remaining_st = straight_time_hours
-    remaining_ot = overtime_hours
+    remaining_hours = {
+        "REG": min(
+            worked_hours,
+            WEEKLY_REGULAR_THRESHOLD,
+        ),
+        "ST": straight_time_hours,
+        "OT": overtime_hours,
+    }
 
     calculated_entries: list[
         dict[str, Any]
@@ -105,22 +113,12 @@ def calculate_weekly_earnings(
 
         entry_hours = entry["earningHours"]
 
-        for earning_code in (
-            "REG",
-            "ST",
-            "OT",
-        ):
+        for (
+            earning_code,
+            available_hours,
+        ) in remaining_hours.items():
             if entry_hours <= 0:
                 break
-
-            if earning_code == "REG":
-                available_hours = remaining_reg
-
-            elif earning_code == "ST":
-                available_hours = remaining_st
-
-            else:
-                available_hours = remaining_ot
 
             allocated_hours = min(
                 entry_hours,
@@ -130,30 +128,21 @@ def calculate_weekly_earnings(
             if allocated_hours <= 0:
                 continue
 
-            calculated_entry = dict(entry)
-
-            calculated_entry["earningCode"] = (
-                earning_code
-            )
-
-            calculated_entry["earningHours"] = (
-                allocated_hours
-            )
-
             calculated_entries.append(
-                calculated_entry
+                {
+                    **entry,
+                    "earningCode": earning_code,
+                    "earningHours": (
+                        allocated_hours
+                    ),
+                }
             )
 
             entry_hours -= allocated_hours
 
-            if earning_code == "REG":
-                remaining_reg -= allocated_hours
-
-            elif earning_code == "ST":
-                remaining_st -= allocated_hours
-
-            else:
-                remaining_ot -= allocated_hours
+            remaining_hours[
+                earning_code
+            ] -= allocated_hours
 
         if entry_hours > 0:
             raise TimesheetCalculationError(
@@ -163,9 +152,51 @@ def calculate_weekly_earnings(
     return calculated_entries
 
 
+def calculate_all_weekly_earnings(
+    daily_entries: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Calculate earnings for every employee and week."""
+
+    entries_by_employee_week: dict[
+        tuple[str, str],
+        list[dict[str, Any]],
+    ] = defaultdict(list)
+
+    for entry in daily_entries:
+        key = (
+            str(
+                entry.get("employeeNumber")
+                or ""
+            ).strip(),
+            str(
+                entry.get("periodStart")
+                or ""
+            ).strip(),
+        )
+
+        entries_by_employee_week[key].append(
+            entry
+        )
+
+    calculated_entries: list[
+        dict[str, Any]
+    ] = []
+
+    for key in sorted(entries_by_employee_week):
+        calculated_entries.extend(
+            calculate_weekly_earnings(
+                entries_by_employee_week[key]
+            )
+        )
+
+    return calculated_entries
+
+
 def _normalize_entry(
     entry: dict[str, Any],
 ) -> dict[str, Any]:
+    """Normalize one daily earning entry."""
+
     normalized_entry = dict(entry)
 
     earning_code = str(
@@ -177,14 +208,14 @@ def _normalize_entry(
             "Earning code is required"
         )
 
-    normalized_entry["earningCode"] = (
-        earning_code
-    )
+    normalized_entry[
+        "earningCode"
+    ] = earning_code
 
-    normalized_entry["earningHours"] = (
-        _parse_hours(
-            entry.get("earningHours")
-        )
+    normalized_entry[
+        "earningHours"
+    ] = _parse_hours(
+        entry.get("earningHours")
     )
 
     return normalized_entry
@@ -193,6 +224,8 @@ def _normalize_entry(
 def _validate_single_employee_week(
     entries: list[dict[str, Any]],
 ) -> None:
+    """Validate that entries belong to one employee and week."""
+
     employee_weeks = {
         (
             str(
@@ -231,6 +264,8 @@ def _validate_single_employee_week(
 def _parse_hours(
     value: Any,
 ) -> Decimal:
+    """Convert and validate an earning-hours value."""
+
     if isinstance(value, bool):
         raise TimesheetCalculationError(
             "Invalid earning hours"
