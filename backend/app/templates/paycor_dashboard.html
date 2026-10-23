@@ -47,27 +47,50 @@
                 {% endif %}
             </div>
         </div>
-        <div class="d-flex align-items-center gap-2">
-            <button type="button" class="btn btn-outline-primary"
-                    data-paycor-retry-action="create"
-                    data-bs-toggle="modal" data-bs-target="#paycorRetryModal">
-                Retry employee create
-            </button>
-            <button type="button" class="btn btn-outline-primary"
-                    data-paycor-retry-action="update"
-                    data-bs-toggle="modal" data-bs-target="#paycorRetryModal">
-                Retry employee update
-            </button>
-            <a href="{{ url_for('integration_logs', integration_id=integration.id) }}"
-               class="btn btn-outline-secondary dashboard-action-btn" data-dashboard-tooltip
-               data-bs-toggle="tooltip" data-bs-title="Refresh activity" aria-label="Refresh activity">
-                <svg xmlns="http://www.w3.org/2000/svg" width="17" height="17" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3a5 5 0 1 0 4.546 2.914.5.5 0 0 1 .908-.418A6 6 0 1 1 8 2z"/><path d="M8 4.466V.534a.25.25 0 0 1 .41-.192l2.36 1.966a.25.25 0 0 1 0 .384L8.41 4.658A.25.25 0 0 1 8 4.466"/></svg>
-            </a>
-            <button type="button" id="changeIntegrationStatusButton"
-                    class="btn {{ 'btn-outline-secondary' if integration.is_active else 'btn-primary' }}"
-                    data-bs-toggle="modal" data-bs-target="#integrationStatusModal">
-                {{ 'Pause integration' if integration.is_active else 'Enable integration' }}
-            </button>
+        <div class="d-flex flex-column align-items-lg-end gap-3">
+            <div class="d-flex flex-wrap gap-2 justify-content-lg-end">
+                <a href="{{ url_for('dashboard') }}"
+                   class="btn btn-outline-secondary dashboard-action-btn"
+                   data-dashboard-tooltip data-bs-placement="top"
+                   data-bs-title="Back to integrations" aria-label="Back to integrations">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true"><path fill-rule="evenodd" d="M15 8a.5.5 0 0 0-.5-.5H2.707l3.147-3.146a.5.5 0 1 0-.708-.708l-4 4a.5.5 0 0 0 0 .708l4 4a.5.5 0 0 0 .708-.708L2.707 8.5H14.5A.5.5 0 0 0 15 8"/></svg>
+                </a>
+                <a href="{{ url_for('integration_logs', integration_id=integration.id) }}"
+                   class="btn btn-outline-secondary dashboard-action-btn"
+                   data-dashboard-tooltip data-bs-placement="top"
+                   data-bs-title="Refresh dashboard" aria-label="Refresh dashboard">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3a5 5 0 1 0 4.546 2.914.5.5 0 0 1 .908-.418A6 6 0 1 1 8 2z"/><path d="M8 4.466V.534a.25.25 0 0 1 .41-.192l2.36 1.966a.25.25 0 0 1 0 .384L8.41 4.658A.25.25 0 0 1 8 4.466"/></svg>
+                </a>
+                <button type="button" id="changeIntegrationStatusButton"
+                        class="btn btn-outline-secondary dashboard-action-btn"
+                        data-bs-toggle="modal" data-bs-target="#integrationStatusModal"
+                        data-dashboard-tooltip data-bs-placement="top"
+                        data-bs-title="{{ 'Inactivate integration' if integration.is_active else 'Activate integration' }}"
+                        aria-label="{{ 'Inactivate integration' if integration.is_active else 'Activate integration' }}">
+                    {% if integration.is_active %}
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 3.5A1.5 1.5 0 0 1 7 5v6a1.5 1.5 0 0 1-3 0V5a1.5 1.5 0 0 1 1.5-1.5m5 0A1.5 1.5 0 0 1 12 5v6a1.5 1.5 0 0 1-3 0V5a1.5 1.5 0 0 1 1.5-1.5"/></svg>
+                    {% else %}
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true"><path d="M10.804 8 5 11.633V4.367z"/><path d="M0 8a8 8 0 1 1 16 0A8 8 0 0 1 0 8m8-7a7 7 0 1 0 0 14A7 7 0 0 0 8 1"/></svg>
+                    {% endif %}
+                </button>
+                <button type="button" class="btn btn-success dashboard-action-btn"
+                        id="openPaycorRetryButton"
+                        data-bs-toggle="modal" data-bs-target="#paycorRetryModal"
+                        data-dashboard-tooltip data-bs-placement="top"
+                        data-bs-title="Retry one Paycor employee"
+                        aria-label="Retry one Paycor employee">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true"><path d="M8.5 1.5v3a1 1 0 0 0 1 1h3v8a1 1 0 0 1-1 1h-7a1 1 0 0 1-1-1v-12a1 1 0 0 1 1-1h3zm.121-1H4.5a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h7a2 2 0 0 0 2-2V5.379a2 2 0 0 0-.586-1.414l-2.879-2.879A2 2 0 0 0 8.621.5"/><path fill-rule="evenodd" d="M8 12a.5.5 0 0 0 .5-.5V7.707l1.146 1.147a.5.5 0 0 0 .708-.708l-2-2a.5.5 0 0 0-.708 0l-2 2a.5.5 0 1 0 .708.708L7.5 7.707V11.5a.5.5 0 0 0 .5.5"/></svg>
+                </button>
+            </div>
+            {% if metrics.latest_activity %}
+            <div class="text-lg-end">
+                <div class="text-secondary small">Last run</div>
+                <div class="fw-semibold">{{ metrics.latest_activity.created_on_utc.strftime('%d %b %Y, %H:%M:%S') }} UTC</div>
+                <span class="badge {{ 'text-bg-success' if metrics.latest_activity.status.value == 'SUCCESS' else 'text-bg-danger' }}">
+                    {{ metrics.latest_activity.status.value | title }}
+                </span>
+            </div>
+            {% endif %}
         </div>
     </div>
 
@@ -195,8 +218,12 @@
             </div>
             <div class="modal-body">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <input type="hidden" name="retry_action" id="paycorRetryAction">
-                <p class="text-secondary small" id="paycorRetryDescription"></p>
+                <p class="text-secondary small">Retry creating or updating one Paycor employee in Maconomy.</p>
+                <label for="paycorRetryAction" class="form-label">Action</label>
+                <select class="form-select mb-3" name="retry_action" id="paycorRetryAction" required>
+                    <option value="create">Create employee</option>
+                    <option value="update">Update employee</option>
+                </select>
                 <label for="paycorEmployeeId" class="form-label">Paycor employee ID</label>
                 <input type="text" class="form-control font-monospace" id="paycorEmployeeId"
                        name="paycor_employee_id" maxlength="36" autocomplete="off"
@@ -251,17 +278,8 @@
             $('#detailBaseUrl').text(button.attr('data-base-url'));
             $('#detailMessage').text(button.attr('data-message'));
         });
-        $('[data-paycor-retry-action]').on('click', function () {
-            const action = $(this).attr('data-paycor-retry-action');
-            const isCreate = action === 'create';
-            $('#paycorRetryAction').val(action);
-            $('#paycorRetryModalLabel').text(isCreate ? 'Retry Paycor employee create' : 'Retry Paycor employee update');
-            $('#paycorRetryDescription').text(
-                isCreate
-                    ? 'Enter the Paycor employee ID to retry creating the employee in Maconomy.'
-                    : 'Enter the Paycor employee ID to retry updating the employee in Maconomy.'
-            );
-            $('#paycorRetrySubmitLabel').text(isCreate ? 'Retry create' : 'Retry update');
+        $('#changeIntegrationStatusButton, #openPaycorRetryButton').on('click', function () {
+            bootstrap.Tooltip.getInstance(this)?.hide();
         });
         $('#paycorRetryModal').on('shown.bs.modal', function () {
             $('#paycorEmployeeId').trigger('focus');

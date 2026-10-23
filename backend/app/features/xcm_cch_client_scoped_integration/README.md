@@ -134,6 +134,24 @@ treated as existing clients.
 Jobs with an existing CCH client are excluded. This integration does not
 update existing CCH clients.
 
+## Enriched job eligibility
+
+After reference-data enrichment and before any CCH create request, every job
+must have all of the following resolved values:
+
+| Business role/value | Enriched field | CCH field |
+|---|---|---|
+| Billing Manager (InCharge) | `employee6_email` | `responsiblePerson` |
+| CSE (Engagement Executive) | `spec5_email` | `auditPartner` |
+| Engagement Partner (Engagement SH) | `purposename_email` | `taxPartner` |
+| Return Type | `specification2_description` | `primaryTask` / task `taskType` |
+
+The three role values must resolve to non-blank employee email addresses. The
+Return Type must be non-blank and cannot equal `default` (case-insensitive).
+An ineligible job is returned with `eligibility.status = "ineligible"` and a
+clear `eligibility.reason`. CCH client/task creation and Maconomy writeback are
+skipped for that job. Other eligible jobs in the same request continue.
+
 ## Reference-data enrichment
 
 Reference data is fetched only for jobs that do not already exist in CCH.
@@ -176,8 +194,8 @@ job.purposename
 ```
 
 If `purposename` is empty, no employee matches, or the matched employee has no
-email, `purposename_email` and `taxPartner` are `null`. The integration does
-not currently stop the job before the CCH request in this situation.
+email, `purposename_email` and `taxPartner` are `null`, and the job is marked
+ineligible before the CCH request.
 
 ## Enriched job fields
 
@@ -235,8 +253,9 @@ POST /xcmrestservices/vnext/api/v2/Task
 | `periodEndDate` | `periodenddate` with `00:00:00` appended |
 | `taskDescription` | `description1`, falling back to `jobnumber` |
 
-When the Specification 2 description is blank, `taskType` defaults to
-`Tax - 1040 Individual`.
+Jobs with a blank or `default` Specification 2 description are marked
+ineligible before task creation. The task builder's fallback remains a
+defensive safeguard but is not used by the normal eligible-job flow.
 
 The integration does not search for an existing task because task creation is
 performed only for a newly created CCH client.
