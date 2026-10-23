@@ -1,11 +1,12 @@
-"""Maconomy vendor-invoice creation (Phase 2 of Req[#21]).
+"""Maconomy journal + invoice-row creation (Req[#21], Phase 3 corrected).
 
-Orchestrates the user-specified creation sequence on ONE container
-instance: retrieve instance -> init card -> create card -> init table
--> create line rows (for-loop). Maconomy auth, container headers, and
-the concurrency-token chain are copied as-is from
-`sap_concur_integration/services/maconomy_services.py` (Reconnect-token
-Basic auth) per requirement FR-2/FR-9.
+Sequence on ONE container instance (FR-12, WO[#21.9]): retrieve
+instance -> init card -> create card (STATIC journal payload) ->
+init table -> one dynamically mapped invoice row per SAP Concur
+invoice (CurrencyCode/InvoiceNumber/InvoiceDate). Maconomy auth,
+container headers, and the concurrency-token chain are copied as-is
+from `sap_concur_integration/services/maconomy_services.py`
+(Reconnect-token Basic auth) per requirement FR-2/FR-9.
 """
 
 import base64
@@ -17,9 +18,9 @@ import httpx
 
 from app.core.config import Settings, get_settings
 from app.features.sap_concur_invoice_integration.mappers import (
-    build_static_line_item_payloads,
     build_vendor_invoice_instance_payload,
     build_vendor_invoice_table_init_payload,
+    map_concur_invoice_to_maconomy_invoice_row,
     map_concur_invoice_to_maconomy_vendor_invoice,
 )
 
@@ -110,10 +111,16 @@ class MaconomyInvoiceService:
         payload = build_vendor_invoice_instance_payload()
 
         print("======= _retrieve_vendor_invoice_instance ==========")
+        # Debug: invoice API visibility — POST payload + status/body
+        print(f"[invoice-api] POST {url} payload={payload}")
         response = await client.post(
             url,
             headers=self._container_headers(reconnect_token),
             json=payload,
+        )
+        print(
+            f"[invoice-api] POST {url} -> "
+            f"status={response.status_code} body={response.text}"
         )
         response.raise_for_status()
 
@@ -145,10 +152,16 @@ class MaconomyInvoiceService:
         headers = self._container_headers(reconnect_token)
         headers["Maconomy-Concurrency-Control"] = concurrency_token
         print("========= _initialize_vendor_invoice_card =========")
+        # Debug: invoice API visibility — POST payload + status/body
+        print(f"[invoice-api] POST {url} payload={{}}")
         response = await client.post(
             url,
             headers=headers,
             json={},
+        )
+        print(
+            f"[invoice-api] POST {url} -> "
+            f"status={response.status_code} body={response.text}"
         )
 
         response.raise_for_status()
@@ -186,14 +199,15 @@ class MaconomyInvoiceService:
         headers["Maconomy-Concurrency-Control"] = concurrency_token
         payload = build_vendor_invoice_table_init_payload()
         print("========= _initialize_vendor_invoice_table =========")
+        # Debug: invoice API visibility — POST payload + status/body
+        print(f"[invoice-api] POST {url} payload={payload}")
         response = await client.post(
             url,
             headers=headers,
             json=payload,
         )
-        # Debug: line-related API visibility (status + raw body)
         print(
-            f"[line-api] POST {url} -> "
+            f"[invoice-api] POST {url} -> "
             f"status={response.status_code} body={response.text}"
         )
 
@@ -204,27 +218,35 @@ class MaconomyInvoiceService:
 
         except (KeyError, TypeError, ValueError) as exc:
             raise MaconomyInvoiceServiceError(
-                "Invalid Maconomy vendor invoice line initialization response"
+                "Invalid Maconomy invoice table initialization response"
             ) from exc
 
         if not isinstance(initialized_data, dict):
             raise MaconomyInvoiceServiceError(
-                "Invalid Maconomy vendor invoice line initialization response"
+                "Invalid Maconomy invoice table initialization response"
             )
 
         new_concurrency_token = self._get_concurrency_token(response)
         print("Vendor invoice table initialized!")
         return dict(initialized_data), new_concurrency_token
 
-    async def create_vendor_invoice(self) -> dict[str, Any]:
-        """Create a vendor invoice + line rows in Maconomy.
+    async def create_journal_with_invoices(
+        self,
+        invoices: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Create ONE journal (static card) + all invoices as table rows.
 
-        Sequence on ONE instance (FR-10):
-        retrieve instance -> init card -> create card -> init table
-        -> for-loop line-row creates; concurrency token chained per step.
-        Payloads come from the static mappers (FR-8).
+        Sequence (FR-12 corrected, WO[#21.9]):
+        retrieve instance -> init card -> create card (STATIC journal
+        payload) -> init table -> for each Concur invoice: dynamic row
+        map (CurrencyCode/InvoiceNumber/InvoiceDate) + POST table.
+        Journal-phase errors raise ``MaconomyInvoiceServiceError`` (the
+        router maps them to HTTP 500 — batch prerequisite); row-phase
+        errors are captured per invoice as FAILED entries and the batch
+        continues with the last-good concurrency token.
         """
-        print("=========== create_vendor_invoice =============")
+        print("======= create_journal_with_invoices =========")
+
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 reconnect_token = await self._get_reconnect_token(client)
@@ -243,37 +265,45 @@ class MaconomyInvoiceService:
                     concurrency_token=concurrency_token,
                 )
 
-                # --- Create the invoice (card pane) ---
-                print("======== Vendor Invoice Creation Started ========")
+                # --- Create the journal (card pane, STATIC payload) ---
+                print("======== Journal Creation Started =========")
                 card_url = (
                     f"{self._vendor_invoice_url()}/instances/"
                     f"{instance_id}/data/panes/card"
                 )
                 card_headers = self._container_headers(reconnect_token)
                 card_headers["Maconomy-Concurrency-Control"] = concurrency_token
+                card_payload = map_concur_invoice_to_maconomy_vendor_invoice()
+                # Debug: invoice API visibility — POST payload + status/body
+                print(f"[invoice-api] POST {card_url} payload={card_payload}")
                 card_response = await client.post(
                     card_url,
                     headers=card_headers,
-                    json=map_concur_invoice_to_maconomy_vendor_invoice(),
+                    json=card_payload,
+                )
+                print(
+                    f"[invoice-api] POST {card_url} -> "
+                    f"status={card_response.status_code} "
+                    f"body={card_response.text}"
                 )
                 card_response.raise_for_status()
 
                 try:
-                    invoice_payload = card_response.json()
+                    journal_payload = card_response.json()
                 except (KeyError, TypeError, ValueError) as json_exc:
                     raise MaconomyInvoiceServiceError(
-                        "Invalid Maconomy vendor invoice response"
+                        "Invalid Maconomy journal response"
                     ) from json_exc
 
-                if not isinstance(invoice_payload, dict):
+                if not isinstance(journal_payload, dict):
                     raise MaconomyInvoiceServiceError(
-                        "Invalid Maconomy vendor invoice response"
+                        "Invalid Maconomy journal response"
                     )
 
                 concurrency_token = self._get_concurrency_token(card_response)
-                print("========= Vendor invoice card created ==========")
+                print("========= Journal created ==========")
 
-                # --- Initialize the line table pane ---
+                # --- Initialize the invoice table pane ---
                 _, concurrency_token = await self._initialize_vendor_invoice_table(
                     client=client,
                     reconnect_token=reconnect_token,
@@ -281,56 +311,96 @@ class MaconomyInvoiceService:
                     concurrency_token=concurrency_token,
                 )
 
-                # --- Create the line rows (for-loop over line items) ---
-                line_payloads: list[dict[str, Any]] = []
-                line_items = build_static_line_item_payloads(count=1)
-
+                # --- Invoice rows: one per Concur invoice (FR-12) ---
+                invoice_entries: list[dict[str, Any]] = []
                 table_url = (
                     f"{self._vendor_invoice_url()}/instances/"
                     f"{instance_id}/data/panes/table"
                 )
 
-                for index, line_data in enumerate(line_items):
-                    print(f"---- Creating vendor invoice line {index} ----")
-                    line_headers = self._container_headers(reconnect_token)
-                    line_headers["Maconomy-Concurrency-Control"] = (
-                        concurrency_token
-                    )
-                    line_response = await client.post(
-                        table_url,
-                        headers=line_headers,
-                        json=line_data,
-                    )
-                    # Debug: line-related API visibility (status + body)
-                    print(
-                        f"[line-api] POST {table_url} -> "
-                        f"status={line_response.status_code} "
-                        f"body={line_response.text}"
-                    )
-                    line_response.raise_for_status()
+                for index, invoice in enumerate(invoices):
+                    invoice_id = str(
+                        invoice.get("PaymentRequestId")
+                        or invoice.get("ID")
+                        or ""
+                    ).strip()
 
                     try:
-                        line_payload = line_response.json()
-                    except (KeyError, TypeError, ValueError) as json_exc:
-                        raise MaconomyInvoiceServiceError(
-                            f"Invalid Maconomy vendor invoice line response "
-                            f"for line {index}"
-                        ) from json_exc
-
-                    if not isinstance(line_payload, dict):
-                        raise MaconomyInvoiceServiceError(
-                            f"Invalid Maconomy vendor invoice line response "
-                            f"for line {index}"
+                        row_payload = map_concur_invoice_to_maconomy_invoice_row(
+                            invoice
                         )
+                        row_headers = self._container_headers(reconnect_token)
+                        row_headers["Maconomy-Concurrency-Control"] = (
+                            concurrency_token
+                        )
+                        # Debug: invoice API — payload + status/body
+                        print(
+                            f"[invoice-api] POST {table_url} "
+                            f"payload={row_payload}"
+                        )
+                        row_response = await client.post(
+                            table_url,
+                            headers=row_headers,
+                            json=row_payload,
+                        )
+                        print(
+                            f"[invoice-api] POST {table_url} -> "
+                            f"status={row_response.status_code} "
+                            f"body={row_response.text}"
+                        )
+                        row_response.raise_for_status()
 
-                    line_payloads.append(line_payload)
-                    concurrency_token = self._get_concurrency_token(line_response)
-                    print(f"========= Line {index} created =========")
+                        try:
+                            row_result = row_response.json()
+                        except (KeyError, TypeError, ValueError) as json_exc:
+                            raise MaconomyInvoiceServiceError(
+                                f"Invalid Maconomy invoice row response "
+                                f"for invoice {index}"
+                            ) from json_exc
 
-                print("========= Vendor invoice creation completed ==========")
+                        if not isinstance(row_result, dict):
+                            raise MaconomyInvoiceServiceError(
+                                f"Invalid Maconomy invoice row response "
+                                f"for invoice {index}"
+                            )
+
+                        invoice_entries.append(
+                            {
+                                "invoice_id": invoice_id,
+                                "status": "SUCCESS",
+                                "result": row_result,
+                            }
+                        )
+                        concurrency_token = self._get_concurrency_token(
+                            row_response
+                        )
+                        print(f"========= Invoice row {index} created =========")
+
+                    except (
+                        ValueError,
+                        MaconomyInvoiceServiceError,
+                        httpx.HTTPError,
+                    ) as exc:
+                        # One failed invoice row never terminates the batch;
+                        # the last-good concurrency token is reused for the
+                        # next row (documented assumption, WO[#21.9]).
+                        print(
+                            f"Invoice row {index} failed "
+                            f"(invoice_id={invoice_id}): {exc}"
+                        )
+                        invoice_entries.append(
+                            {
+                                "invoice_id": invoice_id,
+                                "status": "FAILED",
+                                "message": str(exc),
+                            }
+                        )
+                        continue
+
+                print("========= Journal + invoice rows completed ==========")
                 return {
-                    "invoice": invoice_payload,
-                    "lines": line_payloads,
+                    "journal": journal_payload,
+                    "invoices": invoice_entries,
                 }
 
         except MaconomyInvoiceServiceError:
