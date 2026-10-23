@@ -30,6 +30,7 @@ from app.web import router as web_router
 #paycor imports 
 #from app.features.paycor_integration.routers import get_new_employees_router
 from app.features.paycor_integration.routers import paycor_router,paycor_update_router,paycor_timesheets_router
+from app.features.paycor_payroll_integration.routers import payroll_processing_router as paycor_payroll_processing_router
 
 #Hubspot imports
 from app.features.hubspot_integration.routers.get_recent_customers_contacts import (
@@ -99,6 +100,7 @@ app.include_router(xcm_cch_client_scoped_router, prefix=settings.api_v1_prefix)
 app.include_router(paycor_router, prefix=settings.api_v1_prefix)
 app.include_router(paycor_update_router, prefix=settings.api_v1_prefix)
 app.include_router(paycor_timesheets_router, prefix=settings.api_v1_prefix)
+app.include_router(paycor_payroll_processing_router, prefix=settings.api_v1_prefix)
 
 # HubSpot router
 app.include_router(maconomy_customers_contacts_router, prefix=settings.api_v1_prefix)
