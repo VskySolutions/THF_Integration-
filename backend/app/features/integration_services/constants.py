@@ -11,3 +11,6 @@ class IntegrationServiceIdentifier(str, Enum):
 
     #sap concur constants
     MACONOMY_SAP_CONCUR_EXPENSE_SYNC = "MACONOMY_SAP_CONCUR_EXPENSE_SYNC"
+
+    # HubSpot constants
+    MACONOMY_HUBSPOT_SYNC = "MACONOMY_HUBSPOT_SYNC"

@@ -248,6 +248,11 @@ class CCHClientService:
 
     @staticmethod
     def _client_payload(job: dict[str, Any]) -> dict[str, Any]:
+        def optional_string(value: Any) -> str | None:
+            if value is None or not str(value).strip():
+                return None
+            return str(value).strip()
+
         specification1 = job.get("specification1_description")
         client_type = (
             "Individual"
@@ -255,17 +260,13 @@ class CCHClientService:
             and specification1.strip().casefold() == "individual"
             else "Entity"
         )
-        return {
+        payload = {
             "responsiblePerson": job.get("employee6_email"), #job.get("projectmanager_email"),
             "emailId": (
                 job.get("electronicmailaddress")
                 if job.get("electronicmailaddress")
                 else None
             ),
-            # "firstName": to be confirmed
-            # "middleName": to be confirmed
-            "last_Entity_Name": job.get("name1"),
-            # "suffix": to be confirmed
             "clientType": client_type,
             "phoneNumber": job.get("telephone") if job.get("telephone") else None,
             "accountNumber": job.get("jobnumber"),
@@ -284,6 +285,22 @@ class CCHClientService:
             # "auditStaff": : to be confirmed
             "taxPartner": job.get("purposename_email") if job.get("purposename_email") else None,
         }
+
+        first_name = optional_string(job.get("customerremark27"))
+        last_name = optional_string(job.get("customerremark29"))
+        if client_type == "Individual" and first_name and last_name:
+            payload.update(
+                {
+                    "firstName": first_name,
+                    "middleName": optional_string(job.get("customerremark28")),
+                    "last_Entity_Name": last_name,
+                    "suffix": optional_string(job.get("customerremark30")),
+                }
+            )
+        else:
+            payload["last_Entity_Name"] = job.get("name1")
+
+        return payload
 
     def _authorized_headers(self) -> dict[str, str]:
         if self._token is None:

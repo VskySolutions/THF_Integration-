@@ -93,6 +93,12 @@ class Settings(BaseSettings):
     sap_concur_client_secret: SecretStr
     sap_concur_refresh_token: SecretStr    
 
+    # HubSpot integration settings (service key auth: Bearer {HUBSPOT_SERVICE_KEY})
+    hubspot_api_base_url: AnyHttpUrl = AnyHttpUrl(
+        "https://api.hubapi.com"
+    )
+    hubspot_service_key: SecretStr = SecretStr("")
+
     # Schedular settings
     scheduler_enabled: bool = False
     scheduler_api_base_url: AnyHttpUrl = AnyHttpUrl(
@@ -102,6 +108,7 @@ class Settings(BaseSettings):
     scheduler_cch_interval_minutes: int = Field(default=5, ge=1)
     scheduler_caseware_interval_minutes: int = Field(default=5, ge=1)
     scheduler_sap_concur_interval_minutes: int = Field(default=5, ge=1)
+    scheduler_hubspot_interval_minutes: int = Field(default=5, ge=1)
     scheduler_paycor_update_interval_minutes: int = Field(
         default=5,
         ge=1,
@@ -157,6 +164,11 @@ class Settings(BaseSettings):
     @property
     def paycor_url(self) -> str:
         return str(self.paycor_base_url).rstrip("/")
+
+    @computed_field
+    @property
+    def hubspot_api_url(self) -> str:
+        return str(self.hubspot_api_base_url).rstrip("/")
 
     @property
     def scheduler_api_url(self) -> str:

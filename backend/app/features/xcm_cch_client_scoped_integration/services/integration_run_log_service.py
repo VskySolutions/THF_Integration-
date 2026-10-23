@@ -52,6 +52,7 @@ async def complete_run_from_jobs(
 
     for job in jobs:
         job_number = _string_value(job.get("jobnumber")) or "UNKNOWN"
+        eligibility = _eligibility(job.get("eligibility"))
         client = _stage(job.get("cchclientcreation"))
         task = _stage(job.get("cchtaskcreation"))
         writeback_status = _string_value(job.get("maconomywritebackstatus"))
@@ -75,12 +76,14 @@ async def complete_run_from_jobs(
             )
 
         failure_stage, reason = _job_failure(
+            eligibility=eligibility,
             client=client,
             task=task,
             writeback_status=writeback_status,
             writeback_error=writeback_error,
         )
         stage_details = {
+            "eligibility": eligibility,
             "client_creation": client,
             "task_creation": task,
             "maconomy_writeback": {
@@ -187,11 +190,17 @@ async def fail_run(
 
 def _job_failure(
     *,
+    eligibility: dict[str, str | None],
     client: dict[str, str | None],
     task: dict[str, str | None],
     writeback_status: str | None,
     writeback_error: str | None,
 ) -> tuple[str | None, str | None]:
+    if eligibility["status"] == "ineligible":
+        return (
+            "ELIGIBILITY",
+            eligibility["reason"] or "Engagement is not eligible to sync with CCH",
+        )
     if client["status"] != "created":
         return "CCH_CLIENT_CREATION", client["error"] or "Client creation failed"
     if task["status"] != "created":
@@ -199,6 +208,15 @@ def _job_failure(
     if writeback_status != "updated":
         return "MACONOMY_WRITEBACK", writeback_error or "Maconomy writeback failed"
     return None, None
+
+
+def _eligibility(value: Any) -> dict[str, str | None]:
+    if not isinstance(value, dict):
+        return {"status": "eligible", "reason": None}
+    return {
+        "status": _string_value(value.get("status")) or "eligible",
+        "reason": _string_value(value.get("reason")),
+    }
 
 
 def _stage(value: Any) -> dict[str, Any]:
