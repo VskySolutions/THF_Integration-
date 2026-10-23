@@ -156,35 +156,82 @@ async def sync_client_scoped_engagements(
                 detail="Unable to retrieve eligible jobs from Maconomy",
             ) from exc
 
-        try:
-            processed_jobs = await cch.create_clients_and_tasks(enriched_jobs)
-        except CCHClientServiceError as exc:
-            await integration_run_log_service.fail_run(
-                session,
-                run_log,
-                failure_stage="CCH_AUTHENTICATION",
-                error_message=str(exc),
-                discovered_job_numbers=discovered_job_numbers,
-            )
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Unable to process clients or tasks in CCH/XCM: {exc}",
-            ) from exc
+        eligible_jobs: list[dict[str, Any]] = []
+        ineligible_jobs: dict[str, dict[str, Any]] = {}
+        for job in enriched_jobs:
+            eligibility_failure = maconomy.cch_eligibility_failure(job)
+            if eligibility_failure is None:
+                eligible_jobs.append(
+                    {
+                        **job,
+                        "eligibility": {"status": "eligible", "reason": None},
+                    }
+                )
+                continue
 
-        try:
-            updated_jobs = await maconomy.update_cch_processing_results(processed_jobs)
-        except MaconomyServiceError as exc:
-            await integration_run_log_service.fail_run(
-                session,
-                run_log,
-                failure_stage="MACONOMY_WRITEBACK",
-                error_message=str(exc),
-                discovered_job_numbers=discovered_job_numbers,
-            )
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="Unable to save CCH processing results in Maconomy",
-            ) from exc
+            job_number = str(job.get("jobnumber") or "UNKNOWN")
+            ineligible_jobs[job_number] = {
+                **job,
+                "eligibility": {
+                    "status": "ineligible",
+                    "reason": eligibility_failure,
+                },
+                "cchclientcreation": {
+                    "status": "skipped",
+                    "error": eligibility_failure,
+                },
+                "cchtaskcreation": {
+                    "status": "skipped",
+                    "taskid": None,
+                    "error": "CCH sync skipped because the engagement is not eligible",
+                },
+                "maconomywritebackstatus": "skipped",
+                "maconomywritebackerror": eligibility_failure,
+            }
+
+        updated_eligible_jobs: list[dict[str, Any]] = []
+        if eligible_jobs:
+            try:
+                processed_jobs = await cch.create_clients_and_tasks(eligible_jobs)
+            except CCHClientServiceError as exc:
+                await integration_run_log_service.fail_run(
+                    session,
+                    run_log,
+                    failure_stage="CCH_AUTHENTICATION",
+                    error_message=str(exc),
+                    discovered_job_numbers=discovered_job_numbers,
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail=f"Unable to process clients or tasks in CCH/XCM: {exc}",
+                ) from exc
+
+            try:
+                updated_eligible_jobs = await maconomy.update_cch_processing_results(
+                    processed_jobs
+                )
+            except MaconomyServiceError as exc:
+                await integration_run_log_service.fail_run(
+                    session,
+                    run_log,
+                    failure_stage="MACONOMY_WRITEBACK",
+                    error_message=str(exc),
+                    discovered_job_numbers=discovered_job_numbers,
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail="Unable to save CCH processing results in Maconomy",
+                ) from exc
+
+        eligible_results = {
+            str(job.get("jobnumber") or "UNKNOWN"): job
+            for job in updated_eligible_jobs
+        }
+        updated_jobs = [
+            ineligible_jobs.get(str(job.get("jobnumber") or "UNKNOWN"))
+            or eligible_results[str(job.get("jobnumber") or "UNKNOWN")]
+            for job in enriched_jobs
+        ]
 
         await integration_run_log_service.complete_run_from_jobs(
             session,

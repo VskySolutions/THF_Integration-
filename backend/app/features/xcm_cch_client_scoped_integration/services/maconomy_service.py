@@ -303,6 +303,51 @@ class MaconomyService:
         return enriched_jobs
 
     @staticmethod
+    def cch_eligibility_failure(job: dict[str, Any]) -> str | None:
+        """Return the business reason an enriched job cannot be sent to CCH."""
+        job_number = str(job.get("jobnumber") or "UNKNOWN").strip() or "UNKNOWN"
+        missing_roles = [
+            role_name
+            for field_name, role_name in (
+                ("employee6_email", "Billing Manager"),
+                ("spec5_email", "CSE"),
+                ("purposename_email", "Engagement Partner"),
+            )
+            if job.get(field_name) is None
+            or not str(job.get(field_name)).strip()
+        ]
+
+        reasons: list[str] = []
+        if missing_roles:
+            if len(missing_roles) == 1:
+                role_text = missing_roles[0]
+                verb = "is"
+            elif len(missing_roles) == 2:
+                role_text = " and ".join(missing_roles)
+                verb = "are"
+            else:
+                role_text = f"{', '.join(missing_roles[:-1])}, and {missing_roles[-1]}"
+                verb = "are"
+            reasons.append(
+                f"{role_text} {verb} not assigned to the engagement."
+            )
+
+        return_type = job.get("specification2_description")
+        if (
+            return_type is None
+            or not str(return_type).strip()
+            or str(return_type).strip().casefold() == "default"
+        ):
+            reasons.append("Return Type is not set for the engagement.")
+
+        if not reasons:
+            return None
+        return (
+            f"Engagement {job_number} is not eligible to sync with CCH: "
+            f"{' '.join(reasons)}"
+        )
+
+    @staticmethod
     def _calculate_period_end_date(year: Any, month: Any) -> str | None:
         if isinstance(year, bool) or isinstance(month, bool):
             return None

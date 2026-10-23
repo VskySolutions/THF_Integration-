@@ -265,6 +265,19 @@ async def sync_caseware_job(
             return redirect
 
         job = jobs[0] if isinstance(jobs[0], dict) else {}
+        eligibility = job.get("eligibility")
+        if (
+            isinstance(eligibility, dict)
+            and eligibility.get("status") == "ineligible"
+        ):
+            reason = eligibility.get("reason")
+            _set_flash(
+                request,
+                str(reason or f"Engagement {normalized_job_number} is not eligible to sync with CCH."),
+                "warning",
+            )
+            return redirect
+
         failure_message = _client_scoped_job_failure(job)
         if failure_message:
             _set_flash(
