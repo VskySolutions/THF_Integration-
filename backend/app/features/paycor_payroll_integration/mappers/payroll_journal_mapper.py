@@ -38,15 +38,16 @@ def map_paycor_gl_to_maconomy_card(
     description: str | None = None,
 ) -> dict[str, Any]:
     """Map Paycor payroll run details to Maconomy General Journal card header."""
-    desc = description or f"Payroll GL - {run_type or 'Payrun'} ({group_id or planner_id})"
+    desc = description or f"Automated SYNC from paycor  - {run_type or 'Payrun'} ({group_id or planner_id})"
     date_val = transaction_date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     return {
         "companynumber": company_number,
         "automaticvouchervar": True,
         "entrytotalcontrol": 0,
-        "description": desc[:100],
-        "transactiondate": date_val,
+        "remark1": desc[:100],
+        "postingdate": date_val,
+        "defaulttransactiontype": "Payroll",
     }
 
 
@@ -69,9 +70,14 @@ def map_paycor_gl_record_to_maconomy_line(
     except (ValueError, TypeError):
         amount = 0.0
 
-    # If negative amount or specified as Credit
-    if entry_type == "CREDIT" and amount > 0:
-        amount = -amount
+    # Determine debit and credit based on entryType and amount sign
+    debit_val = 0.0
+    credit_val = 0.0
+
+    if entry_type == "CREDIT" or amount < 0:
+        credit_val = abs(amount)
+    else:
+        debit_val = abs(amount)
 
     entry_date = (
         record.get("checkDate")
@@ -88,15 +94,15 @@ def map_paycor_gl_record_to_maconomy_line(
         or record.get("departmentDescription")
         or ""
     )
-
-    department = record.get("department") or record.get("departmentNumber") or ""
     employee_number = record.get("employeeNumber") or ""
 
     return {
-        "accountnumber": str(account_number).strip(),
-        "amount": amount,
-        "text": f"{description} {employee_number}".strip()[:100],
+        "accountnumber": "1017",
+        "debitbase": 10.0,
+        "creditbase": 0.0,
         "entrydate": entry_date,
-        "department": str(department).strip(),
-        "specification4": str(employee_number).strip(),
+        "entrytext": f"{description} {employee_number}".strip()[:100],
+        "employeenumber": str(employee_number).strip(),
+        "typeofentry": "g",
     }
+

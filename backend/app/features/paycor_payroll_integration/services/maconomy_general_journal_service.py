@@ -24,7 +24,7 @@ CONTAINER_CONTENT_TYPE = (
     "charset=UTF-8; version=9.0"
 )
 
-# Standard General Journal card fields
+# Standard General Journal card fields matching Maconomy container specification
 GENERAL_JOURNAL_CARD_FIELDS = [
     "companynumber",
     "journalnumber",
@@ -32,22 +32,27 @@ GENERAL_JOURNAL_CARD_FIELDS = [
     "posted",
     "automaticvouchervar",
     "entrytotalcontrol",
-    "description",
-    "transactiondate",
+    "remark1",
+    "postingdate",
+    "defaulttransactiontype",
 ]
 
-# Standard General Journal table line fields
+# Standard General Journal table line fields matching Maconomy container specification
 GENERAL_JOURNAL_TABLE_FIELDS = [
     "accountnumber",
-    "amount",
-    "text",
+    "debitbase",
+    "creditbase",
+    "amountcurrency",
+    "entrytext",
     "entrydate",
-    "department",
+    "entityname",
     "jobnumber",
-    "specification1",
-    "specification2",
-    "specification3",
-    "specification4",
+    "employeenumber",
+    "typeofentry",
+    "specification1name",
+    "specification2name",
+    "specification3name",
+    "specification4name",
 ]
 
 
@@ -233,7 +238,7 @@ class MaconomyGeneralJournalService:
         headers["Maconomy-Concurrency-Control"] = concurrency_token
 
         try:
-            response = await client.post(url, headers=headers)
+            response = await client.post(url, headers=headers, json={})
         except httpx.HTTPError as exc:
             raise MaconomyGeneralJournalServiceError(
                 f"Network error initializing journal card: {exc}"
@@ -298,7 +303,14 @@ class MaconomyGeneralJournalService:
             )
 
         new_concurrency = self._get_concurrency_token(response)
-        return response.json().get("data", {}), new_concurrency
+        res_json = response.json()
+        card_records = (
+            res_json.get("panes", {})
+            .get("card", {})
+            .get("records", [])
+        )
+        card_data_out = card_records[0].get("data", {}) if card_records else res_json.get("data", {})
+        return card_data_out, new_concurrency
 
     # -------------------------------------------------------------------------
     # Step 4: Table Lines Initialization & Submission
@@ -366,7 +378,12 @@ class MaconomyGeneralJournalService:
         )
         headers = self._container_headers(reconnect_token)
         headers["Maconomy-Concurrency-Control"] = concurrency_token
-        payload = {"data": line_data}
+        payload = {
+            "row": "end",
+            "limit": 100,
+            "offset": 0,
+            "data": line_data,
+        }
 
         try:
             response = await client.post(url, headers=headers, json=payload)
@@ -387,4 +404,121 @@ class MaconomyGeneralJournalService:
             )
 
         new_concurrency = self._get_concurrency_token(response)
-        return response.json().get("data", {}), new_concurrency
+        res_json = response.json()
+        table_records = (
+            res_json.get("panes", {})
+            .get("table", {})
+            .get("records", [])
+        )
+        line_data_out = table_records[0].get("data", {}) if table_records else res_json.get("data", {})
+        return line_data_out, new_concurrency
+
+    # -------------------------------------------------------------------------
+    # Orchestrated Full Flow: Create Journal with Lines
+    # -------------------------------------------------------------------------
+    async def create_journal_with_lines(
+        self,
+        card_data: dict[str, Any],
+        lines: list[dict[str, Any]],
+        container_name: str = "generaljournal",
+    ) -> dict[str, Any]:
+        """
+        Orchestrate the full creation of a Maconomy General Journal:
+        1. Obtain reconnect token.
+        2. Create container instance.
+        3. Initialize card pane.
+        4. Submit card header data.
+        5. For each line, initialize and submit line item into table pane.
+        """
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            reconnect_token = await self.get_reconnect_token(client)
+
+            instance_id, concurrency_token = await self.create_journal_instance(
+                client=client,
+                reconnect_token=reconnect_token,
+                container_name=container_name,
+            )
+
+            # Initialize card
+            _, concurrency_token = await self.initialize_journal_card(
+                client=client,
+                reconnect_token=reconnect_token,
+                instance_id=instance_id,
+                concurrency_token=concurrency_token,
+                container_name=container_name,
+            )
+
+            # Submit card
+            submitted_card, concurrency_token = await self.submit_journal_card(
+                client=client,
+                reconnect_token=reconnect_token,
+                instance_id=instance_id,
+                concurrency_token=concurrency_token,
+                card_data=card_data,
+                container_name=container_name,
+            )
+
+            # Submit each line
+            submitted_lines: list[dict[str, Any]] = []
+            for line in lines:
+                _, concurrency_token = await self.initialize_journal_table_line(
+                    client=client,
+                    reconnect_token=reconnect_token,
+                    instance_id=instance_id,
+                    concurrency_token=concurrency_token,
+                    row="end",
+                    container_name=container_name,
+                )
+
+                sub_line, concurrency_token = await self.submit_journal_table_line(
+                    client=client,
+                    reconnect_token=reconnect_token,
+                    instance_id=instance_id,
+                    concurrency_token=concurrency_token,
+                    line_data=line,
+                    container_name=container_name,
+                )
+                submitted_lines.append(sub_line)
+
+            # Step 5: Save/Commit the Journal Card with all lines attached
+            save_card_url = (
+                f"{self._general_journal_url(container_name)}/instances/"
+                f"{instance_id}/data/panes/card/0"
+            )
+            save_headers = self._container_headers(reconnect_token)
+            save_headers["Maconomy-Concurrency-Control"] = concurrency_token
+
+            save_resp = await client.post(
+                save_card_url,
+                headers=save_headers,
+                json={"data": card_data},
+            )
+            if save_resp.is_error:
+                LOGGER.warning(
+                    "Maconomy save journal card returned %s: %s",
+                    save_resp.status_code,
+                    save_resp.text,
+                )
+            else:
+                card_records = (
+                    save_resp.json()
+                    .get("panes", {})
+                    .get("card", {})
+                    .get("records", [])
+                )
+                if card_records:
+                    submitted_card = card_records[0].get("data", submitted_card)
+
+            journal_number = (
+                submitted_card.get("journalnumber")
+                or submitted_card.get("journalNumber")
+            )
+
+            return {
+                "instanceId": instance_id,
+                "journalNumber": journal_number,
+                "card": submitted_card,
+                "linesCount": len(submitted_lines),
+                "lines": submitted_lines,
+            }
+
