@@ -14,6 +14,11 @@ from app.features.paycor_integration.models import (  # noqa: F401
     PaycorEmployeeMappingLog,
     PaycorIntegrationLog,
 )
+# paycor payroll integration models
+from app.features.paycor_payroll_integration.models import (  # noqa: F401
+    PaycorPayrollIntegrationLog,
+    PaycorPayrollJournalMappingLog,
+)
 from app.core.config import get_settings
 from app.db.base import Base
 from app.features.exception_logs.models import ExceptionLog  # noqa: F401

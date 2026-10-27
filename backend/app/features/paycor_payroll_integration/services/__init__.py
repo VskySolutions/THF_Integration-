@@ -1,10 +1,11 @@
 """Services package for Paycor Payroll Integration."""
 
-from app.features.paycor_payroll_integration.services.maconomy_general_journal_service import (
+from . import integration_log_service, payroll_mapping_service
+from .maconomy_general_journal_service import (
     MaconomyGeneralJournalService,
     MaconomyGeneralJournalServiceError,
 )
-from app.features.paycor_payroll_integration.services.paycor_payroll_service import (
+from .paycor_payroll_service import (
     PaycorPayrollService,
     PaycorPayrollServiceError,
 )
@@ -14,4 +15,6 @@ __all__ = [
     "PaycorPayrollServiceError",
     "MaconomyGeneralJournalService",
     "MaconomyGeneralJournalServiceError",
+    "integration_log_service",
+    "payroll_mapping_service",
 ]

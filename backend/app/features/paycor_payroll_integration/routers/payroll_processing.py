@@ -3,16 +3,27 @@
 import logging
 from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
+from app.db.session import get_db
 from app.features.auth.dependencies import require_api_key
 from app.features.paycor_payroll_integration.constants import (
     PAYCOR_PAYROLL_ROUTER_PREFIX,
     PAYCOR_PAYROLL_TAG,
+    IntegrationAction,
+    IntegrationStatus,
 )
 from app.features.paycor_payroll_integration.mappers.payroll_journal_mapper import (
     map_paycor_gl_record_to_maconomy_line,
     map_paycor_gl_to_maconomy_card,
+)
+from app.features.paycor_payroll_integration.models.payroll_journal_mapping_log import (
+    PaycorPayrollJournalMappingLog,
+)
+from app.features.paycor_payroll_integration.services import (
+    integration_log_service,
+    payroll_mapping_service,
 )
 from app.features.paycor_payroll_integration.services.maconomy_general_journal_service import (
     MaconomyGeneralJournalService,
@@ -54,6 +65,157 @@ MaconomyJournalServiceDependency = Annotated[
     MaconomyGeneralJournalService,
     Depends(get_maconomy_journal_service),
 ]
+DatabaseSession = Annotated[AsyncSession, Depends(get_db)]
+
+
+async def _persist_pending_mapping(
+    session: AsyncSession,
+    *,
+    legal_entity_id: int,
+    planner_id: str,
+    run_type: str | None,
+) -> PaycorPayrollJournalMappingLog | None:
+    """Create a PENDING mapping row best-effort; never raises."""
+    try:
+        mapping, _created = await payroll_mapping_service.create_pending_mapping(
+            session,
+            legal_entity_id=legal_entity_id,
+            planner_id=planner_id,
+            run_type=run_type,
+        )
+        return mapping
+    except Exception:
+        await session.rollback()
+        LOGGER.error(
+            "Failed to persist pending mapping for planner %s",
+            planner_id,
+            exc_info=True,
+        )
+        return None
+
+
+async def _persist_journal_success(
+    session: AsyncSession,
+    *,
+    legal_entity_id: int,
+    planner_id: str,
+    mapping: PaycorPayrollJournalMappingLog | None,
+    journal_number: str | None,
+    instance_id: str | None,
+    lines_count: int,
+) -> None:
+    """Mark mapping COMPLETED and write a SUCCESS log best-effort; never raises."""
+    try:
+        if mapping is not None and journal_number is not None:
+            mapping = await payroll_mapping_service.complete_mapping(
+                session,
+                mapping,
+                maconomy_journal_number=str(journal_number),
+                maconomy_instance_id=(
+                    str(instance_id) if instance_id is not None else None
+                ),
+            )
+
+        await integration_log_service.create_log(
+            session,
+            mapping_id=mapping.id if mapping is not None else None,
+            planner_id=planner_id,
+            legal_entity_id=legal_entity_id,
+            status=IntegrationStatus.SUCCESS,
+            action=IntegrationAction.CREATE,
+            message=(
+                f"Journal {journal_number or 'UNKNOWN'} created "
+                f"({lines_count} lines)"
+            ),
+        )
+    except Exception:
+        await session.rollback()
+        LOGGER.error(
+            "Failed to persist success for planner %s",
+            planner_id,
+            exc_info=True,
+        )
+
+
+async def _persist_journal_failure(
+    session: AsyncSession,
+    *,
+    legal_entity_id: int,
+    planner_id: str | None,
+    mapping: PaycorPayrollJournalMappingLog | None,
+    message: str,
+) -> None:
+    """Write a FAILED journal log best-effort; never raises."""
+    try:
+        await integration_log_service.create_log(
+            session,
+            mapping_id=mapping.id if mapping is not None else None,
+            planner_id=planner_id,
+            legal_entity_id=legal_entity_id,
+            status=IntegrationStatus.FAILED,
+            action=IntegrationAction.CREATE,
+            message=message,
+        )
+    except Exception:
+        await session.rollback()
+        LOGGER.error(
+            "Failed to persist journal failure for planner %s",
+            planner_id,
+            exc_info=True,
+        )
+
+
+async def _persist_run_failure(
+    session: AsyncSession,
+    *,
+    legal_entity_id: int,
+    message: str,
+) -> None:
+    """Write a run-level FAILED log (no planner) best-effort; never raises."""
+    try:
+        await integration_log_service.create_log(
+            session,
+            mapping_id=None,
+            planner_id=None,
+            legal_entity_id=legal_entity_id,
+            status=IntegrationStatus.FAILED,
+            action=IntegrationAction.CREATE,
+            message=message,
+        )
+    except Exception:
+        await session.rollback()
+        LOGGER.error(
+            "Failed to persist run failure for legal entity %s",
+            legal_entity_id,
+            exc_info=True,
+        )
+
+
+async def _persist_journal_skipped(
+    session: AsyncSession,
+    *,
+    legal_entity_id: int,
+    planner_id: str,
+    message: str,
+) -> None:
+    """Write a SKIPPED journal log best-effort; never raises."""
+    try:
+        await integration_log_service.create_log(
+            session,
+            mapping_id=None,
+            planner_id=planner_id,
+            legal_entity_id=legal_entity_id,
+            status=IntegrationStatus.SKIPPED,
+            action=IntegrationAction.CREATE,
+            message=message,
+        )
+    except Exception:
+        await session.rollback()
+        LOGGER.error(
+            "Failed to persist skipped log for planner %s",
+            planner_id,
+            exc_info=True,
+        )
 
 
 @router.get(
@@ -208,6 +370,7 @@ async def get_general_ledger_with_employee(
 async def create_journal_for_planner(
     legal_entity_id: int,
     planner_id: str,
+    session: DatabaseSession,
     group_id: str | None = Query(default=None, alias="groupId"),
     run_type: str | None = Query(default=None, alias="runType"),
     company_number: str = Query(default="100", alias="companyNumber"),
@@ -220,6 +383,7 @@ async def create_journal_for_planner(
     Fetch Paycor General Ledger data for a single planner ID,
     map it to Maconomy card and line items, and create the General Journal entry.
     """
+    journal_mapping: PaycorPayrollJournalMappingLog | None = None
     try:
         # 1. Fetch GL data from Paycor
         gl_response = await payroll_service.get_general_ledger_with_employee(
@@ -236,11 +400,24 @@ async def create_journal_for_planner(
         )
 
         if not records:
+            await _persist_journal_skipped(
+                session,
+                legal_entity_id=legal_entity_id,
+                planner_id=planner_id,
+                message=f"No GL records found for planner {planner_id}",
+            )
             return {
                 "plannerId": planner_id,
                 "status": "SKIPPED",
                 "message": f"No GL records found for planner {planner_id}",
             }
+
+        journal_mapping = await _persist_pending_mapping(
+            session,
+            legal_entity_id=legal_entity_id,
+            planner_id=planner_id,
+            run_type=run_type,
+        )
 
         # 2. Map header card & table lines
         card_data = map_paycor_gl_to_maconomy_card(
@@ -259,6 +436,28 @@ async def create_journal_for_planner(
             lines=lines,
         )
 
+        await _persist_journal_success(
+            session,
+            legal_entity_id=legal_entity_id,
+            planner_id=planner_id,
+            mapping=journal_mapping,
+            journal_number=(
+                creation_result.get("journalNumber")
+                if isinstance(creation_result, dict)
+                else None
+            ),
+            instance_id=(
+                creation_result.get("instanceId")
+                if isinstance(creation_result, dict)
+                else None
+            ),
+            lines_count=(
+                creation_result.get("linesCount", len(lines))
+                if isinstance(creation_result, dict)
+                else len(lines)
+            ),
+        )
+
         return {
             "status": "SUCCESS",
             "legalEntityId": legal_entity_id,
@@ -267,12 +466,26 @@ async def create_journal_for_planner(
         }
 
     except (PaycorPayrollServiceError, MaconomyGeneralJournalServiceError) as exc:
+        await _persist_journal_failure(
+            session,
+            legal_entity_id=legal_entity_id,
+            planner_id=planner_id,
+            mapping=journal_mapping,
+            message=str(getattr(exc, "message", exc)),
+        )
         raise HTTPException(
             status_code=exc.status_code,
             detail=exc.message,
         )
     except Exception as exc:
         LOGGER.exception("Error in create_journal_for_planner: %s", exc)
+        await _persist_journal_failure(
+            session,
+            legal_entity_id=legal_entity_id,
+            planner_id=planner_id,
+            mapping=journal_mapping,
+            message=str(getattr(exc, "message", exc)),
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Internal server error: {exc}",
@@ -285,6 +498,7 @@ async def create_journal_for_planner(
     summary="Fetch all Payruns from Paycor (Legal Entity 158797) and sync each into Maconomy General Journals",
 )
 async def sync_payroll_to_maconomy(
+    session: DatabaseSession,
     company_number: str = Query(default="100", alias="companyNumber"),
     from_check_date: str | None = Query(
         default=None,
@@ -347,6 +561,7 @@ async def sync_payroll_to_maconomy(
             group_id = record.get("groupId") or record.get("groupID")
             run_type = record.get("runType") or record.get("runtype")
 
+            journal_mapping: PaycorPayrollJournalMappingLog | None = None
             try:
                 gl_data = await payroll_service.get_general_ledger_with_employee(
                     legal_entity_id=legal_entity_id,
@@ -361,12 +576,25 @@ async def sync_payroll_to_maconomy(
                 )
 
                 if not gl_records:
+                    await _persist_journal_skipped(
+                        session,
+                        legal_entity_id=legal_entity_id,
+                        planner_id=planner_id,
+                        message="No GL records found",
+                    )
                     journals_created.append({
                         "plannerId": planner_id,
                         "status": "SKIPPED",
                         "message": "No GL records found",
                     })
                     continue
+
+                journal_mapping = await _persist_pending_mapping(
+                    session,
+                    legal_entity_id=legal_entity_id,
+                    planner_id=planner_id,
+                    run_type=run_type,
+                )
 
                 card_data = map_paycor_gl_to_maconomy_card(
                     planner_id=planner_id,
@@ -379,6 +607,28 @@ async def sync_payroll_to_maconomy(
                 creation_res = await maconomy_service.create_journal_with_lines(
                     card_data=card_data,
                     lines=lines,
+                )
+
+                await _persist_journal_success(
+                    session,
+                    legal_entity_id=legal_entity_id,
+                    planner_id=planner_id,
+                    mapping=journal_mapping,
+                    journal_number=(
+                        creation_res.get("journalNumber")
+                        if isinstance(creation_res, dict)
+                        else None
+                    ),
+                    instance_id=(
+                        creation_res.get("instanceId")
+                        if isinstance(creation_res, dict)
+                        else None
+                    ),
+                    lines_count=(
+                        creation_res.get("linesCount", len(lines))
+                        if isinstance(creation_res, dict)
+                        else len(lines)
+                    ),
                 )
 
                 journals_created.append({
@@ -395,6 +645,13 @@ async def sync_payroll_to_maconomy(
                     planner_id,
                     line_err,
                 )
+                await _persist_journal_failure(
+                    session,
+                    legal_entity_id=legal_entity_id,
+                    planner_id=planner_id,
+                    mapping=journal_mapping,
+                    message=str(line_err),
+                )
                 errors.append({
                     "plannerId": planner_id,
                     "error": str(line_err),
@@ -408,12 +665,22 @@ async def sync_payroll_to_maconomy(
         }
 
     except PaycorPayrollServiceError as exc:
+        await _persist_run_failure(
+            session,
+            legal_entity_id=legal_entity_id,
+            message=str(getattr(exc, "message", exc)),
+        )
         raise HTTPException(
             status_code=exc.status_code,
             detail=exc.message,
         )
     except Exception as exc:
         LOGGER.exception("Unexpected error in sync_payroll_to_maconomy: %s", exc)
+        await _persist_run_failure(
+            session,
+            legal_entity_id=legal_entity_id,
+            message=str(getattr(exc, "message", exc)),
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Internal server error: {exc}",
