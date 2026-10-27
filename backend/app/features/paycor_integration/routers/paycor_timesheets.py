@@ -371,16 +371,7 @@ async def get_paygrid_payload(
         payload = map_timesheets_to_paycor(
             calculated_entries,
             earning_codes=earning_codes,
-            integration_vendor=(
-                settings.paycor_integration_vendor
-            ),
             process_id=str(uuid4()),
-            pay_group_id=(
-                settings.paycor_pay_group_id
-            ),
-            pay_number=(
-                settings.paycor_pay_number
-            ),
         )
 
         _set_warning_header(

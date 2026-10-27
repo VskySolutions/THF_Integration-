@@ -68,38 +68,41 @@ class PaycorService:
             departments=departments,
         )
         
-    async def get_employee_by_id(
+    async def get_employee_by_number(
         self,
-        paycor_employee_id: str,
+        paycor_employee_number: str,
     ) -> dict[str, Any] | None:
-        """Return one normalized Paycor employee by employee ID."""
+        """Return one normalized Paycor employee by employee number."""
 
         employees, departments = (
             await self._retrieve_employee_data()
         )
 
-        normalized_employee_id = (
-            paycor_employee_id.strip().lower()
+        normalized_employee_number = (
+            paycor_employee_number.strip()
         )
 
-        employee = next(
-            (
-                record
-                for record in employees
-                if str(
-                    record.get("id", "")
-                ).strip().lower()
-                == normalized_employee_id
-            ),
-            None,
-        )
+        matching_employees = [
+            record
+            for record in employees
+            if str(
+                record.get("employeeNumber", "")
+            ).strip()
+            == normalized_employee_number
+        ]
 
-        if employee is None:
+        if not matching_employees:
             return None
+
+        if len(matching_employees) > 1:
+            raise PaycorServiceError(
+                "Multiple Paycor employees have employee number "
+                f"{normalized_employee_number!r}"
+            )
 
         mapped_employees = await (
             self._map_employee_records(
-                employees=[employee],
+                employees=[matching_employees[0]],
                 departments=departments,
             )
         )

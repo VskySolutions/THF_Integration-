@@ -336,7 +336,7 @@ async def retry_paycor_employee(
     current_user: AuthenticatedUser,
     csrf_token: Annotated[str, Form(min_length=1)],
     retry_action: Annotated[str, Form(min_length=1)],
-    paycor_employee_id: Annotated[str, Form(min_length=1, max_length=36)],
+    paycor_employee_number: Annotated[str, Form(min_length=1, max_length=100)],
     session: Annotated[AsyncSession, Depends(get_db)],
 ) -> RedirectResponse:
     """Manually retry a Paycor employee create or update synchronization."""
@@ -366,11 +366,15 @@ async def retry_paycor_employee(
         request.url_for("integration_logs", integration_id=integration.id),
         status_code=status.HTTP_303_SEE_OTHER,
     )
-    normalized_employee_id = paycor_employee_id.strip()
-    try:
-        employee_id = uuid.UUID(normalized_employee_id)
-    except ValueError:
-        _set_flash(request, "Enter a valid Paycor employee ID (UUID).", "danger")
+    normalized_employee_number = (
+        paycor_employee_number.strip()
+    )
+    if not normalized_employee_number:
+        _set_flash(
+            request,
+            "Enter a valid Paycor employee number.",
+            "danger",
+        )
         return redirect
 
     paths_by_action = {
@@ -383,12 +387,18 @@ async def retry_paycor_employee(
         return redirect
 
     settings = get_settings()
+    encoded_employee_number = quote(
+        normalized_employee_number,
+        safe="",
+    )
     sync_path = (
         f"{settings.api_v1_prefix.rstrip('/')}/paycor/employees/"
-        f"{employee_id}/{endpoint_action}"
+        f"by-number/{encoded_employee_number}/{endpoint_action}"
     )
     activity_data = {
-        "paycor_employee_id": str(employee_id),
+        "paycor_employee_number": (
+            normalized_employee_number
+        ),
         "retry_action": retry_action,
         "integration_id": str(integration.id),
     }
@@ -448,7 +458,9 @@ async def retry_paycor_employee(
     operation = "create" if retry_action == "create" else "update"
     _set_flash(
         request,
-        f"Paycor employee {employee_id} {operation} retry completed successfully.",
+        "Paycor employee "
+        f"{normalized_employee_number} {operation} retry "
+        "completed successfully.",
         "success",
     )
     return redirect

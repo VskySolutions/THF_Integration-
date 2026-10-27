@@ -30,6 +30,17 @@ TEMPORARY_ENTITY_DEPARTMENT_CODES = {
     "3": "4050",  # Human Resources
 }
 
+PAYCOR_PAYROLL_INTEGRATION_VENDOR = (
+    "THF Maconomy"
+)
+
+# Temporary until Pay Group is mapped from Maconomy.
+TEMPORARY_PAYCOR_PAY_GROUP_ID = (
+    "71c9338a-4c28-0000-0000-0000712f0300"
+)
+
+DEFAULT_PAYCOR_PAY_NUMBER = 0
+
 
 class TimesheetMappingError(ValueError):
     """Raised when a timesheet cannot be mapped."""
@@ -185,10 +196,7 @@ def map_timesheets_to_paycor(
     ],
     *,
     earning_codes: dict[str, str],
-    integration_vendor: str,
     process_id: str,
-    pay_group_id: str,
-    pay_number: int = 0,
     timezone_name: str = (
         "America/New_York"
     ),
@@ -310,15 +318,17 @@ def map_timesheets_to_paycor(
                     )
                 ),
                 "payGroupId": (
-                    pay_group_id
+                    TEMPORARY_PAYCOR_PAY_GROUP_ID
                 ),
-                "payNumber": pay_number,
+                "payNumber": (
+                    DEFAULT_PAYCOR_PAY_NUMBER
+                ),
             }
         )
 
     return {
         "integrationVendor": (
-            integration_vendor
+            PAYCOR_PAYROLL_INTEGRATION_VENDOR
         ),
         "processId": process_id,
         "importEmployees": list(
