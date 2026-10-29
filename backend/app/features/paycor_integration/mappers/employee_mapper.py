@@ -647,7 +647,8 @@ def map_paycor_employee_to_maconomy_update(
     """Map only fields currently approved for employee updates."""
 
     mapped_payload = map_paycor_employee_to_maconomy(
-        employee_data
+        employee_data,
+        include_name_components=True
     )
 
    

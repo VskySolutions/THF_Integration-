@@ -908,13 +908,12 @@ class MaconomyEmployeeService:
         headers["Maconomy-Concurrency-Control"] = (
             concurrency_token
         )
-
         response = await client.post(
             url,
             headers=headers,
             json={"data": employee_data},
         )
-
+        
         if response.is_error:
             response_text = (
                 response.text.strip()

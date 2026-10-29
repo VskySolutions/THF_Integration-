@@ -608,10 +608,10 @@ class SAPConcurService:
 
         print(f"Fetching reports from {yesterday} to {tomorrow}")
         params = {
-            "user": "ALL",
+            "user": "rajlaxmi.mandavkar@thf-cpa.com.uat",
             "modifiedDateAfter": yesterday.isoformat(),
             "modifiedDateBefore": tomorrow.isoformat(),
-            "approvalStatusCode": "A_APPR",
+            # "approvalStatusCode": "A_APPR",
             # "paymentStatusCode": "P_PROC",
             "limit": 100,
         }
