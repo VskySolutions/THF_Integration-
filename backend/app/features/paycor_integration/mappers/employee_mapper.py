@@ -534,9 +534,6 @@ def map_paycor_employee_to_maconomy(
     # These are the only values always submitted.
     maconomy_data: dict[str, Any] = {
         "employeenumber": employee_number,
-        # Paycor employee number is the cross-system
-        # duplicate-matching value in Maconomy.
-        "remark1": employee_number,
         "country": maconomy_country,
 
         # Paycor employee UUID remains stored in remark5.
@@ -639,7 +636,6 @@ MACONOMY_EMPLOYEE_UPDATE_FIELDS = (
     "specification4name",
     "personaltitle",
     "text10",
-    "remark1",
     "remark5",
     "superioremployee",
 )

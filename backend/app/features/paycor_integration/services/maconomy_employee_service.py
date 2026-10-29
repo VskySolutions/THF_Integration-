@@ -37,7 +37,6 @@ EMPLOYEE_FIELDS = (
     "lastname",
     # "initials",
     "specification4name",
-    "remark1",
     "remark5",
     "country",
     "dateemployed",
@@ -53,7 +52,6 @@ EMPLOYEE_FIELDS = (
 
 EMPLOYEE_LOOKUP_FIELDS = (
     "employeenumber",
-    "remark1",
 )
 
 
@@ -75,7 +73,6 @@ EMPLOYEE_REVISION_TABLE_FIELDS = (
     "electronicmailaddress",
     "position",
     "specification4name",
-    "remark1",
     "remark5",
     "text10",
     "date5",
@@ -106,16 +103,6 @@ class MaconomyEmployeeService:
     ) -> set[str]:
         """Return all existing Maconomy employee numbers."""
 
-        _, employee_numbers = await (
-            self.get_employee_identity_data()
-        )
-
-        return employee_numbers
-    async def get_employee_identity_data(
-        self,
-    ) -> tuple[dict[str, str], set[str]]:
-        """Return remark1-to-employee-number lookup and all numbers."""
-
         try:
             async with httpx.AsyncClient(
                 timeout=self.timeout
@@ -127,7 +114,7 @@ class MaconomyEmployeeService:
                 )
 
                 return await (
-                    self._get_paginated_employee_identity_data(
+                    self._get_paginated_employee_numbers(
                         client,
                         reconnect_token,
                     )
@@ -337,19 +324,12 @@ class MaconomyEmployeeService:
                         "employee number"
                     )
 
-                current_paycor_employee_number = str(
-                    current_employee.get(
-                        "remark1",
-                        "",
-                    )
-                ).strip()
-
                 if (
-                    current_paycor_employee_number
+                    loaded_employee_number
                     != expected_paycor_employee_number
                 ):
                     raise MaconomyEmployeeServiceError(
-                        "Maconomy remark1 does not match "
+                        "Maconomy employee number does not match "
                         "the Paycor employee number; "
                         "manual reconciliation is required"
                     )
@@ -496,18 +476,14 @@ class MaconomyEmployeeService:
 
         return reconnect_token
 
-    async def _get_paginated_employee_identity_data(
+    async def _get_paginated_employee_numbers(
         self,
         client: httpx.AsyncClient,
         reconnect_token: str,
-    ) -> tuple[dict[str, str], set[str]]:
+    ) -> set[str]:
         url = f"{self._employees_read_url()}/filter"
         headers = self._container_headers(reconnect_token)
 
-        employee_numbers_by_paycor_number: dict[
-            str,
-            str,
-        ] = {}
         employee_numbers: set[str] = set()
         page_size = EMPLOYEE_FILTER_PAGE_SIZE
         offset = 0
@@ -570,10 +546,7 @@ class MaconomyEmployeeService:
                     row_total_count is None
                     or offset >= row_total_count
                 ):
-                    return (
-                        employee_numbers_by_paycor_number,
-                        employee_numbers,
-                    )
+                    return employee_numbers
 
                 raise MaconomyEmployeeServiceError(
                     "Maconomy employee filter ended "
@@ -617,51 +590,13 @@ class MaconomyEmployeeService:
                     normalized_employee_number
                 )
 
-                paycor_employee_number_value = (
-                    employee_data.get("remark1")
-                )
-
-                if paycor_employee_number_value is None:
-                    continue
-
-                paycor_employee_number = str(
-                    paycor_employee_number_value
-                ).strip()
-
-                if not paycor_employee_number:
-                    continue
-
-                existing_employee_number = (
-                    employee_numbers_by_paycor_number.get(
-                        paycor_employee_number
-                    )
-                )
-
-                if (
-                    existing_employee_number is not None
-                    and existing_employee_number
-                    != normalized_employee_number
-                ):
-                    raise MaconomyEmployeeServiceError(
-                        "Maconomy remark1 is assigned to "
-                        "multiple employees: "
-                        f"{paycor_employee_number}"
-                    )
-
-                employee_numbers_by_paycor_number[
-                    paycor_employee_number
-                ] = normalized_employee_number
-
             next_offset = row_offset + row_count
 
             if (
                 row_total_count is not None
                 and next_offset >= row_total_count
             ):
-                return (
-                    employee_numbers_by_paycor_number,
-                    employee_numbers,
-                )
+                return employee_numbers
 
             if next_offset <= offset:
                 raise MaconomyEmployeeServiceError(

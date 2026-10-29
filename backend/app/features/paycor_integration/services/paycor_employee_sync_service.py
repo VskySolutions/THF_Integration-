@@ -31,7 +31,6 @@ from app.features.paycor_integration.services.maconomy_employee_service import (
 )
 from app.features.paycor_integration.services.maconomy_vendor_service import (
     MaconomyVendorService,
-    MaconomyVendorServiceError,
 )
 from app.features.paycor_integration.services.paycor_employee_service import (
     PaycorService,
@@ -111,12 +110,9 @@ class PaycorEmployeeSyncService:
         if not employees_to_process:
             return []
 
-        (
-            maconomy_employee_numbers_by_paycor_number,
-            maconomy_employee_numbers,
-        ) = (
+        maconomy_employee_numbers = (
             await self
-            ._load_maconomy_employee_identity_data()
+            ._load_maconomy_employee_numbers()
         )
 
         results: list[dict[str, Any]] = []
@@ -156,9 +152,6 @@ class PaycorEmployeeSyncService:
                 await self._sync_mapped_employee(
                     session,
                     employee,
-                    maconomy_employee_numbers_by_paycor_number=(
-                        maconomy_employee_numbers_by_paycor_number
-                    ),
                     maconomy_employee_numbers=(
                         maconomy_employee_numbers
                     ),
@@ -196,20 +189,14 @@ class PaycorEmployeeSyncService:
                 "Paycor employee was not found"
             )
 
-        (
-            maconomy_employee_numbers_by_paycor_number,
-            maconomy_employee_numbers,
-        ) = (
+        maconomy_employee_numbers = (
             await self
-            ._load_maconomy_employee_identity_data()
+            ._load_maconomy_employee_numbers()
         )
 
         return await self._sync_mapped_employee(
             session,
             employee,
-            maconomy_employee_numbers_by_paycor_number=(
-                maconomy_employee_numbers_by_paycor_number
-            ),
             maconomy_employee_numbers=(
                 maconomy_employee_numbers
             ),
@@ -248,17 +235,15 @@ class PaycorEmployeeSyncService:
             )
         )
 
-        (
-            maconomy_employee_numbers_by_paycor_number,
-            maconomy_employee_numbers,
-        ) = await (
-            self._load_maconomy_employee_identity_data()
+        maconomy_employee_numbers = await (
+            self._load_maconomy_employee_numbers()
         )
 
         maconomy_employee_number = (
-            maconomy_employee_numbers_by_paycor_number.get(
-                paycor_employee_number
-            )
+            paycor_employee_number
+            if paycor_employee_number
+            in maconomy_employee_numbers
+            else None
         )
 
         if maconomy_employee_number is None:
@@ -273,31 +258,10 @@ class PaycorEmployeeSyncService:
                 )
             )
 
-            employee_number_exists = (
-                paycor_employee_number
-                in maconomy_employee_numbers
+            message = (
+                "Employee does not exist in Maconomy; "
+                "update skipped"
             )
-
-            if employee_number_exists:
-                message = (
-                    "Maconomy employee number exists, "
-                    "but remark1 does not match the Paycor "
-                    "employee number; manual reconciliation "
-                    "is required"
-                )
-                integration_status = (
-                    IntegrationStatus.FAILED
-                )
-                result_status = "FAILED"
-            else:
-                message = (
-                    "Employee does not exist in Maconomy; "
-                    "update skipped"
-                )
-                integration_status = (
-                    IntegrationStatus.SUCCESS
-                )
-                result_status = "SKIPPED"
 
             await self._write_log(
                 session,
@@ -309,7 +273,7 @@ class PaycorEmployeeSyncService:
                     paycor_employee_number
                 ),
                 legal_entity_id=legal_entity_id,
-                status=integration_status,
+                status=IntegrationStatus.SUCCESS,
                 action=IntegrationAction.UPDATE,
                 message=message,
             )
@@ -317,12 +281,8 @@ class PaycorEmployeeSyncService:
             return self._result(
                 paycor_employee_uuid,
                 paycor_employee_number,
-                result_status,
-                (
-                    paycor_employee_number
-                    if employee_number_exists
-                    else None
-                ),
+                "SKIPPED",
+                None,
                 message,
             )
 
@@ -335,10 +295,9 @@ class PaycorEmployeeSyncService:
         )
 
         manager_maconomy_employee_number = (
-            maconomy_employee_numbers_by_paycor_number.get(
-                manager_employee_number
-            )
-            if manager_employee_number is not None
+            manager_employee_number
+            if manager_employee_number
+            in maconomy_employee_numbers
             else None
         )
 
@@ -389,13 +348,8 @@ class PaycorEmployeeSyncService:
                 "Unable to retrieve employees from Paycor"
             ) from exc
 
-        # Maconomy remark1 is the Paycor employee-number
-        # identity used to select existing employees.
-        (
-            maconomy_employee_numbers_by_paycor_number,
-            _,
-        ) = await (
-            self._load_maconomy_employee_identity_data()
+        maconomy_employee_numbers = await (
+            self._load_maconomy_employee_numbers()
         )
 
         departments_by_id = (
@@ -420,9 +374,7 @@ class PaycorEmployeeSyncService:
             if (
                 employee_number is None
                 or employee_number
-                not in (
-                    maconomy_employee_numbers_by_paycor_number
-                )
+                not in maconomy_employee_numbers
             ):
                 continue
 
@@ -471,16 +423,12 @@ class PaycorEmployeeSyncService:
             if (
                 paycor_employee_number is None
                 or paycor_employee_number
-                not in (
-                    maconomy_employee_numbers_by_paycor_number
-                )
+                not in maconomy_employee_numbers
             ):
                 continue
 
             maconomy_employee_number: str | None = (
-                maconomy_employee_numbers_by_paycor_number[
-                    paycor_employee_number
-                ]
+                paycor_employee_number
             )
 
             employee_id_value = raw_employee.get("id")
@@ -606,10 +554,9 @@ class PaycorEmployeeSyncService:
                 )
 
                 manager_maconomy_employee_number = (
-                    maconomy_employee_numbers_by_paycor_number.get(
-                        manager_employee_number
-                    )
-                    if manager_employee_number is not None
+                    manager_employee_number
+                    if manager_employee_number
+                    in maconomy_employee_numbers
                     else None
                 )
 
@@ -715,18 +662,15 @@ class PaycorEmployeeSyncService:
             "results": actionable_results,
         }
 
-    async def _load_maconomy_employee_identity_data(
+    async def _load_maconomy_employee_numbers(
         self,
-    ) -> tuple[dict[str, str], set[str]]:
-        """Load remark1 identity lookup and employee numbers once."""
+    ) -> set[str]:
+        """Load existing Maconomy employee numbers once."""
 
         try:
-            (
-                employee_numbers_by_paycor_number,
-                employee_numbers,
-            ) = await (
+            employee_numbers = await (
                 self.maconomy_service
-                .get_employee_identity_data()
+                .get_all_employee_numbers()
             )
 
         except MaconomyEmployeeServiceError as exc:
@@ -735,7 +679,7 @@ class PaycorEmployeeSyncService:
                 "employees from Maconomy"
             ) from exc
 
-        normalized_employee_numbers = {
+        return {
             normalized_number
             for employee_number in employee_numbers
             if (
@@ -746,72 +690,17 @@ class PaycorEmployeeSyncService:
             )
         }
 
-        normalized_lookup: dict[str, str] = {}
-
-        for (
-            paycor_employee_number,
-            maconomy_employee_number,
-        ) in employee_numbers_by_paycor_number.items():
-            normalized_paycor_number = (
-                self._normalize_employee_number(
-                    paycor_employee_number
-                )
-            )
-            normalized_maconomy_number = (
-                self._normalize_employee_number(
-                    maconomy_employee_number
-                )
-            )
-
-            if (
-                normalized_paycor_number is None
-                or normalized_maconomy_number is None
-            ):
-                continue
-
-            existing_maconomy_number = (
-                normalized_lookup.get(
-                    normalized_paycor_number
-                )
-            )
-
-            if (
-                existing_maconomy_number is not None
-                and existing_maconomy_number
-                != normalized_maconomy_number
-            ):
-                raise PaycorEmployeeSyncServiceError(
-                    "Maconomy remark1 is assigned to "
-                    "multiple employees: "
-                    f"{normalized_paycor_number}"
-                )
-
-            normalized_lookup[
-                normalized_paycor_number
-            ] = normalized_maconomy_number
-
-        return (
-            normalized_lookup,
-            normalized_employee_numbers,
-        )
-
     async def _sync_mapped_employee(
         self,
         session: AsyncSession,
         employee: dict[str, Any],
         *,
-        maconomy_employee_numbers_by_paycor_number: (
-            dict[str, str]
-        ),
         maconomy_employee_numbers: set[str],
     ) -> dict[str, Any]:
         try:
             return await self._sync_one_employee(
                 session,
                 employee,
-                maconomy_employee_numbers_by_paycor_number=(
-                    maconomy_employee_numbers_by_paycor_number
-                ),
                 maconomy_employee_numbers=(
                     maconomy_employee_numbers
                 ),
@@ -840,9 +729,6 @@ class PaycorEmployeeSyncService:
         session: AsyncSession,
         employee: dict[str, Any],
         *,
-        maconomy_employee_numbers_by_paycor_number: (
-            dict[str, str]
-        ),
         maconomy_employee_numbers: set[str],
     ) -> dict[str, Any]:
         paycor_employee_id = self._parse_uuid(
@@ -876,35 +762,11 @@ class PaycorEmployeeSyncService:
             )
         }
 
-        normalized_maconomy_lookup = {
-            normalized_paycor_number: (
-                normalized_maconomy_number
-            )
-            for (
-                source_paycor_number,
-                source_maconomy_number,
-            ) in (
-                maconomy_employee_numbers_by_paycor_number
-                .items()
-            )
-            if (
-                normalized_paycor_number
-                := self._normalize_employee_number(
-                    source_paycor_number
-                )
-            )
-            and (
-                normalized_maconomy_number
-                := self._normalize_employee_number(
-                    source_maconomy_number
-                )
-            )
-        }
-
         matched_maconomy_employee_number = (
-            normalized_maconomy_lookup.get(
-                paycor_employee_number
-            )
+            paycor_employee_number
+            if paycor_employee_number
+            in normalized_maconomy_numbers
+            else None
         )
 
         mapping = await (
@@ -918,45 +780,8 @@ class PaycorEmployeeSyncService:
             )
         )
 
-        if (
-            matched_maconomy_employee_number is None
-            and paycor_employee_number
-            in normalized_maconomy_numbers
-        ):
-            message = (
-                "Maconomy employee number already exists, "
-                "but remark1 does not match the Paycor "
-                "employee number; manual reconciliation "
-                "is required"
-            )
-
-            await self._write_log(
-                session,
-                mapping_id=(
-                    mapping.id
-                    if mapping is not None
-                    else None
-                ),
-                paycor_employee_id=paycor_employee_id,
-                paycor_employee_number=(
-                    paycor_employee_number
-                ),
-                legal_entity_id=legal_entity_id,
-                status=IntegrationStatus.FAILED,
-                message=message,
-            )
-
-            return self._result(
-                paycor_employee_id,
-                paycor_employee_number,
-                "FAILED",
-                paycor_employee_number,
-                message,
-            )
-
         # Maconomy is the authority for determining
-        # whether this employee already exists. Paycor's
-        # employee number must match Maconomy remark1.
+        # whether this employee number already exists.
         if matched_maconomy_employee_number is not None:
             if mapping is None:
                 (
@@ -1138,15 +963,14 @@ class PaycorEmployeeSyncService:
         omitted_department_name: str | None = None
 
         manager_maconomy_employee_number = (
-            normalized_maconomy_lookup.get(
-                manager_employee_number
-            )
-            if manager_employee_number is not None
+            manager_employee_number
+            if manager_employee_number
+            in normalized_maconomy_numbers
             else None
         )
 
-        # The manager must already exist in Maconomy. Paycor's
-        # manager number is resolved through Maconomy remark1.
+        # The manager's employee number must already exist
+        # in Maconomy.
         if manager_maconomy_employee_number is None:
             employee_to_create[
                 "managerEmployeeNumber"
@@ -1254,21 +1078,6 @@ class PaycorEmployeeSyncService:
                     "employee number"
                 )
 
-            created_paycor_employee_number = (
-                self._normalize_employee_number(
-                    created_employee.get("remark1")
-                )
-            )
-
-            if (
-                created_paycor_employee_number
-                != paycor_employee_number
-            ):
-                raise ValueError(
-                    "Maconomy remark1 does not match "
-                    "the Paycor employee number"
-                )
-
             # Update both the caller's set and our
             # normalized local set.
             maconomy_employee_numbers.add(
@@ -1278,14 +1087,6 @@ class PaycorEmployeeSyncService:
             normalized_maconomy_numbers.add(
                 maconomy_employee_number
             )
-
-            maconomy_employee_numbers_by_paycor_number[
-                paycor_employee_number
-            ] = maconomy_employee_number
-
-            normalized_maconomy_lookup[
-                paycor_employee_number
-            ] = maconomy_employee_number
 
             # Complete or repair the existing mapping only
             # after Maconomy creation succeeds.
