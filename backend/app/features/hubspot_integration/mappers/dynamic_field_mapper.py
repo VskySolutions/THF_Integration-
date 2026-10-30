@@ -18,14 +18,17 @@ These functions are used by the registered HubSpot synchronization endpoint.
 from typing import Any
 
 
+PARENT_COMPANY_NAME_FIELD = "parent_customer_name1"
+
 COMPANY_FIELD_MAPPING: dict[str, str] = {
     "customernumber": "maconomy_customer_number",
     "name1": "name",
     "telephone": "phone",
     "country": "country",
-    "zipcode": "postalcode",
-    "name2": "sheetaddress",
+    "zipcode": "zip",
+    "name2": "address",
     "postaldistrict": "city",
+    "name3": "address2",
 }
 
 CONTACT_FIELD_MAPPING: dict[str, str] = {
@@ -36,6 +39,12 @@ CONTACT_FIELD_MAPPING: dict[str, str] = {
     "lastname": "lastname",
     "telephone": "phone",
     "position": "jobtitle",
+    PARENT_COMPANY_NAME_FIELD: "company",
+    "name2": "address",
+    "name3": "street_address_2",
+    "mobilephone": "mobilephone",
+    "country": "country",
+    "personaltitle": "name_prefix",
 }
 
 
@@ -151,3 +160,25 @@ def map_contacts_to_upsert(
         )
 
     return {"inputs": inputs, "skipped": skipped}
+
+
+def enrich_contacts_with_parent_company_name(
+    contacts: list[dict[str, Any]],
+    customer_name_by_number: dict[str, str],
+) -> list[dict[str, Any]]:
+    """Return contact copies carrying the parent customer name1 under
+    PARENT_COMPANY_NAME_FIELD. Non-mutating; contacts whose parent is
+    absent from the lookup are returned unchanged (companyname omitted)."""
+    enriched: list[dict[str, Any]] = []
+    for contact in contacts:
+        parent_number = str(
+            contact.get("contactcompanynumber") or ""
+        ).strip()
+        name1 = str(
+            customer_name_by_number.get(parent_number) or ""
+        ).strip()
+        copy = {**contact}
+        if parent_number and name1:
+            copy[PARENT_COMPANY_NAME_FIELD] = name1
+        enriched.append(copy)
+    return enriched

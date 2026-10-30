@@ -34,10 +34,14 @@ CUSTOMER_CARD_FIELDS = [
     "entityname",
     "locationname",
     "name1",
+    "name2",
+    "name3",
+    "postaldistrict",
     "specification5name",
     "specification6name",
     "telephone",
     "versionnumber",
+    "zipcode",
 ]
 
 CONTACT_PERSON_FIELDS = [
@@ -45,17 +49,23 @@ CONTACT_PERSON_FIELDS = [
     "contactcompanynumber",
     "contactpersonnumber",
     "createddate",
+    "country",
     "electronicmailaddress",
     "firstname",
     "lastname",
+    "mobilephone",
     "name1",
+    "name2",
     "position",
     "remark1",
     "remark5",
     "telephone",
     "telephone2",
+    "personaltitle",
     "versionnumber",
 ]
+
+CUSTOMER_NAME_LOOKUP_FIELDS = ["customernumber", "name1"]
 
 
 class MaconomyServiceError(Exception):
@@ -437,6 +447,53 @@ class MaconomyService:
                 f"Maconomy Contact Person {contact_person_number} was not found"
             )
         return {**matching[0], "action": "manual_sync"}
+
+    async def get_customer_names(
+        self, customer_numbers: list[str]
+    ) -> dict[str, str]:
+        """Return {customernumber: name1} for the requested customers.
+
+        Batched (50 per filter call, mirroring
+        _get_contact_persons_for_customers); customers not found or with an
+        empty name1 are simply absent from the result.
+        """
+        if not customer_numbers:
+            return {}
+        client = self._require_client()
+        reconnect_token = await self.authenticate()
+        names: dict[str, str] = {}
+        try:
+            for offset in range(
+                0,
+                len(customer_numbers),
+                CONTACT_CUSTOMER_FILTER_BATCH_SIZE,
+            ):
+                batch = customer_numbers[
+                    offset : offset + CONTACT_CUSTOMER_FILTER_BATCH_SIZE
+                ]
+                clauses = [
+                    "customernumber = "
+                    f"'{number.replace(chr(39), chr(39) * 2)}'"
+                    for number in batch
+                ]
+                records = await self._filter_records(
+                    client,
+                    reconnect_token,
+                    self._customer_card_url(),
+                    " or ".join(f"({clause})" for clause in clauses),
+                    CUSTOMER_NAME_LOOKUP_FIELDS,
+                    "customer card",
+                )
+                for record in records:
+                    customer_number = str(
+                        record.get("customernumber") or ""
+                    ).strip()
+                    name1 = str(record.get("name1") or "").strip()
+                    if customer_number and name1:
+                        names[customer_number] = name1
+        except httpx.HTTPError as exc:
+            raise MaconomyServiceError("Maconomy request failed") from exc
+        return names
 
     async def _get_recent_customers(
         self,

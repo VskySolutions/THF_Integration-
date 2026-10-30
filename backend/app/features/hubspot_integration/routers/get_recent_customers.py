@@ -13,6 +13,7 @@ from app.features.integration_services import (
     require_active_integration_service,
 )
 from app.features.hubspot_integration.mappers.dynamic_field_mapper import (
+    enrich_contacts_with_parent_company_name,
     map_contacts_to_upsert,
     map_customers_to_company_upsert,
 )
@@ -249,7 +250,15 @@ async def sync_customer_by_number(
             )
 
         contacts = customer.get("contactperson", [])
-        contact_payload = map_contacts_to_upsert(contacts)
+        customer_name = str(customer.get("name1") or "").strip()
+        parent_names = (
+            {normalized_customer_number: customer_name} if customer_name else {}
+        )
+        enriched_contacts = enrich_contacts_with_parent_company_name(
+            contacts,
+            parent_names,
+        )
+        contact_payload = map_contacts_to_upsert(enriched_contacts)
         contacts_result: dict[str, Any] = {
             "requested": 0,
             "status": 200,
@@ -597,7 +606,24 @@ async def sync_contact_person_by_number(
                 detail="Parent Company was not found in HubSpot",
             )
 
-        contact_payload = map_contacts_to_upsert([contact])
+        errors: list[dict[str, Any]] = []
+        try:
+            parent_names = await maconomy.get_customer_names([customer_number])
+        except MaconomyServiceError as exc:
+            errors.append(
+                {
+                    "entity_type": "customer",
+                    "source_id": customer_number,
+                    "stage": "maconomy_customer_lookup",
+                    "message": str(exc),
+                }
+            )
+            parent_names = {}
+        enriched_contacts = enrich_contacts_with_parent_company_name(
+            [contact],
+            parent_names,
+        )
+        contact_payload = map_contacts_to_upsert(enriched_contacts)
         if not contact_payload["inputs"]:
             await integration_run_log_service.fail_run(
                 session,
@@ -690,7 +716,6 @@ async def sync_contact_person_by_number(
             ) from exc
 
         checkpoint_written = False
-        errors: list[dict[str, Any]] = []
         try:
             await maconomy.update_contact_sync_version(
                 normalized_contact_number,
