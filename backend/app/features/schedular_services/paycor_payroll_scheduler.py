@@ -41,7 +41,7 @@ class PaycorPayrollSchedulerService:
         scheduler.add_job(
             self._run_payroll_sync,
             trigger="cron",
-            day_of_week=self._settings.scheduler_paycor_payroll_day_of_week,
+            day=self._settings.scheduler_paycor_payroll_day,
             hour=self._settings.scheduler_paycor_payroll_hour_et,
             minute=self._settings.scheduler_paycor_payroll_minute_et,
             second=0,

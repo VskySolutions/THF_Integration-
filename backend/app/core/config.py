@@ -129,7 +129,7 @@ class Settings(BaseSettings):
         ge=0,
         le=23,
     )
-    scheduler_paycor_payroll_day_of_week: str = "mon"
+    scheduler_paycor_payroll_day: str = "15,30"
     scheduler_paycor_payroll_hour_et: int = Field(default=23, ge=0, le=23)
     scheduler_paycor_payroll_minute_et: int = Field(default=0, ge=0, le=59)
     scheduler_request_timeout_seconds: float = Field(default=600, gt=0)
