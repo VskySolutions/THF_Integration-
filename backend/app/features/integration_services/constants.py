@@ -8,6 +8,7 @@ class IntegrationServiceIdentifier(str, Enum):
 
     #paycor constants
     PAYCOR_SYNC_EMPLOYEES = "PAYCOR_SYNC_EMPLOYEES"
+    PAYCOR_PAYROLL_JOURNAL_SYNC = "PAYCOR_PAYROLL_JOURNAL_SYNC"
 
     #sap concur constants
     MACONOMY_SAP_CONCUR_EXPENSE_SYNC = "MACONOMY_SAP_CONCUR_EXPENSE_SYNC"

@@ -23,6 +23,7 @@ from app.features.maconomy_caseware_cloud_intergration.models import (
     MaconomyCasewareRequestLog,
 )
 from app.features.paycor_integration.models import PaycorIntegrationLog
+from app.features.paycor_payroll_integration.models import PaycorPayrollIntegrationLog
 from app.features.sap_concur_integration.models import SAPConcurIntegrationLog
 from app.features.user_activity.models import UserActivityLog
 from app.features.user_activity.services import log_activity
@@ -790,6 +791,53 @@ async def integration_logs(
                         log.action.value == "CREATE"
                         for log in activity_logs
                     ),
+                    "failed": sum(
+                        log.status.value == "FAILED"
+                        for log in activity_logs
+                    ),
+                    "latest_activity": (
+                        activity_logs[0] if activity_logs else None
+                    ),
+                },
+                "flash_message": flash_message,
+                "flash_category": flash_category,
+            },
+        )
+
+    if integration.identifier_unique_name == IntegrationServiceIdentifier.PAYCOR_PAYROLL_JOURNAL_SYNC.value:
+        log_result = await session.execute(
+            select(PaycorPayrollIntegrationLog)
+            .options(
+                selectinload(PaycorPayrollIntegrationLog.journal_mapping_log)
+            )
+            .order_by(PaycorPayrollIntegrationLog.created_on_utc.desc())
+            .limit(1000)
+        )
+        activity_logs = list(log_result.scalars().all())
+        successful_logs = sum(
+            log.status.value in ("SUCCESS", "PARTIAL_SUCCESS") for log in activity_logs
+        )
+        total_logs = len(activity_logs)
+        created_journals = sum(
+            1 for log in activity_logs
+            if log.journal_mapping_log and log.journal_mapping_log.maconomy_journal_number
+        )
+        return templates.TemplateResponse(
+            request=request,
+            name="paycor_payroll_dashboard.html",
+            context={
+                "current_user": current_user,
+                "csrf_token": ensure_csrf_token(request),
+                "integration": integration,
+                "activity_logs": activity_logs,
+                "metrics": {
+                    "total_activity": total_logs,
+                    "success_rate": (
+                        round(successful_logs / total_logs * 100, 1)
+                        if total_logs
+                        else 0
+                    ),
+                    "created_journals": created_journals,
                     "failed": sum(
                         log.status.value == "FAILED"
                         for log in activity_logs

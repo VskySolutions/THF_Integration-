@@ -35,6 +35,7 @@ GENERAL_JOURNAL_CARD_FIELDS = [
     "remark1",
     "postingdate",
     "defaulttransactiontype",
+    "entityname",                  # Department from Paycor (departmentDescription → entityname)
 ]
 
 # Standard General Journal table line fields matching Maconomy container specification

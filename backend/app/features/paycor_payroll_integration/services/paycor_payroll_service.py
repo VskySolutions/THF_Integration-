@@ -263,3 +263,155 @@ class PaycorPayrollService:
         finally:
             if should_close:
                 await http_client.aclose()
+
+    async def get_legal_entity_employees(
+        self,
+        legal_entity_id: int | str,
+        continuation_token: str | None = None,
+        client: httpx.AsyncClient | None = None,
+        access_token: str | None = None,
+    ) -> dict[str, Any]:
+        """Fetch employees for a legal entity (PH1)."""
+        passed_client = client is not None
+        http_client = client if client is not None else await self._get_client()
+        should_close = not passed_client and self._external_client is None
+
+        try:
+            if not access_token:
+                access_token = await self.get_access_token(http_client)
+
+            url = f"{self.base_url}/v1/legalentities/{legal_entity_id}/employees"
+            params: dict[str, Any] = {}
+            if continuation_token:
+                params["continuationToken"] = continuation_token
+
+            headers = {
+                "Accept": "application/json",
+                "Authorization": f"Bearer {access_token}",
+                "Ocp-Apim-Subscription-Key": self.subscription_key,
+            }
+
+            response = await http_client.get(
+                url,
+                headers=headers,
+                params=params,
+            )
+
+            if response.is_error:
+                LOGGER.error(
+                    "Paycor get_legal_entity_employees request failed for legalEntityId %s: %s - %s",
+                    legal_entity_id,
+                    response.status_code,
+                    response.text,
+                )
+                raise PaycorPayrollServiceError(
+                    message=response.text,
+                    status_code=response.status_code,
+                )
+
+            return response.json()
+
+        except httpx.HTTPError as exc:
+            LOGGER.error(
+                "Paycor get_legal_entity_employees HTTP communication failure for legalEntityId %s: %s",
+                legal_entity_id,
+                exc,
+            )
+            raise PaycorPayrollServiceError(
+                f"Paycor API request failed: {exc}",
+                status_code=502,
+            ) from exc
+        finally:
+            if should_close:
+                await http_client.aclose()
+
+    async def get_employee_number_lookup(
+        self,
+        legal_entity_id: int | str,
+        client: httpx.AsyncClient | None = None,
+        access_token: str | None = None,
+    ) -> dict[str, str]:
+        """
+        Build an in-memory lookup map of employeeId -> employeeNumber (PH1).
+        Supports pagination if more pages are returned.
+        """
+        passed_client = client is not None
+        http_client = client if client is not None else await self._get_client()
+        should_close = not passed_client and self._external_client is None
+
+        lookup: dict[str, str] = {}
+        continuation_token: str | None = None
+
+        try:
+            if not access_token:
+                access_token = await self.get_access_token(http_client)
+
+            # Paginate through employees if continuationToken exists
+            max_pages = 20
+            for _ in range(max_pages):
+                data = await self.get_legal_entity_employees(
+                    legal_entity_id=legal_entity_id,
+                    continuation_token=continuation_token,
+                    client=http_client,
+                    access_token=access_token,
+                )
+
+                records = (
+                    data.get("records", [])
+                    if isinstance(data, dict) and "records" in data
+                    else data
+                    if isinstance(data, list)
+                    else []
+                )
+
+                for emp in records:
+                    if not isinstance(emp, dict):
+                        continue
+                    emp_id = (
+                        emp.get("employeeId")
+                        or emp.get("id")
+                        or emp.get("employeeID")
+                    )
+                    emp_num = (
+                        emp.get("employeeNumber")
+                        or emp.get("employee_number")
+                        or emp.get("employeeNum")
+                    )
+                    if emp_id and emp_num:
+                        lookup[str(emp_id).strip()] = str(emp_num).strip()
+
+                continuation_token = (
+                    data.get("continuationToken")
+                    if isinstance(data, dict)
+                    else None
+                )
+                if not continuation_token:
+                    break
+
+            return lookup
+
+        except Exception as exc:
+            LOGGER.warning(
+                "Could not build complete employee number lookup for legalEntityId %s: %s",
+                legal_entity_id,
+                exc,
+            )
+            return lookup
+        finally:
+            if should_close:
+                await http_client.aclose()
+
+    async def get_employee_work_location_lookup(
+        self,
+        legal_entity_id: int | str,
+        client: httpx.AsyncClient | None = None,
+        access_token: str | None = None,
+    ) -> dict[str, str]:
+        """
+        Build lookup map of departmentId -> workLocationName (Maconomy specification4name).
+        Returns the static dictionary mapping Paycor Department UUID to location names (Tampa, Tallahassee, etc.).
+        """
+        from app.features.paycor_payroll_integration.constants import STATIC_DEPARTMENT_WORK_LOCATIONS
+        return STATIC_DEPARTMENT_WORK_LOCATIONS
+
+
