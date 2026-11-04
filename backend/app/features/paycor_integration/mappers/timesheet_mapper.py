@@ -34,16 +34,18 @@ PAYCOR_PAYROLL_INTEGRATION_VENDOR = (
     "THF Maconomy"
 )
 
-# Temporary until Pay Group is mapped from Maconomy.
-TEMPORARY_PAYCOR_PAY_GROUP_ID = (
-    "71c9338a-4c28-0000-0000-0000712f0300"
-)
-
 DEFAULT_PAYCOR_PAY_NUMBER = 0
 
 
 class TimesheetMappingError(ValueError):
     """Raised when a timesheet cannot be mapped."""
+
+
+PayPeriodGroupKey = tuple[
+    str,
+    date,
+    date,
+]
 
 
 def map_maconomy_timesheets(
@@ -196,6 +198,7 @@ def map_timesheets_to_paycor(
     ],
     *,
     earning_codes: dict[str, str],
+    paygroup_by_employee: dict[str, str],
     process_id: str,
     timezone_name: str = (
         "America/New_York"
@@ -214,6 +217,7 @@ def map_timesheets_to_paycor(
             date,
             int,
             str,
+            str,
         ],
         Decimal,
     ] = defaultdict(
@@ -224,6 +228,19 @@ def map_timesheets_to_paycor(
         employee_number = str(
             entry["employeeNumber"]
         ).strip()
+
+        pay_group_id = (
+            paygroup_by_employee.get(
+                employee_number
+            )
+        )
+
+        if pay_group_id is None:
+            raise TimesheetMappingError(
+                "Paycor pay group is unavailable "
+                "for employee number "
+                f"{employee_number}"
+            )
 
         period_start = _as_date(
             entry["periodStart"]
@@ -259,6 +276,7 @@ def map_timesheets_to_paycor(
             date_worked,
             department_code,
             paycor_earning_code,
+            pay_group_id,
         )
 
         aggregated_hours[key] += Decimal(
@@ -276,6 +294,7 @@ def map_timesheets_to_paycor(
         date_worked,
         department_code,
         earning_code,
+        pay_group_id,
     ), earning_hours in aggregated_hours.items():
         employee = employees.setdefault(
             employee_number,
@@ -318,7 +337,7 @@ def map_timesheets_to_paycor(
                     )
                 ),
                 "payGroupId": (
-                    TEMPORARY_PAYCOR_PAY_GROUP_ID
+                    pay_group_id
                 ),
                 "payNumber": (
                     DEFAULT_PAYCOR_PAY_NUMBER
@@ -335,6 +354,184 @@ def map_timesheets_to_paycor(
             employees.values()
         ),
     }
+
+
+def assign_employee_paygroups(
+    calculated_entries: list[
+        dict[str, Any]
+    ],
+    *,
+    paygroup_by_employee: dict[str, str],
+) -> list[dict[str, Any]]:
+    """Add the employee's Paycor pay group to each entry."""
+
+    resolved_entries: list[
+        dict[str, Any]
+    ] = []
+
+    for entry in calculated_entries:
+        employee_number = str(
+            entry.get("employeeNumber")
+            or ""
+        ).strip()
+
+        pay_group_id = (
+            paygroup_by_employee.get(
+                employee_number
+            )
+        )
+
+        if not employee_number:
+            raise TimesheetMappingError(
+                "Maconomy employee number is required"
+            )
+
+        if pay_group_id is None:
+            raise TimesheetMappingError(
+                "Paycor pay group is unavailable "
+                "for employee number "
+                f"{employee_number}"
+            )
+
+        resolved_entries.append(
+            {
+                **entry,
+                "employeeNumber": employee_number,
+                "payGroupId": pay_group_id,
+            }
+        )
+
+    return resolved_entries
+
+
+def assign_pay_periods(
+    calculated_entries: list[
+        dict[str, Any]
+    ],
+    *,
+    pay_schedules_by_group: dict[
+        str,
+        list[dict[str, date]],
+    ],
+) -> list[dict[str, Any]]:
+    """Match every daily earning to one Paycor pay period."""
+
+    assigned_entries: list[
+        dict[str, Any]
+    ] = []
+
+    for entry in calculated_entries:
+        pay_group_id = str(
+            entry.get("payGroupId")
+            or ""
+        ).strip()
+
+        if not pay_group_id:
+            raise TimesheetMappingError(
+                "Paycor pay group is required"
+            )
+
+        date_worked = _as_date(
+            entry.get("dateWorked")
+        )
+
+        matching_periods = [
+            period
+            for period in (
+                pay_schedules_by_group.get(
+                    pay_group_id,
+                    [],
+                )
+            )
+            if (
+                period["payPeriodStart"]
+                <= date_worked
+                <= period["payPeriodEnd"]
+            )
+        ]
+
+        if not matching_periods:
+            raise TimesheetMappingError(
+                "No Paycor pay period contains "
+                f"date worked {date_worked.isoformat()} "
+                f"for pay group {pay_group_id}"
+            )
+
+        if len(matching_periods) != 1:
+            raise TimesheetMappingError(
+                "Multiple Paycor pay periods contain "
+                f"date worked {date_worked.isoformat()} "
+                f"for pay group {pay_group_id}"
+            )
+
+        pay_period = matching_periods[0]
+
+        assigned_entries.append(
+            {
+                **entry,
+                "dateWorked": date_worked,
+                "payPeriodStart": (
+                    pay_period["payPeriodStart"]
+                ),
+                "payPeriodEnd": (
+                    pay_period["payPeriodEnd"]
+                ),
+            }
+        )
+
+    return assigned_entries
+
+
+def group_timesheets_by_pay_period(
+    calculated_entries: list[
+        dict[str, Any]
+    ],
+) -> dict[
+    PayPeriodGroupKey,
+    list[dict[str, Any]],
+]:
+    """Group daily earnings by pay group and pay period."""
+
+    grouped_entries: dict[
+        PayPeriodGroupKey,
+        list[dict[str, Any]],
+    ] = defaultdict(list)
+
+    for entry in calculated_entries:
+        pay_group_id = str(
+            entry.get("payGroupId")
+            or ""
+        ).strip()
+
+        if not pay_group_id:
+            raise TimesheetMappingError(
+                "Paycor pay group is required"
+            )
+
+        pay_period_start = _as_date(
+            entry.get("payPeriodStart")
+        )
+        pay_period_end = _as_date(
+            entry.get("payPeriodEnd")
+        )
+
+        if pay_period_end < pay_period_start:
+            raise TimesheetMappingError(
+                "Paycor pay period end is before "
+                "its start"
+            )
+
+        group_key = (
+            pay_group_id,
+            pay_period_start,
+            pay_period_end,
+        )
+
+        grouped_entries[group_key].append(
+            entry
+        )
+
+    return dict(grouped_entries)
 
 
 def _as_date(

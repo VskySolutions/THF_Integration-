@@ -14,3 +14,15 @@ class EmpVendorCreationStatus(str, Enum):
     SUCCESS = "SUCCESS"
     FAILURE = "FAILURE"
     SKIPPED = "SKIPPED"
+
+
+class TimesheetSubmissionMode(str, Enum):
+    APPEND = "APPEND"
+    REPLACE = "REPLACE"
+
+
+class TimesheetSubmissionStatus(str, Enum):
+    SUBMITTING = "SUBMITTING"
+    ACCEPTED = "ACCEPTED"
+    FAILED = "FAILED"
+    UNKNOWN = "UNKNOWN"
