@@ -13,6 +13,7 @@ from app.features.integration_services import (
     require_active_integration_service,
 )
 from app.features.hubspot_integration.mappers.dynamic_field_mapper import (
+    enrich_contacts_with_parent_company_name,
     map_contacts_to_upsert,
     map_customers_to_company_upsert,
 )
@@ -307,7 +308,47 @@ async def sync_customers_to_hubspot(
                 continue
             eligible_contacts.append(contact)
 
-        contact_payload = map_contacts_to_upsert(eligible_contacts)
+        in_run_names: dict[str, str] = {}
+        for number, customer in customers_by_id.items():
+            customer_name = str(customer.get("name1") or "").strip()
+            if number and customer_name:
+                in_run_names[number] = customer_name
+
+        missing_parents = sorted(
+            {
+                parent_number
+                for contact in eligible_contacts
+                for parent_number in [
+                    str(contact.get("contactcompanynumber") or "").strip()
+                ]
+                if parent_number and parent_number not in in_run_names
+            }
+        )
+        lookup_names: dict[str, str] = {}
+        if missing_parents:
+            try:
+                lookup_names = await maconomy.get_customer_names(
+                    missing_parents
+                )
+            except MaconomyServiceError:
+                errors.append(
+                    {
+                        "entity_type": "customer",
+                        "source_id": None,
+                        "stage": "maconomy_customer_lookup",
+                        "message": (
+                            "Unable to resolve parent customer names "
+                            "from Maconomy; contacts synced without companyname"
+                        ),
+                    }
+                )
+        parent_names = {**in_run_names, **lookup_names}
+
+        enriched_contacts = enrich_contacts_with_parent_company_name(
+            eligible_contacts,
+            parent_names,
+        )
+        contact_payload = map_contacts_to_upsert(enriched_contacts)
         contacts_result: dict[str, Any] = {
             "requested": 0,
             "status": 200,

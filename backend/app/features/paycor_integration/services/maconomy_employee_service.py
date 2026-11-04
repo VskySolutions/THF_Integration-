@@ -233,6 +233,18 @@ class MaconomyEmployeeService:
             )
 
         try:
+            expected_paycor_employee_number = str(
+                paycor_employee_data.get(
+                    "employeeNumber",
+                    "",
+                )
+            ).strip()
+
+            if not expected_paycor_employee_number:
+                raise ValueError(
+                    "Paycor employee number is required"
+                )
+
             expected_paycor_employee_id = str(
                 uuid.UUID(
                     str(
@@ -310,6 +322,16 @@ class MaconomyEmployeeService:
                     raise MaconomyEmployeeServiceError(
                         "Maconomy returned a different "
                         "employee number"
+                    )
+
+                if (
+                    loaded_employee_number
+                    != expected_paycor_employee_number
+                ):
+                    raise MaconomyEmployeeServiceError(
+                        "Maconomy employee number does not match "
+                        "the Paycor employee number; "
+                        "manual reconciliation is required"
                     )
 
                 current_paycor_employee_id = str(
@@ -459,7 +481,7 @@ class MaconomyEmployeeService:
         client: httpx.AsyncClient,
         reconnect_token: str,
     ) -> set[str]:
-        url = f"{self._employees_url()}/filter"
+        url = f"{self._employees_read_url()}/filter"
         headers = self._container_headers(reconnect_token)
 
         employee_numbers: set[str] = set()
@@ -561,10 +583,12 @@ class MaconomyEmployeeService:
                     employee_number
                 ).strip()
 
-                if normalized_employee_number:
-                    employee_numbers.add(
-                        normalized_employee_number
-                    )
+                if not normalized_employee_number:
+                    continue
+
+                employee_numbers.add(
+                    normalized_employee_number
+                )
 
             next_offset = row_offset + row_count
 
@@ -884,13 +908,12 @@ class MaconomyEmployeeService:
         headers["Maconomy-Concurrency-Control"] = (
             concurrency_token
         )
-
         response = await client.post(
             url,
             headers=headers,
             json={"data": employee_data},
         )
-
+        
         if response.is_error:
             response_text = (
                 response.text.strip()
@@ -994,6 +1017,18 @@ class MaconomyEmployeeService:
             f"{self.settings.maconomy_url}"
             f"/maconomy-api/containers/"
             f"{shortname}/employees"
+        )
+
+    def _employees_read_url(self) -> str:
+        shortname = quote(
+            self.settings.maconomy_shortname,
+            safe="",
+        )
+
+        return (
+            f"{self.settings.maconomy_url}"
+            "/maconomy-api/containers/"
+            f"{shortname}/showemployeeshr"
         )
         
     def _employee_revisions_url(self) -> str:

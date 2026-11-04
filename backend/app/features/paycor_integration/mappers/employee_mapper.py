@@ -536,7 +536,7 @@ def map_paycor_employee_to_maconomy(
         "employeenumber": employee_number,
         "country": maconomy_country,
 
-        # Paycor employee UUID is now stored in remark5.
+        # Paycor employee UUID remains stored in remark5.
         "remark5": paycor_employee_id,
     }
 
@@ -647,7 +647,8 @@ def map_paycor_employee_to_maconomy_update(
     """Map only fields currently approved for employee updates."""
 
     mapped_payload = map_paycor_employee_to_maconomy(
-        employee_data
+        employee_data,
+        include_name_components=True
     )
 
    

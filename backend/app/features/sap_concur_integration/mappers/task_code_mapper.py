@@ -84,7 +84,7 @@ def resolve_task_code(
     key = f"{job_key}|{normalize(tasklist)}|{normalize(expense_type)}"
     task_code = task_code_map.get(key)
     print("task_code:", task_code)
-    task_code = "5500"
+    task_code = "2500"
     print("Expense Type:", key, "task_code:", task_code)
     if not task_code:
         return None, None, "Expense Type/Task not found for Job Number"
