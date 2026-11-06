@@ -43,9 +43,7 @@ from app.features.paycor_integration.services.timesheet_calculation_service impo
 )
 
 
-TEMPORARY_EARNING_CODE_FALLBACKS = {
-    "ST": "SHIFTNOOT",
-}
+TEMPORARY_EARNING_CODE_FALLBACKS: dict[str, str] = {}
 
 
 class PaycorTimesheetSyncServiceError(ValueError):
@@ -107,6 +105,11 @@ class PaycorTimesheetSyncService:
                 "found for the selected dates"
             )
 
+        entity_descriptions_by_code = await (
+            self.maconomy_service
+            .get_entity_descriptions_by_code()
+        )
+
         (
             earning_codes,
             department_codes,
@@ -119,6 +122,9 @@ class PaycorTimesheetSyncService:
         daily_entries, skipped_tasks = (
             map_maconomy_timesheets(
                 maconomy_records,
+                entity_descriptions_by_code=(
+                    entity_descriptions_by_code
+                ),
                 department_codes_by_name=(
                     department_codes
                 ),

@@ -56,10 +56,7 @@ from app.features.paycor_integration.services.timesheet_calculation_service impo
 LOGGER = logging.getLogger(__name__)
 
 
-TEMPORARY_EARNING_CODE_FALLBACKS = {
-    # Temporary sandbox replacement because ST is unavailable.
-    "ST": "SHIFTNOOT",
-}
+TEMPORARY_EARNING_CODE_FALLBACKS: dict[str, str] = {}
 
 
 router = APIRouter(
@@ -386,6 +383,11 @@ async def get_paygrid_payload(
                 ),
             )
 
+        entity_descriptions_by_code = await (
+            maconomy_service
+            .get_entity_descriptions_by_code()
+        )
+
         (
             earning_codes,
             department_codes,
@@ -400,6 +402,9 @@ async def get_paygrid_payload(
             skipped_tasks,
         ) = map_maconomy_timesheets(
             maconomy_records,
+            entity_descriptions_by_code=(
+                entity_descriptions_by_code
+            ),
             department_codes_by_name=(
                 department_codes
             ),

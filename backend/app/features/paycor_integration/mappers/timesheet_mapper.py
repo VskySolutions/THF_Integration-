@@ -23,13 +23,6 @@ DAY_FIELDS = tuple(
     for day_number in range(1, 8)
 )
 
-# Temporary sandbox mappings.
-# Remove these when Maconomy entities and Paycor
-# departments are aligned.
-TEMPORARY_ENTITY_DEPARTMENT_CODES = {
-    "3": "4050",  # Human Resources
-}
-
 PAYCOR_PAYROLL_INTEGRATION_VENDOR = (
     "THF Maconomy"
 )
@@ -51,6 +44,10 @@ PayPeriodGroupKey = tuple[
 def map_maconomy_timesheets(
     records: list[dict[str, Any]],
     *,
+    entity_descriptions_by_code: dict[
+        str,
+        str,
+    ],
     department_codes_by_name: dict[
         str,
         str,
@@ -99,47 +96,36 @@ def map_maconomy_timesheets(
             or ""
         ).strip()
 
-        # department_code = (
-        #     department_codes_by_name.get(
-        #         entity_name.casefold()
-        #     )
-        # )
+        entity_description = (
+            entity_descriptions_by_code.get(
+                entity_name
+            )
+        )
 
-        # if not employee_number:
-        #     raise TimesheetMappingError(
-        #         "Maconomy employee number is required"
-        #     )
+        if entity_description is None:
+            raise TimesheetMappingError(
+                "No active Maconomy Entity description "
+                f"was found for code {entity_name}"
+            )
 
-        # if department_code is None:
-        #     raise TimesheetMappingError(
-        #         "No Paycor department matches "
-        #         f"Maconomy entity {entity_name}"
-        #     )
-        
-        normalized_entity_name = (
-            entity_name.casefold()
+        normalized_entity_description = (
+            " ".join(
+                entity_description.split()
+            ).casefold()
         )
 
         department_code = (
-            TEMPORARY_ENTITY_DEPARTMENT_CODES.get(
-                normalized_entity_name
+            department_codes_by_name.get(
+                normalized_entity_description
             )
         )
 
-        # When no temporary sandbox mapping exists,
-        # use the normal dynamic Paycor lookup.
         if department_code is None:
-            department_code = (
-                department_codes_by_name.get(
-                    normalized_entity_name
-                )
+            raise TimesheetMappingError(
+                "No Paycor department description matches "
+                "Maconomy Entity description "
+                f"{entity_description!r}"
             )
-
-        if department_code is None:
-            raise ValueError(
-                "No Paycor department matches "
-                f"Maconomy entity {entity_name}"
-    )
 
         for day_index, field_name in enumerate(
             DAY_FIELDS
