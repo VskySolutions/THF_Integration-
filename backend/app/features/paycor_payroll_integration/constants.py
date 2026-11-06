@@ -44,6 +44,7 @@ LOCATION_NAME_TO_SHORTFORM: dict[str, str] = {
     "Panama City": "PCB",
     "Tallahassee": "TLH",
     "Tampa": "TPA",
+    "Bainbridge": "-",
     "Default": "-",
 }
 
