@@ -3,9 +3,14 @@
 import logging
 
 from collections.abc import AsyncIterator
-from datetime import date
+from datetime import (
+    date,
+    datetime,
+    timedelta,
+)
 from typing import Annotated, Any
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 import httpx
 from fastapi import (
@@ -16,8 +21,10 @@ from fastapi import (
     Response,
     status,
 )
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
+from app.db.session import get_db
 from app.features.auth.dependencies import (
     require_api_key,
 )
@@ -32,6 +39,14 @@ from app.features.paycor_integration.services.maconomy_timesheet_service import 
 from app.features.paycor_integration.services.paycor_timesheet_service import (
     PaycorTimesheetService,
     PaycorTimesheetServiceError,
+)
+from app.features.paycor_integration.services.paycor_timesheet_sync_service import (
+    NoApprovedTimesheetsError,
+    PaycorTimesheetSyncService,
+    TimesheetReconciliationRequiredError,
+)
+from app.features.paycor_integration.services.timesheet_integration_log_service import (
+    TimesheetSubmissionBlockedError,
 )
 from app.features.paycor_integration.services.timesheet_calculation_service import (
     calculate_all_weekly_earnings,
@@ -72,6 +87,11 @@ MaconomyServiceDependency = Annotated[
     Depends(get_maconomy_service),
 ]
 
+DatabaseSession = Annotated[
+    AsyncSession,
+    Depends(get_db),
+]
+
 
 def _validate_date_range(
     start_date: date,
@@ -86,6 +106,39 @@ def _validate_date_range(
                 "end_date must be on or after "
                 "start_date"
             ),
+        )
+
+
+def _validate_week_date_range(
+    start_date: date,
+    end_date: date,
+) -> None:
+    """Validate one complete Monday-through-Sunday week."""
+
+    _validate_date_range(
+        start_date,
+        end_date,
+    )
+
+    if end_date - start_date != timedelta(days=6):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "The date range must contain exactly "
+                "seven days"
+            ),
+        )
+
+    if start_date.weekday() != 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="start_date must be a Monday",
+        )
+
+    if end_date.weekday() != 6:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="end_date must be a Sunday",
         )
 
 
@@ -211,6 +264,42 @@ def _set_warning_header(
         LOGGER.warning(warning_message)
 
 
+def _set_grouped_warning_header(
+    *,
+    response: Response,
+    warnings: dict[str, Any],
+) -> None:
+    """Expose grouped synchronization warnings consistently."""
+
+    temporary_mappings = {
+        (
+            str(mapping.get("source") or ""),
+            str(mapping.get("target") or ""),
+        )
+        for mapping in warnings.get(
+            "temporaryMappings",
+            [],
+        )
+        if isinstance(mapping, dict)
+    }
+
+    _set_warning_header(
+        response=response,
+        skipped_tasks=list(
+            warnings.get("skippedTasks", [])
+        ),
+        skipped_earnings=set(
+            warnings.get(
+                "skippedEarnings",
+                [],
+            )
+        ),
+        temporary_mappings=(
+            temporary_mappings
+        ),
+    )
+
+
 @router.get(
     "/approved",
     response_model=dict[str, Any],
@@ -300,6 +389,7 @@ async def get_paygrid_payload(
         (
             earning_codes,
             department_codes,
+            paygroup_by_employee,
         ) = await (
             paycor_service
             .get_timesheet_reference_data()
@@ -371,6 +461,9 @@ async def get_paygrid_payload(
         payload = map_timesheets_to_paycor(
             calculated_entries,
             earning_codes=earning_codes,
+            paygroup_by_employee=(
+                paygroup_by_employee
+            ),
             process_id=str(uuid4()),
         )
 
@@ -425,14 +518,27 @@ async def get_paygrid_payload(
     response_model=dict[str, Any],
 )
 async def submit_paycor_paygrid(
-    payload: dict[str, Any],
+    response: Response,
+    maconomy_service: MaconomyServiceDependency,
+    start_date: date = Query(...),
+    end_date: date = Query(...),
 ) -> dict[str, Any]:
-    """Submit a complete payroll-hours payload to Paycor."""
+    """Build and submit approved payroll hours to Paycor."""
+
+    payload = await get_paygrid_payload(
+        response=response,
+        maconomy_service=maconomy_service,
+        start_date=start_date,
+        end_date=end_date,
+    )
 
     try:
         return await (
             PaycorTimesheetService()
-            .submit_payroll_hours(payload)
+            .submit_payroll_hours(
+                payload,
+                submission_mode="append",
+            )
         )
 
     except PaycorTimesheetServiceError as exc:
@@ -445,3 +551,161 @@ async def submit_paycor_paygrid(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=str(exc),
         ) from exc
+
+
+@router.post(
+    "/sync/weekly",
+    response_model=dict[str, Any],
+)
+async def sync_previous_week_to_paycor(
+    response: Response,
+    maconomy_service: MaconomyServiceDependency,
+    session: DatabaseSession,
+) -> dict[str, Any]:
+    """Build and append the previous Eastern-time week."""
+
+    local_today = datetime.now(
+        ZoneInfo("America/New_York")
+    ).date()
+    current_monday = (
+        local_today
+        - timedelta(
+            days=local_today.weekday()
+        )
+    )
+    start_date = (
+        current_monday
+        - timedelta(days=7)
+    )
+    end_date = (
+        current_monday
+        - timedelta(days=1)
+    )
+
+    sync_service = PaycorTimesheetSyncService(
+        maconomy_service=maconomy_service,
+        paycor_service=PaycorTimesheetService(),
+    )
+
+    try:
+        result = await (
+            sync_service.submit_new_groups(
+                session,
+                start_date=start_date,
+                end_date=end_date,
+            )
+        )
+
+    except NoApprovedTimesheetsError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    except (
+        TimesheetReconciliationRequiredError,
+        TimesheetSubmissionBlockedError,
+    ) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+    except (
+        MaconomyTimesheetServiceError,
+        PaycorTimesheetServiceError,
+    ) as exc:
+        LOGGER.exception(
+            "Weekly Paycor timesheet synchronization "
+            "failed: %s",
+            exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(exc),
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=(
+                status.HTTP_422_UNPROCESSABLE_ENTITY
+            ),
+            detail=str(exc),
+        ) from exc
+
+    _set_grouped_warning_header(
+        response=response,
+        warnings=result["warnings"],
+    )
+
+    return result
+
+
+@router.post(
+    "/paygrid-by-daterange",
+    response_model=dict[str, Any],
+)
+async def retry_paygrid_by_date_range(
+    response: Response,
+    maconomy_service: MaconomyServiceDependency,
+    session: DatabaseSession,
+    start_date: date = Query(...),
+    end_date: date = Query(...),
+) -> dict[str, Any]:
+    """Append or replace grouped batches for one source week."""
+
+    _validate_week_date_range(
+        start_date,
+        end_date,
+    )
+
+    sync_service = PaycorTimesheetSyncService(
+        maconomy_service=maconomy_service,
+        paycor_service=PaycorTimesheetService(),
+    )
+
+    try:
+        result = await (
+            sync_service.retry_groups(
+                session,
+                start_date=start_date,
+                end_date=end_date,
+            )
+        )
+
+    except NoApprovedTimesheetsError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    except (
+        TimesheetReconciliationRequiredError,
+        TimesheetSubmissionBlockedError,
+    ) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+    except (
+        MaconomyTimesheetServiceError,
+        PaycorTimesheetServiceError,
+    ) as exc:
+        LOGGER.exception(
+            "Paycor date-range batch rebuild failed: %s",
+            exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(exc),
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=(
+                status.HTTP_422_UNPROCESSABLE_ENTITY
+            ),
+            detail=str(exc),
+        ) from exc
+
+    _set_grouped_warning_header(
+        response=response,
+        warnings=result["warnings"],
+    )
+
+    return result

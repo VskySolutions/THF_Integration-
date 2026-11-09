@@ -1,6 +1,7 @@
 """Service for writing timesheet data to Paycor."""
 
-from typing import Any
+from datetime import date
+from typing import Any, Literal
 from urllib.parse import urljoin
 
 import httpx
@@ -11,6 +12,12 @@ from app.core.config import Settings, get_settings
 
 class PaycorTimesheetServiceError(Exception):
     """Raised when Paycor timesheet processing fails."""
+
+
+class PaycorTimesheetSubmissionUnknownError(
+    PaycorTimesheetServiceError
+):
+    """Raised when Paycor may have received a submission."""
 
 
 class PaycorTimesheetService:
@@ -99,8 +106,9 @@ class PaycorTimesheetService:
     ) -> tuple[
         dict[str, str],
         dict[str, str],
+        dict[str, str],
     ]:
-        """Retrieve earnings and departments for mapping."""
+        """Retrieve earnings, departments, and employee pay groups."""
 
         try:
             async with httpx.AsyncClient(
@@ -126,6 +134,13 @@ class PaycorTimesheetService:
                     )
                 )
 
+                employee_paygroup_records = (
+                    await self._get_all_employee_paygroups(
+                        client=client,
+                        access_token=access_token,
+                    )
+                )
+
         except PaycorTimesheetServiceError:
             raise
 
@@ -142,14 +157,112 @@ class PaycorTimesheetService:
             self._build_department_code_lookup(
                 department_records
             ),
+            self._build_employee_paygroup_lookup(
+                employee_paygroup_records
+            ),
         )
+
+    async def get_pay_schedules(
+        self,
+        *,
+        pay_group_ids: set[str],
+        start_date: date,
+        end_date: date,
+    ) -> dict[
+        str,
+        list[dict[str, date]],
+    ]:
+        """Return validated Paycor periods for each pay group."""
+
+        if end_date < start_date:
+            raise PaycorTimesheetServiceError(
+                "Pay-schedule end date must be on or "
+                "after its start date"
+            )
+
+        normalized_pay_group_ids = {
+            normalized_id
+            for pay_group_id in pay_group_ids
+            if (
+                normalized_id
+                := str(pay_group_id).strip()
+            )
+        }
+
+        if not normalized_pay_group_ids:
+            raise PaycorTimesheetServiceError(
+                "At least one Paycor pay group is required"
+            )
+
+        try:
+            async with httpx.AsyncClient(
+                timeout=self.timeout
+            ) as client:
+                access_token = (
+                    await self._get_access_token(
+                        client
+                    )
+                )
+
+                schedules_by_group: dict[
+                    str,
+                    list[dict[str, date]],
+                ] = {}
+
+                for pay_group_id in sorted(
+                    normalized_pay_group_ids
+                ):
+                    schedule_records = await (
+                        self._get_all_pay_schedules(
+                            client=client,
+                            access_token=access_token,
+                            pay_group_id=pay_group_id,
+                            start_date=start_date,
+                            end_date=end_date,
+                        )
+                    )
+
+                    schedules_by_group[
+                        pay_group_id
+                    ] = self._build_pay_schedule_periods(
+                        schedule_records,
+                        pay_group_id=pay_group_id,
+                    )
+
+        except PaycorTimesheetServiceError:
+            raise
+        except httpx.HTTPError as exc:
+            raise PaycorTimesheetServiceError(
+                "Unable to retrieve Paycor pay schedules"
+            ) from exc
+
+        return schedules_by_group
 
 
     async def submit_payroll_hours(
         self,
         payload: dict[str, Any],
+        *,
+        submission_mode: Literal[
+            "append",
+            "replace",
+        ],
     ) -> dict[str, Any]:
         """Submit payroll hours to Paycor Paygrid."""
+
+        if submission_mode == "append":
+            submission_params = {
+                "appendData": "true",
+            }
+        elif submission_mode == "replace":
+            submission_params = {
+                "replaceData": "true",
+            }
+        else:
+            raise PaycorTimesheetServiceError(
+                "Unsupported Paycor payroll-hours "
+                f"submission mode: {submission_mode}"
+            )
 
         url = (
             f"{self.settings.paycor_url.rstrip('/')}"
@@ -170,6 +283,7 @@ class PaycorTimesheetService:
 
                 response = await client.post(
                     url,
+                    params=submission_params,
                     headers=self._get_api_headers(
                         access_token
                     ),
@@ -177,9 +291,19 @@ class PaycorTimesheetService:
                 )
 
         except httpx.RequestError as exc:
+            request_url = str(
+                exc.request.url
+            )
+
+            if "/payrollhours" in request_url:
+                raise PaycorTimesheetSubmissionUnknownError(
+                    "Paycor payroll-hours submission "
+                    "status is unknown"
+                ) from exc
+
             raise PaycorTimesheetServiceError(
-                "Unable to connect to Paycor "
-                "while submitting payroll hours"
+                "Unable to connect to Paycor before "
+                "submitting payroll hours"
             ) from exc
 
         if response.is_error:
@@ -216,6 +340,7 @@ class PaycorTimesheetService:
             ),
             "httpStatus": response.status_code,
             "processId": payload.get("processId"),
+            "submissionMode": submission_mode,
             "paycorResponse": response_data,
         }
     
@@ -373,6 +498,71 @@ class PaycorTimesheetService:
             initial_url=initial_url,
             initial_params=None,
             resource_name="departments",
+        )
+
+    async def _get_all_employee_paygroups(
+        self,
+        *,
+        client: httpx.AsyncClient,
+        access_token: str,
+    ) -> list[dict[str, Any]]:
+        """Retrieve active employees and their Paycor pay groups."""
+
+        initial_url = (
+            f"{self.settings.paycor_url.rstrip('/')}"
+            "/v1/legalentities/"
+            f"{self.settings.paycor_legal_entity_id}"
+            "/employees"
+        )
+
+        return await self._get_all_paginated_records(
+            client=client,
+            access_token=access_token,
+            initial_url=initial_url,
+            initial_params=[
+                ("include", "Position"),
+                ("statusFilter", "Active"),
+            ],
+            resource_name="employee pay groups",
+        )
+
+    async def _get_all_pay_schedules(
+        self,
+        *,
+        client: httpx.AsyncClient,
+        access_token: str,
+        pay_group_id: str,
+        start_date: date,
+        end_date: date,
+    ) -> list[dict[str, Any]]:
+        """Retrieve Paycor periods for one pay group."""
+
+        initial_url = (
+            f"{self.settings.paycor_url.rstrip('/')}"
+            "/v1/legalentities/"
+            f"{self.settings.paycor_legal_entity_id}"
+            "/payschedule"
+        )
+
+        return await self._get_all_paginated_records(
+            client=client,
+            access_token=access_token,
+            initial_url=initial_url,
+            initial_params=[
+                ("payGroupId", pay_group_id),
+                (
+                    "asOfDate",
+                    start_date.isoformat(),
+                ),
+                (
+                    "untilDate",
+                    end_date.isoformat(),
+                ),
+            ],
+            resource_name=(
+                "pay schedule for pay group "
+                f"{pay_group_id}"
+            ),
         )
 
     async def _get_all_paginated_records(
@@ -750,3 +940,160 @@ class PaycorTimesheetService:
             )
 
         return department_codes
+
+    @staticmethod
+    def _build_employee_paygroup_lookup(
+        employee_records: list[
+            dict[str, Any]
+        ],
+    ) -> dict[str, str]:
+        """Index Paycor pay-group IDs by employee number."""
+
+        paygroup_by_employee: dict[str, str] = {}
+
+        for employee in employee_records:
+            employee_number = str(
+                employee.get("employeeNumber")
+                or ""
+            ).strip()
+
+            pay_group_id = str(
+                employee.get("payGroupId")
+                or ""
+            ).strip()
+
+            if not employee_number or not pay_group_id:
+                continue
+
+            existing_pay_group_id = (
+                paygroup_by_employee.get(
+                    employee_number
+                )
+            )
+
+            if (
+                existing_pay_group_id is not None
+                and existing_pay_group_id
+                != pay_group_id
+            ):
+                raise PaycorTimesheetServiceError(
+                    "Multiple Paycor pay groups found "
+                    "for employee number "
+                    f"{employee_number}"
+                )
+
+            paygroup_by_employee[
+                employee_number
+            ] = pay_group_id
+
+        if not paygroup_by_employee:
+            raise PaycorTimesheetServiceError(
+                "Paycor returned no usable employee "
+                "pay groups"
+            )
+
+        return paygroup_by_employee
+
+    @classmethod
+    def _build_pay_schedule_periods(
+        cls,
+        schedule_records: list[
+            dict[str, Any]
+        ],
+        *,
+        pay_group_id: str,
+    ) -> list[dict[str, date]]:
+        """Normalize and validate one pay group's periods."""
+
+        periods: list[dict[str, date]] = []
+
+        for schedule in schedule_records:
+            returned_pay_group_id = str(
+                schedule.get("payGroupId")
+                or pay_group_id
+            ).strip()
+
+            if returned_pay_group_id != pay_group_id:
+                raise PaycorTimesheetServiceError(
+                    "Paycor pay schedule returned a "
+                    "different pay group"
+                )
+
+            pay_period_start = (
+                cls._parse_pay_schedule_date(
+                    schedule.get("payPeriodStart"),
+                    "payPeriodStart",
+                )
+            )
+            pay_period_end = (
+                cls._parse_pay_schedule_date(
+                    schedule.get("payPeriodEnd"),
+                    "payPeriodEnd",
+                )
+            )
+
+            if pay_period_end < pay_period_start:
+                raise PaycorTimesheetServiceError(
+                    "Paycor pay period end is before "
+                    "its start for pay group "
+                    f"{pay_group_id}"
+                )
+
+            periods.append(
+                {
+                    "payPeriodStart": pay_period_start,
+                    "payPeriodEnd": pay_period_end,
+                }
+            )
+
+        periods.sort(
+            key=lambda period: (
+                period["payPeriodStart"],
+                period["payPeriodEnd"],
+            )
+        )
+
+        if not periods:
+            raise PaycorTimesheetServiceError(
+                "Paycor returned no pay periods for "
+                f"pay group {pay_group_id}"
+            )
+
+        for previous, current in zip(
+            periods,
+            periods[1:],
+        ):
+            if (
+                current["payPeriodStart"]
+                <= previous["payPeriodEnd"]
+            ):
+                raise PaycorTimesheetServiceError(
+                    "Paycor returned overlapping pay "
+                    "periods for pay group "
+                    f"{pay_group_id}"
+                )
+
+        return periods
+
+    @staticmethod
+    def _parse_pay_schedule_date(
+        value: Any,
+        field_name: str,
+    ) -> date:
+        """Parse one required Paycor pay-schedule date."""
+
+        if not isinstance(value, str) or not value.strip():
+            raise PaycorTimesheetServiceError(
+                "Paycor pay schedule is missing "
+                f"{field_name}"
+            )
+
+        try:
+            return date.fromisoformat(
+                value.strip()[:10]
+            )
+        except ValueError as exc:
+            raise PaycorTimesheetServiceError(
+                "Paycor pay schedule contains invalid "
+                f"{field_name}"
+            ) from exc

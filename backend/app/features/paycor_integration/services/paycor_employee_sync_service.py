@@ -110,6 +110,13 @@ class PaycorEmployeeSyncService:
         if not employees_to_process:
             return []
 
+        (
+            entities_by_description,
+            specification4_by_description,
+        ) = await (
+            self._load_maconomy_employee_reference_lookups()
+        )
+
         maconomy_employee_numbers = (
             await self
             ._load_maconomy_employee_numbers()
@@ -124,6 +131,17 @@ class PaycorEmployeeSyncService:
                     departments_by_id=(
                         departments_by_id
                     ),
+                )
+                employee = (
+                    self._resolve_maconomy_employee_references(
+                        employee,
+                        entities_by_description=(
+                            entities_by_description
+                        ),
+                        specification4_by_description=(
+                            specification4_by_description
+                        ),
+                    )
                 )
 
             except Exception as exc:
@@ -189,6 +207,24 @@ class PaycorEmployeeSyncService:
                 "Paycor employee was not found"
             )
 
+        (
+            entities_by_description,
+            specification4_by_description,
+        ) = await (
+            self._load_maconomy_employee_reference_lookups()
+        )
+        employee = (
+            self._resolve_maconomy_employee_references(
+                employee,
+                entities_by_description=(
+                    entities_by_description
+                ),
+                specification4_by_description=(
+                    specification4_by_description
+                ),
+            )
+        )
+
         maconomy_employee_numbers = (
             await self
             ._load_maconomy_employee_numbers()
@@ -228,6 +264,24 @@ class PaycorEmployeeSyncService:
             raise PaycorEmployeeSyncServiceError(
                 "Paycor employee was not found"
             )
+
+        (
+            entities_by_description,
+            specification4_by_description,
+        ) = await (
+            self._load_maconomy_employee_reference_lookups()
+        )
+        employee = (
+            self._resolve_maconomy_employee_references(
+                employee,
+                entities_by_description=(
+                    entities_by_description
+                ),
+                specification4_by_description=(
+                    specification4_by_description
+                ),
+            )
+        )
 
         paycor_employee_number = (
             self._require_employee_number(
@@ -350,6 +404,13 @@ class PaycorEmployeeSyncService:
 
         maconomy_employee_numbers = await (
             self._load_maconomy_employee_numbers()
+        )
+
+        (
+            entities_by_description,
+            specification4_by_description,
+        ) = await (
+            self._load_maconomy_employee_reference_lookups()
         )
 
         departments_by_id = (
@@ -524,6 +585,17 @@ class PaycorEmployeeSyncService:
                         departments_by_id
                     ),
                 )
+                employee = (
+                    self._resolve_maconomy_employee_references(
+                        employee,
+                        entities_by_description=(
+                            entities_by_description
+                        ),
+                        specification4_by_description=(
+                            specification4_by_description
+                        ),
+                    )
+                )
 
                 mapped_employee_number = (
                     self._require_employee_number(
@@ -661,6 +733,110 @@ class PaycorEmployeeSyncService:
             "failedCount": failed_count,
             "results": actionable_results,
         }
+
+    async def _load_maconomy_employee_reference_lookups(
+        self,
+    ) -> tuple[dict[str, str], dict[str, str]]:
+        """Load Maconomy Entity and Specification 4 values once."""
+
+        try:
+            return await (
+                self.maconomy_service
+                .get_employee_reference_lookups()
+            )
+        except MaconomyEmployeeServiceError as exc:
+            raise PaycorEmployeeSyncServiceError(
+                "Unable to retrieve Maconomy Entity and "
+                "Specification 4 reference data"
+            ) from exc
+
+    @classmethod
+    def _resolve_maconomy_employee_references(
+        cls,
+        employee: dict[str, Any],
+        *,
+        entities_by_description: dict[str, str],
+        specification4_by_description: dict[str, str],
+    ) -> dict[str, Any]:
+        resolved_employee = dict(employee)
+
+        department_description = (
+            cls._normalize_reference_description(
+                employee.get("department")
+            )
+        )
+
+        if department_description is None:
+            raise PaycorEmployeeSyncServiceError(
+                "Paycor department is required for "
+                "Maconomy Entity mapping"
+            )
+
+        entity_code = entities_by_description.get(
+            cls._reference_lookup_key(
+                department_description
+            )
+        )
+
+        if entity_code is None:
+            raise PaycorEmployeeSyncServiceError(
+                "No active Maconomy Entity matches "
+                "Paycor department description "
+                f"{department_description!r}"
+            )
+
+        resolved_employee[
+            "maconomyEntityName"
+        ] = entity_code
+
+        work_location_name = (
+            cls._normalize_reference_description(
+                employee.get("workLocationName")
+            )
+        )
+
+        if work_location_name is None:
+            raise PaycorEmployeeSyncServiceError(
+                "Paycor work location is required for "
+                "Maconomy Specification 4 mapping"
+            )
+
+        specification4_code = (
+            specification4_by_description.get(
+                cls._reference_lookup_key(
+                    work_location_name
+                )
+            )
+        )
+
+        if specification4_code is None:
+            raise PaycorEmployeeSyncServiceError(
+                "No active Maconomy Specification 4 "
+                "matches Paycor work location "
+                f"{work_location_name!r}"
+            )
+
+        resolved_employee[
+            "maconomySpecification4Name"
+        ] = specification4_code
+
+        return resolved_employee
+
+    @staticmethod
+    def _normalize_reference_description(
+        value: Any,
+    ) -> str | None:
+        if value is None:
+            return None
+
+        normalized_value = " ".join(
+            str(value).split()
+        )
+        return normalized_value or None
+
+    @staticmethod
+    def _reference_lookup_key(value: str) -> str:
+        return " ".join(value.split()).casefold()
 
     async def _load_maconomy_employee_numbers(
         self,
@@ -1019,7 +1195,7 @@ class PaycorEmployeeSyncService:
                         and "does not exist"
                         in normalized_error
                         and employee_to_create.get(
-                            "workLocationName"
+                            "maconomySpecification4Name"
                         )
                     )
 
@@ -1027,7 +1203,7 @@ class PaycorEmployeeSyncService:
                         skipped_specification4_name = (
                             str(
                                 employee_to_create.pop(
-                                    "workLocationName"
+                                    "maconomySpecification4Name"
                                 )
                             ).strip()
                         )
@@ -1040,14 +1216,14 @@ class PaycorEmployeeSyncService:
                             exc
                         )
                         and employee_to_create.get(
-                            "department"
+                            "maconomyEntityName"
                         )
                     )
 
                     if invalid_entity:
                         omitted_department_name = str(
                             employee_to_create.pop(
-                                "department"
+                                "maconomyEntityName"
                             )
                         ).strip()
 

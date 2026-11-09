@@ -1,0 +1,285 @@
+{% extends "base.html" %}
+
+{% block title %}Paycor Payroll to Maconomy{% endblock %}
+
+{% block head %}
+<link href="https://cdn.datatables.net/v/bs5/dt-3.1.2/datatables.min.css" rel="stylesheet">
+<style>
+    .metric-card { min-height: 8rem; }
+    .metric-card .card-body { display: flex; flex-direction: column; justify-content: space-between; }
+    .metric-icon {
+        align-items: center; background: var(--falcon-blue-soft); border-radius: .6rem;
+        color: var(--falcon-blue); display: inline-flex; height: 2.5rem;
+        justify-content: center; width: 2.5rem;
+    }
+    .system-pill { background: #f1f4f8; border: 1px solid var(--falcon-border); border-radius: .45rem; color: #435067; padding: .35rem .65rem; }
+    .planner-id { color: #53627a; font-size: .76rem; }
+    .message-cell { max-width: 26rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .dashboard-action-btn { align-items: center; display: inline-flex; height: 2.5rem; justify-content: center; padding: 0; width: 2.5rem; }
+    .detail-label { color: var(--falcon-muted); font-size: .7rem; font-weight: 750; letter-spacing: .05em; text-transform: uppercase; }
+    .detail-value { color: var(--falcon-ink); overflow-wrap: anywhere; }
+    .detail-message { background: #f7f9fc; border: 1px solid var(--falcon-border); border-radius: .6rem; min-height: 5rem; padding: .9rem; white-space: pre-wrap; }
+    .modal-section + .modal-section { border-top: 1px solid var(--falcon-border); margin-top: 1.25rem; padding-top: 1.25rem; }
+</style>
+{% endblock %}
+
+{% block body %}
+<main class="container-fluid content-shell py-4 py-lg-5">
+    <nav aria-label="breadcrumb" class="mb-3">
+        <ol class="breadcrumb">
+            <li class="breadcrumb-item"><a href="{{ url_for('dashboard') }}">Monitoring</a></li>
+            <li class="breadcrumb-item active" aria-current="page">{{ integration.display_name }}</li>
+        </ol>
+    </nav>
+
+    <div class="d-flex flex-column flex-lg-row justify-content-between align-items-lg-start gap-3 mb-4">
+        <div>
+            <div class="page-kicker mb-2">Payroll Journal Synchronization</div>
+            <h1 class="page-title mb-2">{{ integration.display_name }}</h1>
+            <div class="d-flex align-items-center flex-wrap gap-2 text-secondary small">
+                <span class="system-pill">{{ integration.source_system or 'Paycor' }}</span>
+                <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+                <span class="system-pill">{{ integration.target_system or 'Maconomy' }}</span>
+                {% if integration.is_active %}
+                <span class="badge text-bg-success">Enabled</span>
+                {% else %}
+                <span class="badge text-bg-secondary">Paused</span>
+                {% endif %}
+            </div>
+        </div>
+        <div class="d-flex flex-column align-items-lg-end gap-3">
+            <div class="d-flex flex-wrap gap-2 justify-content-lg-end">
+                <a href="{{ url_for('dashboard') }}"
+                   class="btn btn-outline-secondary dashboard-action-btn"
+                   data-dashboard-tooltip data-bs-placement="top"
+                   data-bs-title="Back to integrations" aria-label="Back to integrations">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true"><path fill-rule="evenodd" d="M15 8a.5.5 0 0 0-.5-.5H2.707l3.147-3.146a.5.5 0 1 0-.708-.708l-4 4a.5.5 0 0 0 0 .708l4 4a.5.5 0 0 0 .708-.708L2.707 8.5H14.5A.5.5 0 0 0 15 8"/></svg>
+                </a>
+                <a href="{{ url_for('integration_logs', integration_id=integration.id) }}"
+                   class="btn btn-outline-secondary dashboard-action-btn"
+                   data-dashboard-tooltip data-bs-placement="top"
+                   data-bs-title="Refresh dashboard" aria-label="Refresh dashboard">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3a5 5 0 1 0 4.546 2.914.5.5 0 0 1 .908-.418A6 6 0 1 1 8 2z"/><path d="M8 4.466V.534a.25.25 0 0 1 .41-.192l2.36 1.966a.25.25 0 0 1 0 .384L8.41 4.658A.25.25 0 0 1 8 4.466"/></svg>
+                </a>
+                <button type="button" id="changeIntegrationStatusButton"
+                        class="btn btn-outline-secondary dashboard-action-btn"
+                        data-bs-toggle="modal" data-bs-target="#integrationStatusModal"
+                        data-dashboard-tooltip data-bs-placement="top"
+                        data-bs-title="{{ 'Pause integration' if integration.is_active else 'Enable integration' }}"
+                        aria-label="{{ 'Pause integration' if integration.is_active else 'Enable integration' }}">
+                    {% if integration.is_active %}
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 3.5A1.5 1.5 0 0 1 7 5v6a1.5 1.5 0 0 1-3 0V5a1.5 1.5 0 0 1 1.5-1.5m5 0A1.5 1.5 0 0 1 12 5v6a1.5 1.5 0 0 1-3 0V5a1.5 1.5 0 0 1 1.5-1.5"/></svg>
+                    {% else %}
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true"><path d="M10.804 8 5 11.633V4.367z"/><path d="M0 8a8 8 0 1 1 16 0A8 8 0 0 1 0 8m8-7a7 7 0 1 0 0 14A7 7 0 0 0 8 1"/></svg>
+                    {% endif %}
+                </button>
+            </div>
+            {% if metrics.latest_activity %}
+            <div class="text-secondary small">
+                Last synchronized:
+                <span class="fw-semibold text-body">{{ metrics.latest_activity.created_on_utc.strftime('%d %b %Y, %H:%M UTC') }}</span>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    {% if flash_message %}
+    <div class="alert alert-{{ flash_category }} alert-dismissible fade show" role="alert">
+        {{ flash_message }}
+        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+    </div>
+    {% endif %}
+
+    <!-- Metric Cards -->
+    <div class="row g-3 mb-4">
+        <div class="col-6 col-xl-3">
+            <section class="card metric-card rounded-3 h-100"><div class="card-body p-4">
+                <span class="metric-icon mb-3" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path d="M9 12h6m-6 4h6m2 5H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5.5L19 7.5V19a2 2 0 0 1-2 2Z"/></svg></span>
+                <div><div class="text-secondary small">Total activity logs</div><div class="display-6 fw-semibold">{{ metrics.total_activity }}</div></div>
+            </div></section>
+        </div>
+        <div class="col-6 col-xl-3">
+            <section class="card metric-card rounded-3 h-100"><div class="card-body p-4">
+                <span class="metric-icon mb-3" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path d="M12 8v4l3 3m6-3a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"/></svg></span>
+                <div><div class="text-secondary small">Success rate</div><div class="display-6 fw-semibold">{{ metrics.success_rate }}%</div></div>
+            </div></section>
+        </div>
+        <div class="col-6 col-xl-3">
+            <section class="card metric-card rounded-3 h-100"><div class="card-body p-4">
+                <span class="metric-icon mb-3" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path d="M9 12l2 2 4-4m6 2a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"/></svg></span>
+                <div><div class="text-secondary small">Journals created</div><div class="display-6 fw-semibold">{{ metrics.created_journals }}</div></div>
+            </div></section>
+        </div>
+        <div class="col-6 col-xl-3">
+            <section class="card metric-card rounded-3 h-100"><div class="card-body p-4">
+                <span class="metric-icon mb-3" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.8 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.8a2 2 0 0 0-3.4 0Z"/></svg></span>
+                <div><div class="text-secondary small">Failed operations</div><div class="display-6 fw-semibold">{{ metrics.failed }}</div></div>
+            </div></section>
+        </div>
+    </div>
+
+    <!-- Data Table -->
+    <section class="card rounded-3">
+        <div class="card-body p-3 p-md-4">
+            <div class="d-flex align-items-center gap-2 mb-1">
+                <h2 class="h5 fw-bold mb-0">Payroll journal history</h2>
+                <span class="badge text-bg-light border">{{ activity_logs | length }}</span>
+            </div>
+            <p class="text-secondary small mb-3">Outcomes recorded for Paycor payrun general journals posted to Maconomy.</p>
+            <div class="table-responsive">
+                <table id="payrollActivityTable" class="table table-hover align-middle w-100">
+                    <thead>
+                        <tr>
+                            <th>Time (UTC)</th>
+                            <th>Planner ID</th>
+                            <th>Department</th>
+                            <th>Journal #</th>
+                            <th>Action</th>
+                            <th>Status</th>
+                            <th>Result</th>
+                            <th data-orderable="false">Details</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    {% for log in activity_logs %}
+                    {% set mapping = log.journal_mapping_log %}
+                    <tr>
+                        <td data-order="{{ log.created_on_utc.isoformat() }}">{{ log.created_on_utc.strftime('%d %b %Y, %H:%M:%S') }}</td>
+                        <td>
+                            <code class="planner-id" title="{{ log.paycor_planner_id or '' }}">{{ (log.paycor_planner_id or 'Unavailable')[:12] }}&hellip;</code>
+                        </td>
+                        <td>
+                            <div class="fw-semibold">{{ log.department or (mapping.department if mapping else 'N/A') }}</div>
+                            {% if mapping and mapping.entity_code %}
+                            <span class="badge text-bg-light border small">Entity {{ mapping.entity_code }}</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if mapping and mapping.maconomy_journal_number %}
+                            <span class="badge text-bg-info font-monospace">{{ mapping.maconomy_journal_number }}</span>
+                            {% else %}
+                            <span class="text-muted small">&mdash;</span>
+                            {% endif %}
+                        </td>
+                        <td><span class="badge {{ 'text-bg-primary' if log.action.value == 'CREATE_JOURNAL' else 'text-bg-secondary' }}">{{ log.action.value | replace('_', ' ') | title }}</span></td>
+                        <td>
+                            {% if log.status.value == 'SUCCESS' %}
+                            <span class="badge text-bg-success">Success</span>
+                            {% elif log.status.value == 'SKIPPED' %}
+                            <span class="badge text-bg-warning">Skipped</span>
+                            {% elif log.status.value == 'PARTIAL_SUCCESS' %}
+                            <span class="badge text-bg-info">Partial</span>
+                            {% else %}
+                            <span class="badge text-bg-danger">Failed</span>
+                            {% endif %}
+                        </td>
+                        <td class="message-cell" title="{{ log.message or '' }}">{{ log.message or 'No message recorded' }}</td>
+                        <td>
+                            <button type="button" class="btn btn-sm btn-outline-secondary view-payroll-detail"
+                                    data-bs-toggle="modal" data-bs-target="#activityDetailModal"
+                                    data-created="{{ log.created_on_utc.strftime('%d %b %Y, %H:%M:%S UTC') }}"
+                                    data-planner-id="{{ log.paycor_planner_id or 'Not available' }}"
+                                    data-department="{{ log.department or (mapping.department if mapping else 'Not available') }}"
+                                    data-entity-code="{{ mapping.entity_code if mapping and mapping.entity_code else 'Not available' }}"
+                                    data-lines-count="{{ mapping.lines_count if mapping and mapping.lines_count is not none else 'Not available' }}"
+                                    data-run-type="{{ mapping.paycor_run_type if mapping and mapping.paycor_run_type else 'Not available' }}"
+                                    data-maconomy-journal="{{ mapping.maconomy_journal_number if mapping and mapping.maconomy_journal_number else 'Not created' }}"
+                                    data-maconomy-instance="{{ mapping.maconomy_instance_id if mapping and mapping.maconomy_instance_id else 'Not available' }}"
+                                    data-action="{{ log.action.value | replace('_', ' ') | title }}"
+                                    data-status="{{ log.status.value | title }}"
+                                    data-message="{{ log.message or 'No message recorded' }}">View details</button>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+</main>
+
+<!-- Details Modal -->
+<div class="modal fade" id="activityDetailModal" tabindex="-1" aria-labelledby="activityDetailModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable"><div class="modal-content">
+        <div class="modal-header">
+            <div><div class="page-kicker mb-1">Troubleshooting detail</div><h2 class="modal-title fs-5" id="activityDetailModalLabel">Payroll journal sync detail</h2></div>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body p-4">
+            <section class="modal-section mt-0 pt-0 border-0">
+                <h3 class="h6 fw-bold mb-3">Operation</h3>
+                <div class="row g-3">
+                    <div class="col-sm-6"><div class="detail-label">Time</div><div class="detail-value mt-1" id="detailCreated"></div></div>
+                    <div class="col-sm-3"><div class="detail-label">Action</div><div class="detail-value mt-1" id="detailAction"></div></div>
+                    <div class="col-sm-3"><div class="detail-label">Status</div><div class="detail-value mt-1" id="detailStatus"></div></div>
+                </div>
+            </section>
+            <section class="modal-section">
+                <h3 class="h6 fw-bold mb-3">Paycor & Maconomy Mapping</h3>
+                <div class="row g-3">
+                    <div class="col-sm-6"><div class="detail-label">Paycor Planner ID</div><div class="detail-value mt-1 font-monospace small" id="detailPlannerId"></div></div>
+                    <div class="col-sm-6"><div class="detail-label">Department</div><div class="detail-value mt-1 fw-semibold" id="detailDepartment"></div></div>
+                    <div class="col-sm-4"><div class="detail-label">Entity Code</div><div class="detail-value mt-1" id="detailEntityCode"></div></div>
+                    <div class="col-sm-4"><div class="detail-label">Lines Count</div><div class="detail-value mt-1" id="detailLinesCount"></div></div>
+                    <div class="col-sm-4"><div class="detail-label">Paycor Run Type</div><div class="detail-value mt-1" id="detailRunType"></div></div>
+                    <div class="col-sm-6"><div class="detail-label">Maconomy Journal #</div><div class="detail-value mt-1 font-monospace fw-bold text-primary" id="detailMaconomyJournal"></div></div>
+                    <div class="col-sm-6"><div class="detail-label">Maconomy Instance ID</div><div class="detail-value mt-1 font-monospace small" id="detailMaconomyInstance"></div></div>
+                </div>
+            </section>
+            <section class="modal-section">
+                <h3 class="h6 fw-bold mb-3">Integration result</h3>
+                <div class="detail-message" id="detailMessage"></div>
+            </section>
+        </div>
+        <div class="modal-footer"><button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Close</button></div>
+    </div></div>
+</div>
+
+<!-- Status Modal -->
+<div class="modal fade" id="integrationStatusModal" tabindex="-1" aria-labelledby="integrationStatusModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered"><div class="modal-content">
+        <div class="modal-header"><h2 class="modal-title fs-5" id="integrationStatusModalLabel">{{ 'Pause' if integration.is_active else 'Enable' }} integration</h2><button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button></div>
+        <div class="modal-body"><p class="mb-0">Are you sure you want to {{ 'pause' if integration.is_active else 'enable' }} {{ integration.display_name }}?</p></div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+            <form method="post" action="{{ url_for('update_integration_status', integration_id=integration.id) }}" class="m-0" id="payrollIntegrationStatusForm">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="is_active" value="{{ 'false' if integration.is_active else 'true' }}"><input type="hidden" name="return_to" value="integration">
+                <button type="submit" class="btn btn-primary" id="confirmIntegrationStatus">Confirm {{ 'pause' if integration.is_active else 'enable' }}</button>
+            </form>
+        </div>
+    </div></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.datatables.net/v/bs5/dt-3.1.2/datatables.min.js"></script>
+<script>
+    $(function () {
+        $('#payrollActivityTable').DataTable({
+            order: [[0, 'desc']], pageLength: 10,
+            layout: { topStart: { pageLength: {} }, topEnd: { search: { placeholder: 'Search payroll activity' } }, bottomStart: 'info', bottomEnd: 'paging' },
+            language: { emptyTable: 'No Paycor payroll journal activity has been logged yet.', search: '' }
+        });
+        $('[data-dashboard-tooltip]').each(function () { new bootstrap.Tooltip(this); });
+        $('#payrollActivityTable').on('click', '.view-payroll-detail', function () {
+            const button = $(this);
+            $('#detailCreated').text(button.attr('data-created'));
+            $('#detailAction').text(button.attr('data-action'));
+            $('#detailStatus').text(button.attr('data-status'));
+            $('#detailPlannerId').text(button.attr('data-planner-id'));
+            $('#detailDepartment').text(button.attr('data-department'));
+            $('#detailEntityCode').text(button.attr('data-entity-code'));
+            $('#detailLinesCount').text(button.attr('data-lines-count'));
+            $('#detailRunType').text(button.attr('data-run-type'));
+            $('#detailMaconomyJournal').text(button.attr('data-maconomy-journal'));
+            $('#detailMaconomyInstance').text(button.attr('data-maconomy-instance'));
+            $('#detailMessage').text(button.attr('data-message'));
+        });
+        $('#changeIntegrationStatusButton').on('click', function () {
+            bootstrap.Tooltip.getInstance(this)?.hide();
+        });
+        $('#payrollIntegrationStatusForm').on('submit', function () { $('#confirmIntegrationStatus').prop('disabled', true); });
+    });
+</script>
+{% endblock %}
+

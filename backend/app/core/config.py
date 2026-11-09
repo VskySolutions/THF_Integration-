@@ -81,6 +81,16 @@ class Settings(BaseSettings):
     paycor_legal_entity_id: str 
     paycor_tenant_id: str
     maconomy_send_name_components: bool = False
+
+    # Paycor Live integration settings
+    paycor_base_url_live: AnyHttpUrl | None = None
+    paycor_client_id_live: SecretStr | None = None
+    paycor_client_secret_live: SecretStr | None = None
+    paycor_refresh_token_live: SecretStr | None = None
+    paycor_subscription_key_live: SecretStr | None = None
+    paycor_legal_entity_id_live: str | None = None
+    paycor_tenant_id_live: str | None = None
+    maconomy_send_name_components_live: bool = False
     
     # SAP Concur integration settings
     sap_concur_url: AnyHttpUrl = AnyHttpUrl(
@@ -119,6 +129,9 @@ class Settings(BaseSettings):
         ge=0,
         le=23,
     )
+    scheduler_paycor_payroll_day: str = "15,30"
+    scheduler_paycor_payroll_hour_et: int = Field(default=23, ge=0, le=23)
+    scheduler_paycor_payroll_minute_et: int = Field(default=0, ge=0, le=59)
     scheduler_request_timeout_seconds: float = Field(default=600, gt=0)
 
     @field_validator("api_v1_prefix")

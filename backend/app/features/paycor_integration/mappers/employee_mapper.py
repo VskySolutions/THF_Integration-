@@ -547,12 +547,12 @@ def map_paycor_employee_to_maconomy(
             "electronicmailaddress"
         ),
         "position": "position",
-        "workLocationName": (
+        "maconomySpecification4Name": (
             "specification4name"
         ),
         "prefix": "personaltitle",
         "suffix": "text10",
-        "department": "entityname",
+        "maconomyEntityName": "entityname",
     }
     if include_name_components:
         optional_field_mapping.update(
