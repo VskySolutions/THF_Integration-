@@ -13,6 +13,7 @@ from app.features.sap_concur_integration.mappers import (
     build_task_code_map,
     map_concur_expense_report_to_maconomy_expensesheet,
     map_concur_expense_to_maconomy_expense,
+    normalize,
     resolve_task_code,
 )
 from app.features.sap_concur_integration.services.sap_concur_service import SAPConcurService
@@ -52,15 +53,67 @@ class MaconomyService:
         return value
 
 
+    async def _resolve_report_engagement(
+        self, expense_sheet_data: dict[str, Any]
+    ) -> str:
+        """Report customData -> raw engagement code from custom10 list item
+        ``code`` (verbatim — no parsing; the code IS the Maconomy job number).
+
+        Non-fatal (Req#26 FR-12/Q-3): missing entry, 404/None list item,
+        empty reportId or ANY error -> "" ; the expensesheet is still
+        created with available information. custom11 is NOT read here —
+        taskname is line-only (user correction 2026-11-06).
+        """
+        custom_data = expense_sheet_data.get("customData") or []
+        if not isinstance(custom_data, list) or not custom_data:
+            return ""
+        report_id = str(expense_sheet_data.get("reportId") or "")
+        sap_concur_service = SAPConcurService()
+        for entry in custom_data:
+            if not isinstance(entry, dict) or entry.get("id") != "custom10":
+                continue
+            try:
+                list_item = await sap_concur_service.get_list_items_by_id(
+                    report_id=report_id,
+                    user_id="",
+                    context_type="",
+                    item_id=str(entry.get("value") or ""),
+                )
+            except Exception as exc:
+                print(f"Report custom10 list item resolution failed: {exc}")
+                return ""
+            return str((list_item or {}).get("code") or "").strip()
+        return ""
+
+
     async def create_expense_sheet(
         self, expense_sheet_data: dict[str, Any], employee_number: str | None = None
     ) -> dict[str, Any]:
+        """Create a Maconomy expensesheet from a Concur report (Req#26 FR-9..FR-14).
+
+        Report-level engagement only: report customData ``custom10`` ->
+        Concur list item ``code`` (verbatim engagement code, FR-9) ->
+        Maconomy ``jobs/filter`` existence check (FR-11) -> card field
+        ``jobnumber`` written ONLY when resolved and non-blank (FR-10);
+        instance-retrieval card slice includes ``jobnumber`` (FR-13).
+        Any resolution failure/absence is non-fatal — the sheet is created
+        with available information (FR-12, Q-3). No report-level task —
+        ``custom11`` is never read here and ``taskname`` never lands on
+        the card (line-only, user correction 2026-11-06). Covers router
+        and retry callers alike (FR-14).
+        """
         print("=========== create_expense_sheet =============")
+        # Concur-side engagement read happens ONCE (not per attempt):
+        # report customData custom10 -> raw code (verbatim; "" = absent).
+        raw_jobnumber = await self._resolve_report_engagement(expense_sheet_data)
+
         # Per-attempt mapping so a retry re-derives the payload from scratch.
-        def _map_sheet() -> dict[str, Any]:
+        def _map_sheet(jobnumber: str) -> dict[str, Any]:
             try:
                 return map_concur_expense_report_to_maconomy_expensesheet(
-                    expense_sheet_data, employee_number=employee_number
+                    expense_sheet_data,
+                    employee_number=employee_number,
+                    jobnumber=jobnumber,
                 )
             except ValueError as map_exc:
                 raise MaconomyServiceError(str(map_exc)) from map_exc
@@ -73,9 +126,36 @@ class MaconomyService:
         # dedupe (documented trade-off).
         for attempt in range(2):
             try:
-                expensesheet_data = _map_sheet()
                 async with httpx.AsyncClient(timeout=self.timeout) as client:
                     reconnect_token = await self._get_reconnect_token(client)
+
+                    # Maconomy-side engagement resolution (Req#26 FR-11),
+                    # after token like the line flow; non-fatal (FR-12/Q-3):
+                    # missing/blank/not-found -> jobnumber omitted, sheet
+                    # still created. No api_tasks call at report level.
+                    jobnumber = ""
+                    if raw_jobnumber:
+                        try:
+                            job_records = await self.get_job_records_by_job_numbers(
+                                client, reconnect_token, [raw_jobnumber]
+                            )
+                            job_tasklist_map = build_job_tasklist_map(job_records)
+                        except Exception as exc:
+                            print(
+                                f"Report jobs/filter resolution failed: {exc} "
+                                "-> creating sheet without jobnumber"
+                            )
+                            job_tasklist_map = {}
+                        if job_tasklist_map.get(normalize(raw_jobnumber)):
+                            # verbatim — no '.' splitting (FR-2/FR-8)
+                            jobnumber = str(raw_jobnumber).strip()
+                        else:
+                            print(
+                                "Report engagement not found in Maconomy "
+                                "-> creating sheet without jobnumber"
+                            )
+
+                    expensesheet_data = _map_sheet(jobnumber)
 
                     instance_id, concurrency_token = await self._retrieve_expense_sheet_instance(
                         client=client,
@@ -269,7 +349,7 @@ class MaconomyService:
         ) -> tuple[str, str]:
             url = f"{self._expense_sheet_url()}/instances"
 
-            payload = {"panes":{"card":{"fields":["description","employeenumber","expensesheettext5","expensesheettext1"]},"table":{"fields":[]}}}
+            payload = {"panes":{"card":{"fields":["description","employeenumber","expensesheettext5","expensesheettext1","jobnumber"]},"table":{"fields":[]}}}
 
             print("======= _retrieve_expense_sheet_instance ==========")
             response = await client.post(
@@ -649,19 +729,26 @@ class MaconomyService:
         """Create Maconomy expense lines fault-tolerantly (3 phases).
 
         Phase A — per-line SAP Concur pre-resolution: fetch detail +
-        resolve customData -> job_number, expense_type; collect the
+        resolve customData -> custom10 engagement `code` used VERBATIM as
+        job_number (no '.' splitting, Req#26 FR-2/FR-7/FR-8) and custom11
+        list-item `shortCode` (the Maconomy task code, matched against
+        api_tasks `taskname` — user direction 2026-11-09); expense_type
+        stays captured for log
+        context only — it is no longer a resolution input. Collect the
         UNIQUE job numbers for the report. Per-line Concur failures are
         recorded (same behavior as before) and never abort the batch.
 
         Phase B — bulk Maconomy retrieval: ONE jobs/filter call +
         ONE api_tasks/filter call build the in-memory
-        `jobnumber -> tasklist` and `jobno|tasklist|description ->
-        taskcode` maps (FR-3/FR-8/FR-15). A retrieval failure records
+        `jobnumber -> tasklist` and `jobno|tasklist|taskname ->
+        taskcode` maps (Req#26 FR-1/FR-2). A retrieval failure records
         every pre-resolved line as failed and RETURNS — it never raises,
-        because the expense sheet already exists (FR-17/FR-19).
+        because the expense sheet already exists (unchanged behavior).
 
         Phase C — per-line resolution: task code resolved via
-        resolve_task_code (skip reasons per FR-5/FR-6/FR-11/FR-20),
+        resolve_task_code against the custom11 shortCode (matched to
+        api_tasks `taskname`; skip
+        reasons verbatim per Req#26 FR-3/FR-4, fault tolerance FR-6),
         then the unchanged existing Maconomy line-create sequence.
         One failed/skipped line never terminates the report.
 
@@ -747,12 +834,16 @@ class MaconomyService:
                         if not entry_id:
                             continue
 
-                        # Only process custom1, custom2, custom5, custom6
+                        # Only process custom1, custom2, custom5, custom9,
+                        # custom10 (engagement), custom11 (task) — old
+                        # engagement field removed (Req#26 FR-7)
                         if entry_id not in (
                             "custom1",
                             "custom2",
                             "custom5",
-                            "custom6",
+                            "custom9",
+                            "custom10",
+                            "custom11",
                         ):
                             continue
 
@@ -788,19 +879,27 @@ class MaconomyService:
                             custom_data_values["travel_reason"] = (
                                 list_item.get("value", "")
                             )
-                        elif entry_id == "custom6":
-                            # Client Engagement - extract job number
-                            client_engagement = list_item.get("code", "")
-                            print("client_engagement:", client_engagement)
-                            custom_data_values["client_engagement"] = (
-                                client_engagement
+                        elif entry_id == "custom11":
+                            # Task Code — Concur list-item shortCode IS the
+                            # Maconomy task code; matched against api_tasks
+                            # `taskname` in Phase C (user direction 2026-11-09).
+                            # get_list_items_by_id() returns snake_case keys
+                            # (code/short_code/value) — read `short_code`.
+                            custom_data_values["task_code"] = (
+                                list_item.get("short_code", "")
                             )
-                            custom_data_values["job_number"] = client_engagement
-                            # ( # client_engagement
-                            #     self.extract_job_number_from_client_engagement(
-                            #         client_engagement
-                            #     )
-                            # )
+                            print(
+                                f"[TaskCodeDebug] expense_id={expense_id} "
+                                f"custom11 list_item_id={entry_value} "
+                                f"concur_shortCode="
+                                f"{custom_data_values['task_code']!r}"
+                            )
+                        elif entry_id == "custom10":
+                            # Engagement — code IS the Maconomy job number
+                            # (verbatim, no '.' splitting; Req#26 FR-7/FR-8)
+                            engagement_code = list_item.get("code", "")
+                            custom_data_values["Engagement"] = engagement_code
+                            custom_data_values["job_number"] = engagement_code
 
                 if skip_expense:
                     _record_skip(str(expense_id), skip_reason)
@@ -888,6 +987,24 @@ class MaconomyService:
                             task_code_map = build_task_code_map(
                                 task_records, job_tasklist_map
                             )
+                            maconomy_tasknames = sorted(
+                                {
+                                    str(r.get("taskname") or "").strip()
+                                    for r in task_records
+                                    if str(r.get("taskname") or "").strip()
+                                }
+                            )
+                            print(
+                                f"[TaskCodeDebug] Maconomy api_tasks taskname "
+                                f"values (tasklists={task_lists}, "
+                                f"records={len(task_records)}): "
+                                f"{maconomy_tasknames}"
+                            )
+                            print(
+                                f"[TaskCodeDebug] task_code_map keys "
+                                f"({len(task_code_map)}): "
+                                f"{sorted(task_code_map)}"
+                            )
                     except Exception as exc:
                         # FR-19: expense sheet already created — never raise.
                         # Raising would roll back the DB mapping row and orphan
@@ -912,7 +1029,8 @@ class MaconomyService:
                             "failure_count": len(failed),
                         }
 
-                # --- Phase C: resolve task code + create lines (FR-5..FR-13) ---
+                # --- Phase C: resolve task code (custom11 code keyed,
+                #     Req#26 FR-1) + create lines ---
                 for entry in resolved_lines:
                     index = entry["index"]
                     expense_id = entry["expense_id"]
@@ -923,9 +1041,18 @@ class MaconomyService:
                             skip_reason,
                         ) = resolve_task_code(
                             entry["job_number"],
-                            entry["expense_type"],
+                            entry["custom_data_values"].get("task_code"),
                             job_tasklist_map,
                             task_code_map,
+                        )
+                        print(
+                            f"[TaskCodeDebug] expense_id={expense_id} "
+                            f"job={entry['job_number']!r} "
+                            f"concur_shortCode="
+                            f"{entry['custom_data_values'].get('task_code')!r} "
+                            f"-> tasklist={tasklist!r} "
+                            f"maconomy_taskname={task_code!r} "
+                            f"skip={skip_reason!r}"
                         )
                         if skip_reason:
                             _record_skip(expense_id, skip_reason)
@@ -934,7 +1061,8 @@ class MaconomyService:
                         print(
                             f"---- Processing expense line {index} "
                             f"(expense_id={expense_id}) -> tasklist="
-                            f"{tasklist}, task_code={task_code} ----"
+                            f"{tasklist}, task_code={task_code} "
+                            f"(source=custom11) ----"
                         )
 
                         # 3) Map THIS line with DYNAMIC jobnumber/taskcode
