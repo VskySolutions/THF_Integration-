@@ -401,6 +401,67 @@ class PaycorPayrollService:
             if should_close:
                 await http_client.aclose()
 
+    async def get_legal_entity_departments(
+        self,
+        legal_entity_id: int | str,
+        continuation_token: str | None = None,
+        client: httpx.AsyncClient | None = None,
+        access_token: str | None = None,
+    ) -> dict[str, Any]:
+        """Fetch departments for a legal entity from Paycor API."""
+        passed_client = client is not None
+        http_client = client if client is not None else await self._get_client()
+        should_close = not passed_client and self._external_client is None
+
+        try:
+            if not access_token:
+                access_token = await self.get_access_token(http_client)
+
+            url = f"{self.base_url}/v1/legalentities/{legal_entity_id}/departments"
+            params: dict[str, Any] = {}
+            if continuation_token:
+                params["continuationToken"] = continuation_token
+
+            headers = {
+                "Accept": "application/json",
+                "Authorization": f"Bearer {access_token}",
+                "Ocp-Apim-Subscription-Key": self.subscription_key,
+            }
+
+            response = await http_client.get(
+                url,
+                headers=headers,
+                params=params,
+            )
+
+            if response.is_error:
+                LOGGER.error(
+                    "Paycor get_legal_entity_departments request failed for legalEntityId %s: %s - %s",
+                    legal_entity_id,
+                    response.status_code,
+                    response.text,
+                )
+                raise PaycorPayrollServiceError(
+                    message=response.text,
+                    status_code=response.status_code,
+                )
+
+            return response.json()
+
+        except httpx.HTTPError as exc:
+            LOGGER.error(
+                "Paycor get_legal_entity_departments HTTP communication failure for legalEntityId %s: %s",
+                legal_entity_id,
+                exc,
+            )
+            raise PaycorPayrollServiceError(
+                f"Paycor API request failed: {exc}",
+                status_code=502,
+            ) from exc
+        finally:
+            if should_close:
+                await http_client.aclose()
+
     async def get_employee_work_location_lookup(
         self,
         legal_entity_id: int | str,
@@ -408,10 +469,71 @@ class PaycorPayrollService:
         access_token: str | None = None,
     ) -> dict[str, str]:
         """
-        Build lookup map of departmentId -> workLocationName (Maconomy specification4name).
-        Returns the static dictionary mapping Paycor Department UUID to location names (Tampa, Tallahassee, etc.).
+        Build dynamic lookup map of departmentId -> shortform (Maconomy specification4name).
+        Fetches departments from Paycor in one single call and maps workLocationName to shortforms.
+        Falls back to STATIC_DEPARTMENT_WORK_LOCATIONS if API call fails.
         """
-        from app.features.paycor_payroll_integration.constants import STATIC_DEPARTMENT_WORK_LOCATIONS
-        return STATIC_DEPARTMENT_WORK_LOCATIONS
+        from app.features.paycor_payroll_integration.constants import (
+            LOCATION_NAME_TO_SHORTFORM,
+            STATIC_DEPARTMENT_WORK_LOCATIONS,
+        )
+
+        passed_client = client is not None
+        http_client = client if client is not None else await self._get_client()
+        should_close = not passed_client and self._external_client is None
+
+        lookup: dict[str, str] = {}
+        continuation_token: str | None = None
+
+        try:
+            if not access_token:
+                access_token = await self.get_access_token(http_client)
+
+            max_pages = 20
+            for _ in range(max_pages):
+                data = await self.get_legal_entity_departments(
+                    legal_entity_id=legal_entity_id,
+                    continuation_token=continuation_token,
+                    client=http_client,
+                    access_token=access_token,
+                )
+
+                records = (
+                    data.get("records", [])
+                    if isinstance(data, dict) and "records" in data
+                    else data
+                    if isinstance(data, list)
+                    else []
+                )
+
+                for dept in records:
+                    if not isinstance(dept, dict):
+                        continue
+                    dept_id = dept.get("id")
+                    loc_name = dept.get("workLocationName") or ""
+                    if dept_id:
+                        shortform = LOCATION_NAME_TO_SHORTFORM.get(str(loc_name).strip(), "-")
+                        lookup[str(dept_id).strip()] = shortform
+
+                continuation_token = (
+                    data.get("continuationToken")
+                    if isinstance(data, dict)
+                    else None
+                )
+                if not continuation_token or not data.get("hasMoreResults", False):
+                    break
+
+            return lookup if lookup else STATIC_DEPARTMENT_WORK_LOCATIONS
+
+        except Exception as exc:
+            LOGGER.warning(
+                "Could not build dynamic work location lookup for legalEntityId %s: %s. Using static fallback.",
+                legal_entity_id,
+                exc,
+            )
+            return STATIC_DEPARTMENT_WORK_LOCATIONS
+        finally:
+            if should_close:
+                await http_client.aclose()
 
 
