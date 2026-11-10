@@ -1,7 +1,6 @@
 """Service for retrieving employees from Paycor."""
 
 import asyncio
-import uuid
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urljoin
@@ -33,7 +32,12 @@ class PaycorService:
     ) -> list[dict[str, Any]]:
         """Return active Paycor employees hired today or yesterday."""
 
-        employees, departments = (
+        (
+            employees,
+            departments,
+            person_details_by_id,
+            annual_hours_by_employee_id,
+        ) = (
             await self._retrieve_employee_data()
         )
 
@@ -64,8 +68,14 @@ class PaycorService:
                 recent_employees.append(employee)
 
         return await self._map_employee_records(
-            employees=recent_employees,
-            departments=departments,
+                employees=recent_employees,
+                departments=departments,
+                person_details_by_id=(
+                    person_details_by_id
+                ),
+                annual_hours_by_employee_id=(
+                    annual_hours_by_employee_id
+                ),
         )
         
     async def get_employee_by_number(
@@ -74,7 +84,12 @@ class PaycorService:
     ) -> dict[str, Any] | None:
         """Return one normalized Paycor employee by employee number."""
 
-        employees, departments = (
+        (
+            employees,
+            departments,
+            person_details_by_id,
+            annual_hours_by_employee_id,
+        ) = (
             await self._retrieve_employee_data()
         )
 
@@ -104,6 +119,12 @@ class PaycorService:
             self._map_employee_records(
                 employees=[matching_employees[0]],
                 departments=departments,
+                person_details_by_id=(
+                    person_details_by_id
+                ),
+                annual_hours_by_employee_id=(
+                    annual_hours_by_employee_id
+                ),
             )
         )
 
@@ -114,8 +135,10 @@ class PaycorService:
     ) -> tuple[
         list[dict[str, Any]],
         list[dict[str, Any]],
+        dict[str, dict[str, Any]],
+        dict[str, Any],
     ]:
-        """Return all Paycor employees and departments."""
+        """Return employees, departments, and person details."""
 
         return await self._retrieve_employee_data()
     
@@ -124,6 +147,11 @@ class PaycorService:
         *,
         employees: list[dict[str, Any]],
         departments: list[dict[str, Any]],
+        person_details_by_id: dict[
+            str,
+            dict[str, Any],
+        ],
+        annual_hours_by_employee_id: dict[str, Any],
     ) -> list[dict[str, Any]]:
         """Enrich and map Paycor employee records."""
 
@@ -133,61 +161,22 @@ class PaycorService:
             )
         )
 
-        employee_ids: list[str] = []
-
-        for employee in employees:
-            try:
-                employee_id = str(
-                    uuid.UUID(
-                        str(employee.get("id"))
-                    )
-                )
-
-            except (TypeError, ValueError) as exc:
-                raise PaycorServiceError(
-                    "Invalid Paycor employee UUID: "
-                    f"{employee.get('id')}"
-                ) from exc
-
-            employee_ids.append(employee_id)
-
-        person_details_by_id = (
-            await self.get_person_details_by_employee_ids(
-                employee_ids
-            )
-        )
-
         mapped_employees: list[dict[str, Any]] = []
 
-        for employee, employee_id in zip(
-            employees,
-            employee_ids,
-        ):
-            person_details = (
-                person_details_by_id.get(
-                    employee_id,
-                    {},
+        for employee in employees:
+            employee_id = str(employee.get("id"))
+            enriched_employee = self.enrich_employee_with_person(
+                employee,
+                person_details_by_id=person_details_by_id,
+            )
+            enriched_employee = (
+                self.enrich_employee_with_annual_hours(
+                    enriched_employee,
+                    annual_hours_by_employee_id=(
+                        annual_hours_by_employee_id
+                    ),
                 )
             )
-
-            person_error = person_details.get(
-                "_error"
-            )
-
-            if person_error:
-                raise PaycorServiceError(
-                    person_error
-                )
-
-            enriched_employee = {
-                **employee,
-                "prefix": person_details.get(
-                    "prefix"
-                ),
-                "suffix": person_details.get(
-                    "suffix"
-                ),
-            }
 
             try:
                 mapped_employee = map_paycor_employee(
@@ -214,8 +203,10 @@ class PaycorService:
     ) -> tuple[
         list[dict[str, Any]],
         list[dict[str, Any]],
+        dict[str, dict[str, Any]],
+        dict[str, Any],
     ]:
-        """Retrieve employees and departments from Paycor."""
+        """Retrieve employees, departments, and persons from Paycor."""
 
         try:
             async with httpx.AsyncClient(
@@ -225,7 +216,12 @@ class PaycorService:
                     client
                 )
 
-                employees, departments = await asyncio.gather(
+                (
+                    employees,
+                    departments,
+                    persons,
+                    pay_rates,
+                ) = await asyncio.gather(
                     self._get_all_employees(
                         client,
                         access_token,
@@ -234,9 +230,26 @@ class PaycorService:
                         client,
                         access_token,
                     ),
+                    self._get_all_persons(
+                        client,
+                        access_token,
+                    ),
+                    self._get_all_pay_rates(
+                        client,
+                        access_token,
+                    ),
                 )
 
-                return employees, departments
+                return (
+                    employees,
+                    departments,
+                    self._build_person_details_lookup(
+                        persons
+                    ),
+                    self._build_annual_hours_lookup(
+                        pay_rates
+                    ),
+                )
 
         except PaycorServiceError:
             raise
@@ -391,128 +404,288 @@ class PaycorService:
             initial_params=None,
             resource_name="department",
         )
-        
-    async def get_person_details_by_employee_ids(
+
+    async def _get_all_persons(
         self,
-        employee_ids: list[str],
+        client: httpx.AsyncClient,
+        access_token: str,
+    ) -> list[dict[str, Any]]:
+        """Retrieve all persons and addresses for the legal entity."""
+
+        initial_url = (
+            f"{self.settings.paycor_url.rstrip('/')}"
+            "/v1/legalEntities/"
+            f"{self.settings.paycor_legal_entity_id}"
+            "/persons"
+        )
+
+        return await self._get_all_paginated_records(
+            client=client,
+            access_token=access_token,
+            initial_url=initial_url,
+            initial_params=[
+                ("include", "Addresses"),
+                (
+                    "includeUnpaidWorkersDetails",
+                    "false",
+                ),
+            ],
+            resource_name="person",
+        )
+
+    async def _get_all_pay_rates(
+        self,
+        client: httpx.AsyncClient,
+        access_token: str,
+    ) -> list[dict[str, Any]]:
+        """Retrieve all pay rates for the legal entity."""
+
+        initial_url = (
+            f"{self.settings.paycor_url.rstrip('/')}"
+            "/v1/legalentities/"
+            f"{self.settings.paycor_legal_entity_id}"
+            "/payrates"
+        )
+
+        return await self._get_all_paginated_records(
+            client=client,
+            access_token=access_token,
+            initial_url=initial_url,
+            initial_params=None,
+            resource_name="pay rate",
+        )
+
+    @classmethod
+    def _build_annual_hours_lookup(
+        cls,
+        pay_rates: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Select the latest currently effective rate per employee."""
+
+        today = datetime.now(timezone.utc).date()
+        candidates: dict[
+            str,
+            list[tuple[date, int, Any]],
+        ] = {}
+
+        for pay_rate in pay_rates:
+            employee_reference = pay_rate.get("employee")
+            employee_id = (
+                cls._normalize_person_id(
+                    employee_reference.get("id")
+                )
+                if isinstance(employee_reference, dict)
+                else None
+            )
+
+            if employee_id is None:
+                continue
+
+            effective_start = cls._normalize_date(
+                pay_rate.get("effectiveStartDate")
+            )
+            effective_end = cls._normalize_date(
+                pay_rate.get("effectiveEndDate")
+            )
+
+            if effective_start is None or effective_start > today:
+                continue
+
+            if effective_end is not None and effective_end < today:
+                continue
+
+            try:
+                sequence_number = int(
+                    pay_rate.get("sequenceNumber") or 0
+                )
+            except (TypeError, ValueError):
+                sequence_number = 0
+
+            candidates.setdefault(employee_id, []).append(
+                (
+                    effective_start,
+                    sequence_number,
+                    pay_rate.get("annualHours"),
+                )
+            )
+
+        return {
+            employee_id: max(
+                employee_candidates,
+                key=lambda candidate: (
+                    candidate[0],
+                    candidate[1],
+                ),
+            )[2]
+            for employee_id, employee_candidates
+            in candidates.items()
+        }
+
+    @classmethod
+    def _build_person_details_lookup(
+        cls,
+        persons: list[dict[str, Any]],
     ) -> dict[str, dict[str, Any]]:
-        """Retrieve prefix and suffix from the Paycor persons API."""
+        """Index each person and their single Primary address by ID."""
 
-        results: dict[str, dict[str, Any]] = {}
+        lookup: dict[str, dict[str, Any]] = {}
 
-        if not employee_ids:
-            return results
-
-        async with httpx.AsyncClient(
-            timeout=self.timeout
-        ) as client:
-            access_token = await self._get_access_token(
-                client
+        for person in persons:
+            person_id = cls._normalize_person_id(
+                person.get("id")
             )
 
-            headers = self._get_api_headers(
-                access_token
-            )
-
-            for employee_id in dict.fromkeys(
-                employee_ids
-            ):
-                try:
-                    normalized_id = str(
-                        uuid.UUID(str(employee_id))
-                    )
-
-                except (TypeError, ValueError):
-                    results[str(employee_id)] = {
-                        "_error": (
-                            "Invalid Paycor employee UUID: "
-                            f"{employee_id}"
-                        )
-                    }
-                    continue
-
-                url = (
-                    f"{self.settings.paycor_url.rstrip('/')}"
-                    f"/v1/employees/{normalized_id}/person"
+            if person_id is None:
+                raise PaycorServiceError(
+                    "Paycor person record is missing its ID"
                 )
 
-                try:
-                    response = await client.get(
-                        url,
-                        headers=headers,
-                    )
-                    response.raise_for_status()
+            if person_id in lookup:
+                raise PaycorServiceError(
+                    "Paycor returned duplicate person ID "
+                    f"{person_id}"
+                )
 
-                    response_data = response.json()
+            addresses = person.get("addresses")
 
-                    if not isinstance(
-                        response_data,
-                        dict,
-                    ):
-                        raise ValueError(
-                            "Invalid Paycor person response"
-                        )
+            if addresses is None:
+                addresses = []
 
-                    # Supports either a direct response or
-                    # {"data": {...}}.
-                    person_data = response_data.get(
-                        "data",
-                        response_data,
-                    )
+            if not isinstance(addresses, list) or any(
+                not isinstance(address, dict)
+                for address in addresses
+            ):
+                lookup[person_id] = {
+                    "prefix": person.get("prefix"),
+                    "suffix": person.get("suffix"),
+                    "primaryAddress": None,
+                    "_error": (
+                        "Invalid Paycor person addresses for "
+                        f"person {person_id}"
+                    ),
+                }
+                continue
 
-                    if not isinstance(person_data, dict):
-                        raise ValueError(
-                            "Invalid Paycor person response"
-                        )
+            primary_addresses = [
+                address
+                for address in addresses
+                if str(address.get("type") or "")
+                .strip()
+                .casefold()
+                == "primary"
+            ]
 
-                    results[normalized_id] = {
-                        "prefix": person_data.get("prefix"),
-                        "suffix": person_data.get("suffix"),
-                    }
+            person_error: str | None = None
 
-                except httpx.HTTPStatusError as exc:
-                    if exc.response.status_code in {
-                        403,
-                        404,
-                    }:
-                        results[normalized_id] = {
-                            "prefix": None,
-                            "suffix": None,
-                            "_warning": (
-                                "Paycor person details are "
-                                "unavailable: "
-                                f"HTTP "
-                                f"{exc.response.status_code}"
-                            ),
-                        }
-                        continue
+            if len(primary_addresses) > 1:
+                person_error = (
+                    "Paycor returned multiple Primary addresses "
+                    f"for person {person_id}"
+                )
 
-                    response_body = exc.response.text.strip()
+            lookup[person_id] = {
+                "prefix": person.get("prefix"),
+                "suffix": person.get("suffix"),
+                "primaryAddress": (
+                    primary_addresses[0]
+                    if len(primary_addresses) == 1
+                    else None
+                ),
+                "_error": person_error,
+            }
 
-                    message = (
-                        "Paycor person lookup failed "
-                        f"with HTTP {exc.response.status_code}"
-                    )
+        return lookup
 
-                    if response_body:
-                        message = (
-                            f"{message}: "
-                            f"{response_body[:1000]}"
-                        )
+    @classmethod
+    def enrich_employee_with_person(
+        cls,
+        employee: dict[str, Any],
+        *,
+        person_details_by_id: dict[
+            str,
+            dict[str, Any],
+        ],
+    ) -> dict[str, Any]:
+        """Match an employee to a person strictly through person.id."""
 
-                    results[normalized_id] = {
-                        "_error": message,
-                    }
+        person_reference = employee.get("person")
+        person_id = (
+            cls._normalize_person_id(
+                person_reference.get("id")
+            )
+            if isinstance(person_reference, dict)
+            else None
+        )
 
-                except (
-                    httpx.HTTPError,
-                    ValueError,
-                ) as exc:
-                    results[normalized_id] = {
-                        "_error": str(exc)
-                    }
+        if person_id is None:
+            return {
+                **employee,
+                "personId": None,
+                "primaryAddress": None,
+                "personAddressError": (
+                    "Paycor employee person ID is required "
+                    "for address mapping"
+                ),
+            }
 
-        return results
+        person_details = person_details_by_id.get(
+            person_id
+        )
+
+        if person_details is None:
+            return {
+                **employee,
+                "personId": person_id,
+                "primaryAddress": None,
+                "personAddressError": (
+                    "No Paycor person record matches employee "
+                    f"person ID {person_id}"
+                ),
+            }
+
+        return {
+            **employee,
+            "personId": person_id,
+            "primaryAddress": person_details.get(
+                "primaryAddress"
+            ),
+            "personAddressError": person_details.get(
+                "_error"
+            ),
+            "prefix": person_details.get("prefix"),
+            "suffix": person_details.get("suffix"),
+        }
+
+    @classmethod
+    def enrich_employee_with_annual_hours(
+        cls,
+        employee: dict[str, Any],
+        *,
+        annual_hours_by_employee_id: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Attach annual hours by matching the Paycor employee ID."""
+
+        employee_id = cls._normalize_person_id(
+            employee.get("id")
+            or employee.get("paycorEmployeeId")
+        )
+
+        return {
+            **employee,
+            "annualHours": (
+                annual_hours_by_employee_id.get(employee_id)
+                if employee_id is not None
+                else None
+            ),
+        }
+
+    @staticmethod
+    def _normalize_person_id(value: Any) -> str | None:
+        if value is None:
+            return None
+
+        normalized_value = str(value).strip()
+        return normalized_value.casefold() or None
 
     async def _get_all_paginated_records(
         self,

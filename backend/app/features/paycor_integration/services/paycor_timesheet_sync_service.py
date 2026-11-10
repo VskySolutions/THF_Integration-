@@ -1,7 +1,7 @@
 """Orchestrate grouped Maconomy-to-Paycor time synchronization."""
 
-import uuid
-from datetime import date
+import json
+from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any
 from uuid import uuid4
@@ -192,7 +192,10 @@ class PaycorTimesheetSyncService:
             self.paycor_service.get_pay_schedules(
                 pay_group_ids=pay_group_ids,
                 start_date=min(date_worked_values),
-                end_date=max(date_worked_values),
+                end_date=(
+                    max(date_worked_values)
+                    + timedelta(days=31)
+                ),
             )
         )
 
@@ -313,7 +316,7 @@ class PaycorTimesheetSyncService:
         start_date: date,
         end_date: date,
     ) -> dict[str, Any]:
-        """Build and append all groups for one source range."""
+        """Submit changed groups for one source range."""
 
         grouped_payloads = await (
             self.build_grouped_payloads(
@@ -326,7 +329,6 @@ class PaycorTimesheetSyncService:
             self._prepare_batches(
                 session,
                 grouped_payloads=grouped_payloads,
-                replace_accepted=False,
             )
         )
 
@@ -343,7 +345,7 @@ class PaycorTimesheetSyncService:
         start_date: date,
         end_date: date,
     ) -> dict[str, Any]:
-        """Append new groups and replace accepted groups."""
+        """Retry changed groups with their persisted process IDs."""
 
         grouped_payloads = await (
             self.build_grouped_payloads(
@@ -356,7 +358,6 @@ class PaycorTimesheetSyncService:
             self._prepare_batches(
                 session,
                 grouped_payloads=grouped_payloads,
-                replace_accepted=True,
             )
         )
 
@@ -371,7 +372,6 @@ class PaycorTimesheetSyncService:
         session: AsyncSession,
         *,
         grouped_payloads: dict[str, Any],
-        replace_accepted: bool,
     ) -> list[dict[str, Any]]:
         """Resolve persisted process and retry state for all groups."""
 
@@ -406,7 +406,7 @@ class PaycorTimesheetSyncService:
             pay_period_end = date.fromisoformat(
                 payload_batch["payPeriodEnd"]
             )
-            database_batch, _ = await (
+            database_batch, batch_created = await (
                 get_or_create_batch(
                     session,
                     legal_entity_id=legal_entity_id,
@@ -444,62 +444,7 @@ class PaycorTimesheetSyncService:
                     f"{payload_batch['payPeriodEnd']}"
                 )
 
-            accepted_process_id = (
-                database_batch.accepted_process_id
-            )
-
-            if accepted_process_id is None:
-                accepted_log = await (
-                    get_latest_accepted_log(
-                        session,
-                        batch_id=database_batch.id,
-                    )
-                )
-
-                if accepted_log is not None:
-                    accepted_process_id = (
-                        accepted_log.process_id
-                    )
-                    await mark_batch_accepted(
-                        session,
-                        database_batch,
-                        process_id=(
-                            accepted_process_id
-                        ),
-                    )
-
-            if accepted_process_id is not None:
-                if not replace_accepted:
-                    prepared_batches.append(
-                        {
-                            "databaseBatch": (
-                                database_batch
-                            ),
-                            "payloadBatch": (
-                                payload_batch
-                            ),
-                            "skip": True,
-                        }
-                    )
-                    continue
-
-                process_id = accepted_process_id
-                submission_mode = (
-                    TimesheetSubmissionMode.REPLACE
-                )
-            else:
-                try:
-                    process_id = uuid.UUID(
-                        payload_batch["processId"]
-                    )
-                except (TypeError, ValueError) as exc:
-                    raise PaycorTimesheetSyncServiceError(
-                        "Generated Paycor process ID is invalid"
-                    ) from exc
-
-                submission_mode = (
-                    TimesheetSubmissionMode.APPEND
-                )
+            process_id = database_batch.process_id
 
             normalized_process_id = str(
                 process_id
@@ -510,6 +455,44 @@ class PaycorTimesheetSyncService:
             payload_batch["payload"][
                 "processId"
             ] = normalized_process_id
+
+            accepted_log = await get_latest_accepted_log(
+                session,
+                batch_id=database_batch.id,
+            )
+
+            if (
+                not batch_created
+                and accepted_log is not None
+                and self._payloads_match(
+                    accepted_log.payload,
+                    payload_batch["payload"],
+                )
+            ):
+                if (
+                    database_batch.accepted_process_id
+                    != process_id
+                ):
+                    await mark_batch_accepted(
+                        session,
+                        database_batch,
+                        process_id=process_id,
+                    )
+
+                prepared_batches.append(
+                    {
+                        "databaseBatch": database_batch,
+                        "payloadBatch": payload_batch,
+                        "skip": True,
+                    }
+                )
+                continue
+
+            submission_mode = (
+                TimesheetSubmissionMode.APPEND
+                if batch_created
+                else TimesheetSubmissionMode.REPLACE
+            )
 
             prepared_batches.append(
                 {
@@ -563,7 +546,7 @@ class PaycorTimesheetSyncService:
                         "processId": str(
                             prepared_batch[
                                 "databaseBatch"
-                            ].accepted_process_id
+                            ].process_id
                         ),
                         "result": {
                             "status": "SKIPPED",
@@ -688,6 +671,23 @@ class PaycorTimesheetSyncService:
                 "warnings"
             ],
         }
+
+    @staticmethod
+    def _payloads_match(
+        first_payload: dict[str, Any],
+        second_payload: dict[str, Any],
+    ) -> bool:
+        """Compare payload content independently of object key order."""
+
+        return json.dumps(
+            first_payload,
+            sort_keys=True,
+            separators=(",", ":"),
+        ) == json.dumps(
+            second_payload,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
 
     @staticmethod
     def _filter_available_earnings(

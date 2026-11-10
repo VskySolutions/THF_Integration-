@@ -33,12 +33,14 @@ class PaycorTimesheetBatch(Base):
     __table_args__ = (
         UniqueConstraint(
             "paycor_legal_entity_id",
-            "source_start_date",
-            "source_end_date",
             "pay_group_id",
             "pay_period_start",
             "pay_period_end",
             name="uq_paycor_timesheet_batch_group",
+        ),
+        UniqueConstraint(
+            "process_id",
+            name="uq_paycor_timesheet_batches_process_id",
         ),
     )
 
@@ -74,6 +76,11 @@ class PaycorTimesheetBatch(Base):
 
     pay_period_end: Mapped[date] = mapped_column(
         Date,
+        nullable=False,
+    )
+
+    process_id: Mapped[uuid.UUID] = mapped_column(
+        default=uuid.uuid4,
         nullable=False,
     )
 

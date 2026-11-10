@@ -11,7 +11,15 @@
     .dashboard-action-btn { align-items: center; display: inline-flex; height: 2.5rem; justify-content: center; padding: 0; width: 2.5rem; }
     .message-cell { max-width: 22rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .process-id { color: #53627a; font-size: .75rem; }
-    .json-detail { background: #f7f9fc; border: 1px solid var(--falcon-border); border-radius: .5rem; max-height: 22rem; overflow: auto; padding: .75rem; white-space: pre-wrap; }
+    .detail-label { color: var(--falcon-muted); font-size: .7rem; font-weight: 750; letter-spacing: .05em; text-transform: uppercase; }
+    .detail-value { color: var(--falcon-ink); overflow-wrap: anywhere; }
+    .detail-message { background: #f7f9fc; border: 1px solid var(--falcon-border); border-radius: .6rem; min-height: 5rem; padding: .9rem; white-space: pre-wrap; }
+    .detail-message-success { background: #eaf8f2; border-color: #a9ddca; color: #116149; }
+    .detail-message-danger { background: #fff0f0; border-color: #efb3b3; color: #9b1c1c; }
+    .detail-message-warning { background: #fff8e6; border-color: #efd38a; color: #765609; }
+    .detail-message-info { background: var(--falcon-blue-soft); border-color: #b9caf5; color: #1d469f; }
+    .modal-section + .modal-section { border-top: 1px solid var(--falcon-border); margin-top: 1.25rem; padding-top: 1.25rem; }
+    .json-detail { background: #f7f9fc; border: 1px solid var(--falcon-border); border-radius: .5rem; margin: 0; max-height: 26rem; overflow: auto; padding: .9rem; white-space: pre-wrap; width: 100%; }
 </style>
 {% endblock %}
 
@@ -119,6 +127,15 @@
                     <tbody>
                     {% for log in activity_logs %}
                     {% set batch = log.timesheet_batch %}
+                    {% if log.status.value == 'ACCEPTED' %}
+                    {% set result_message = 'Timesheet batch was submitted successfully to Paycor.' %}
+                    {% elif log.status.value == 'FAILED' %}
+                    {% set result_message = log.message or 'Paycor timesheet submission failed.' %}
+                    {% elif log.status.value == 'UNKNOWN' %}
+                    {% set result_message = log.message or 'Submission status is unknown and requires reconciliation.' %}
+                    {% else %}
+                    {% set result_message = 'Timesheet batch submission is in progress.' %}
+                    {% endif %}
                     <tr>
                         <td data-order="{{ log.created_on_utc.isoformat() }}">{{ log.created_on_utc.strftime('%d %b %Y, %H:%M:%S') }}</td>
                         <td>{{ batch.source_start_date.isoformat() if batch else 'N/A' }}<br><span class="text-secondary">to {{ batch.source_end_date.isoformat() if batch else 'N/A' }}</span></td>
@@ -133,17 +150,22 @@
                             {% else %}<span class="badge text-bg-secondary">Submitting</span>{% endif %}
                         </td>
                         <td>{{ log.http_status if log.http_status is not none else '&mdash;' | safe }}</td>
-                        <td class="message-cell" title="{{ log.message or '' }}">{{ log.message or 'No message recorded' }}</td>
+                        <td class="message-cell" title="{{ result_message }}">{{ result_message }}</td>
                         <td>
-                            <details>
-                                <summary class="btn btn-sm btn-outline-secondary">View</summary>
-                                <div class="mt-3" style="min-width: 28rem;">
-                                    <div class="small fw-bold mb-1">Payload</div>
-                                    <pre class="json-detail">{{ log.payload | tojson(indent=2) }}</pre>
-                                    <div class="small fw-bold mb-1">Paycor response</div>
-                                    <pre class="json-detail">{{ log.response | tojson(indent=2) }}</pre>
-                                </div>
-                            </details>
+                            <button type="button" class="btn btn-sm btn-outline-secondary view-timesheet-detail"
+                                    data-bs-toggle="modal" data-bs-target="#timesheetDetailModal"
+                                    data-detail-id="{{ log.id }}"
+                                    data-created="{{ log.created_on_utc.strftime('%d %b %Y, %H:%M:%S UTC') }}"
+                                    data-source-start="{{ batch.source_start_date.isoformat() if batch else 'Not available' }}"
+                                    data-source-end="{{ batch.source_end_date.isoformat() if batch else 'Not available' }}"
+                                    data-pay-group="{{ batch.pay_group_id if batch else 'Not available' }}"
+                                    data-period-start="{{ batch.pay_period_start.isoformat() if batch else 'Not available' }}"
+                                    data-period-end="{{ batch.pay_period_end.isoformat() if batch else 'Not available' }}"
+                                    data-process-id="{{ log.process_id }}"
+                                    data-mode="{{ log.submission_mode.value | title }}"
+                                    data-status="{{ log.status.value | title }}"
+                                    data-http-status="{{ log.http_status if log.http_status is not none else 'Not available' }}"
+                                    data-message="{{ result_message }}">View details</button>
                         </td>
                     </tr>
                     {% endfor %}
@@ -153,6 +175,54 @@
         </div>
     </section>
 </main>
+
+{% for log in activity_logs %}
+<script type="application/json" id="timesheet-response-{{ log.id }}">{{ log.response | tojson }}</script>
+{% endfor %}
+
+<div class="modal fade" id="timesheetDetailModal" tabindex="-1"
+     aria-labelledby="timesheetDetailModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable"><div class="modal-content">
+        <div class="modal-header">
+            <div>
+                <div class="page-kicker mb-1">Troubleshooting detail</div>
+                <h2 class="modal-title fs-5" id="timesheetDetailModalLabel">Paycor timesheet submission</h2>
+            </div>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body p-4">
+            <section class="modal-section mt-0 pt-0 border-0">
+                <h3 class="h6 fw-bold mb-3">Submission</h3>
+                <div class="row g-3">
+                    <div class="col-md-6"><div class="detail-label">Time</div><div class="detail-value mt-1" id="timesheetDetailCreated"></div></div>
+                    <div class="col-6 col-md-2"><div class="detail-label">Mode</div><div class="detail-value mt-1" id="timesheetDetailMode"></div></div>
+                    <div class="col-6 col-md-2"><div class="detail-label">Status</div><div class="detail-value mt-1" id="timesheetDetailStatus"></div></div>
+                    <div class="col-6 col-md-2"><div class="detail-label">HTTP status</div><div class="detail-value mt-1" id="timesheetDetailHttpStatus"></div></div>
+                </div>
+            </section>
+            <section class="modal-section">
+                <h3 class="h6 fw-bold mb-3">Batch</h3>
+                <div class="row g-3">
+                    <div class="col-md-6"><div class="detail-label">Source range</div><div class="detail-value mt-1" id="timesheetDetailSourceRange"></div></div>
+                    <div class="col-md-6"><div class="detail-label">Pay period</div><div class="detail-value mt-1" id="timesheetDetailPayPeriod"></div></div>
+                    <div class="col-md-6"><div class="detail-label">Pay group</div><div class="detail-value mt-1 font-monospace small" id="timesheetDetailPayGroup"></div></div>
+                    <div class="col-md-6"><div class="detail-label">Process ID</div><div class="detail-value mt-1 font-monospace small" id="timesheetDetailProcessId"></div></div>
+                </div>
+            </section>
+            <section class="modal-section">
+                <h3 class="h6 fw-bold mb-3">Integration result</h3>
+                <div class="detail-message" id="timesheetDetailMessage"></div>
+            </section>
+            <section class="modal-section">
+                <h3 class="h6 fw-bold mb-3">Paycor response</h3>
+                <pre class="json-detail" id="timesheetDetailResponse"></pre>
+            </section>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Close</button>
+        </div>
+    </div></div>
+</div>
 
 <div class="modal fade" id="timesheetRetryModal" tabindex="-1"
      aria-labelledby="timesheetRetryModalLabel" aria-hidden="true">
@@ -208,6 +278,49 @@
             order: [[0, 'desc']],
             pageLength: 10,
             layout: { topStart: { pageLength: {} }, topEnd: { search: { placeholder: 'Search timesheet activity' } }, bottomStart: 'info', bottomEnd: 'paging' }
+        });
+        $('#timesheetActivityTable').on('click', '.view-timesheet-detail', function () {
+            const button = $(this);
+            const detailId = button.attr('data-detail-id');
+            const formatJson = function (elementId) {
+                const element = document.getElementById(elementId);
+                if (!element) return 'Not available';
+                try {
+                    return JSON.stringify(JSON.parse(element.textContent), null, 2);
+                } catch (error) {
+                    return element.textContent || 'Not available';
+                }
+            };
+
+            $('#timesheetDetailCreated').text(button.attr('data-created'));
+            $('#timesheetDetailMode').text(button.attr('data-mode'));
+            $('#timesheetDetailStatus').text(button.attr('data-status'));
+            $('#timesheetDetailHttpStatus').text(button.attr('data-http-status'));
+            $('#timesheetDetailSourceRange').text(
+                button.attr('data-source-start') + ' to ' + button.attr('data-source-end')
+            );
+            $('#timesheetDetailPayPeriod').text(
+                button.attr('data-period-start') + ' to ' + button.attr('data-period-end')
+            );
+            $('#timesheetDetailPayGroup').text(button.attr('data-pay-group'));
+            $('#timesheetDetailProcessId').text(button.attr('data-process-id'));
+            const detailMessage = $('#timesheetDetailMessage');
+            const detailStatus = button.attr('data-status').toLowerCase();
+            const messageStyle = {
+                accepted: 'detail-message-success',
+                failed: 'detail-message-danger',
+                unknown: 'detail-message-warning',
+                submitting: 'detail-message-info'
+            }[detailStatus] || 'detail-message-info';
+            detailMessage
+                .removeClass(
+                    'detail-message-success detail-message-danger detail-message-warning detail-message-info'
+                )
+                .addClass(messageStyle)
+                .text(button.attr('data-message'));
+            $('#timesheetDetailResponse').text(
+                formatJson('timesheet-response-' + detailId)
+            );
         });
         $('[data-dashboard-tooltip]').each(function () { new bootstrap.Tooltip(this); });
         $('#changeIntegrationStatusButton, #openTimesheetRetryButton').on('click', function () {

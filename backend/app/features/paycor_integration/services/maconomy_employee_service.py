@@ -38,6 +38,7 @@ EMPLOYEE_FIELDS = (
     "lastname",
     # "initials",
     "specification4name",
+    "remark2",
     "remark5",
     "country",
     "dateemployed",
@@ -48,6 +49,18 @@ EMPLOYEE_FIELDS = (
     "text10",
     "personaltitle",
     "entityname",
+    "name2",
+    "name3",
+    "name5",
+    "postaldistrict",
+    "zipcode",
+    "fixedworkingtimemonday",
+    "fixedworkingtimetuesday",
+    "fixedworkingtimewednesday",
+    "fixedworkingtimethursday",
+    "fixedworkingtimefriday",
+    "fixedworkingtimesaturday",
+    "fixedworkingtimesunday",
     
 )
 
@@ -74,6 +87,7 @@ EMPLOYEE_REVISION_TABLE_FIELDS = (
     "electronicmailaddress",
     "position",
     "specification4name",
+    "remark2",
     "remark5",
     "text10",
     "date5",
@@ -81,6 +95,18 @@ EMPLOYEE_REVISION_TABLE_FIELDS = (
     "personaltitle",
     "entityname",
     "superioremployee",
+    "name2",
+    "name3",
+    "name5",
+    "postaldistrict",
+    "zipcode",
+    "fixedworkingtimemonday",
+    "fixedworkingtimetuesday",
+    "fixedworkingtimewednesday",
+    "fixedworkingtimethursday",
+    "fixedworkingtimefriday",
+    "fixedworkingtimesaturday",
+    "fixedworkingtimesunday",
 )
 
 EMPLOYEE_FILTER_PAGE_SIZE = 1000
@@ -128,8 +154,12 @@ class MaconomyEmployeeService:
 
     async def get_employee_reference_lookups(
         self,
-    ) -> tuple[dict[str, str], dict[str, str]]:
-        """Return Entity and Specification 4 codes by description."""
+    ) -> tuple[
+        dict[str, str],
+        dict[str, str],
+        dict[str, str],
+    ]:
+        """Return Entity, Specification 4, and Country lookups."""
 
         try:
             async with httpx.AsyncClient(
@@ -144,6 +174,7 @@ class MaconomyEmployeeService:
                 (
                     entities_by_description,
                     specification4_by_description,
+                    countries_by_alias,
                 ) = await asyncio.gather(
                     self._get_reference_lookup(
                         client,
@@ -157,19 +188,23 @@ class MaconomyEmployeeService:
                         container_name="specification4",
                         code_field="specification4name",
                     ),
+                    self._get_country_lookup(
+                        client,
+                        reconnect_token,
+                    ),
                 )
 
                 return (
                     entities_by_description,
                     specification4_by_description,
+                    countries_by_alias,
                 )
 
         except MaconomyEmployeeServiceError:
             raise
         except httpx.HTTPError as exc:
             raise MaconomyEmployeeServiceError(
-                "Unable to retrieve Maconomy employee "
-                "reference data"
+                "Unable to retrieve Maconomy employee reference data"
             ) from exc
 
     async def create_employee(
@@ -768,6 +803,146 @@ class MaconomyEmployeeService:
             lookup[normalized_description] = code
 
         return lookup
+
+    async def _get_country_lookup(
+        self,
+        client: httpx.AsyncClient,
+        reconnect_token: str,
+    ) -> dict[str, str]:
+        """Return unambiguous Country aliases mapped to canonical names."""
+
+        shortname = quote(
+            self.settings.maconomy_shortname,
+            safe="",
+        )
+        url = (
+            f"{self.settings.maconomy_url}"
+            "/maconomy-api/containers/"
+            f"{shortname}/countries/filter"
+        )
+        headers = self._container_headers(reconnect_token)
+        page_size = 1000
+        offset = 0
+        aliases: dict[str, str] = {}
+        ambiguous_aliases: set[str] = set()
+
+        for _ in range(self.max_filter_pages):
+            response = await client.post(
+                url,
+                headers=headers,
+                json={
+                    "fields": [
+                        "countrynumber",
+                        "name",
+                        "isocode",
+                        "countrycode",
+                        "eucountrycode",
+                    ],
+                    "offset": offset,
+                    "limit": page_size,
+                },
+            )
+            response.raise_for_status()
+
+            try:
+                filter_pane = response.json()["panes"]["filter"]
+                meta = filter_pane["meta"]
+                records = filter_pane["records"]
+            except (KeyError, TypeError, ValueError) as exc:
+                raise MaconomyEmployeeServiceError(
+                    "Invalid Maconomy countries filter response"
+                ) from exc
+
+            if not isinstance(meta, dict) or not isinstance(
+                records,
+                list,
+            ):
+                raise MaconomyEmployeeServiceError(
+                    "Invalid Maconomy countries filter response"
+                )
+
+            row_count = self._parse_filter_count(
+                meta.get("rowCount"),
+                "rowCount",
+            )
+            row_offset = self._parse_filter_count(
+                meta.get("rowOffset"),
+                "rowOffset",
+            )
+
+            if row_offset != offset or row_count != len(records):
+                raise MaconomyEmployeeServiceError(
+                    "Maconomy countries filter returned inconsistent pagination"
+                )
+
+            if row_count == 0:
+                break
+
+            for record in records:
+                if not isinstance(record, dict):
+                    raise MaconomyEmployeeServiceError(
+                        "Invalid Maconomy country record"
+                    )
+
+                data = record.get("data")
+
+                if not isinstance(data, dict):
+                    raise MaconomyEmployeeServiceError(
+                        "Invalid Maconomy country record"
+                    )
+
+                name_value = data.get("name")
+                canonical_name = (
+                    str(name_value).strip()
+                    if name_value is not None
+                    else ""
+                )
+
+                if not canonical_name:
+                    continue
+
+                for alias_value in (
+                    canonical_name,
+                    data.get("isocode"),
+                    data.get("countrycode"),
+                    data.get("eucountrycode"),
+                ):
+                    alias = (
+                        " ".join(str(alias_value).split()).casefold()
+                        if alias_value is not None
+                        else ""
+                    )
+
+                    if not alias or alias in ambiguous_aliases:
+                        continue
+
+                    existing_name = aliases.get(alias)
+
+                    if (
+                        existing_name is not None
+                        and existing_name != canonical_name
+                    ):
+                        aliases.pop(alias, None)
+                        ambiguous_aliases.add(alias)
+                        continue
+
+                    aliases[alias] = canonical_name
+
+            offset = row_offset + row_count
+
+            if row_count < page_size:
+                break
+        else:
+            raise MaconomyEmployeeServiceError(
+                "Maconomy countries filter exceeded the maximum page limit"
+            )
+
+        if not aliases:
+            raise MaconomyEmployeeServiceError(
+                "Maconomy Countries master data returned no usable values"
+            )
+
+        return aliases
 
     async def _start_employee_creation(
         self,

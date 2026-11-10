@@ -1,5 +1,9 @@
 from .employee_mapper import (
+    EmployeeAnnualHoursMappingError,
+    EmployeeAddressMappingError,
+    map_annual_hours_to_fixed_working_time,
     map_paycor_employee,
+    map_paycor_primary_address,
     map_paycor_employee_to_maconomy,
     map_paycor_employee_to_maconomy_update
 )
@@ -15,7 +19,11 @@ from .timesheet_mapper import (
     
 )
 __all__ = [
+    "EmployeeAnnualHoursMappingError",
+    "EmployeeAddressMappingError",
+    "map_annual_hours_to_fixed_working_time",
     "map_paycor_employee",
+    "map_paycor_primary_address",
     "map_paycor_employee_to_maconomy",
     "map_paycor_employee_to_maconomy_update",
     # "TimesheetDepartmentNotMappedError",

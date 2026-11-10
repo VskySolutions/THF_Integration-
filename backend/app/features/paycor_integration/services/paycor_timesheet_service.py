@@ -253,9 +253,11 @@ class PaycorTimesheetService:
         if submission_mode == "append":
             submission_params = {
                 "appendData": "true",
+                "replaceData": "false",
             }
         elif submission_mode == "replace":
             submission_params = {
+                "appendData": "false",
                 "replaceData": "true",
             }
         else:
@@ -1056,13 +1058,13 @@ class PaycorTimesheetService:
 
             pay_period_start = (
                 cls._parse_pay_schedule_date(
-                    schedule.get("payPeriodStart"),
+                    schedule.get("periodStartDate"),
                     "payPeriodStart",
                 )
             )
             pay_period_end = (
                 cls._parse_pay_schedule_date(
-                    schedule.get("payPeriodEnd"),
+                    schedule.get("periodEndDate"),
                     "payPeriodEnd",
                 )
             )
