@@ -37,7 +37,7 @@ class SAPConcurInvoiceService:
     # Fixed digest search cutoff — product decision (not user input).
     # Concur's real parameter name is camelCase `createDateAfter`
     # (live-verified; `createddateafter` is rejected with 400).
-    _DIGEST_CREATE_DATE_AFTER: ClassVar[str] = "2026-10-21"
+    _DIGEST_CREATE_DATE_AFTER: ClassVar[str] = "2026-10-31"
 
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or get_settings()
