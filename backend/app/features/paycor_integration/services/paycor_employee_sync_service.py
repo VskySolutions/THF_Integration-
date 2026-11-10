@@ -17,6 +17,8 @@ from app.features.paycor_integration.constants import (
     EmpVendorCreationStatus,
     IntegrationAction,
     IntegrationStatus,
+    PurposeCreationStatus,
+    Spec5CreationStatus,
 )
 from app.features.paycor_integration.mappers import (
     map_paycor_employee,
@@ -31,6 +33,18 @@ from app.features.paycor_integration.services.maconomy_employee_service import (
 )
 from app.features.paycor_integration.services.maconomy_vendor_service import (
     MaconomyVendorService,
+)
+from app.features.paycor_integration.services.maconomy_specification5_service import (
+    MaconomySpecification5Service,
+)
+from app.features.paycor_integration.services.specification5_log_service import (
+    Specification5LogService,
+)
+from app.features.paycor_integration.services.maconomy_purpose_service import (
+    MaconomyPurposeService,
+)
+from app.features.paycor_integration.services.purpose_log_service import (
+    PurposeLogService,
 )
 from app.features.paycor_integration.services.paycor_employee_service import (
     PaycorService,
@@ -72,6 +86,8 @@ class PaycorEmployeeSyncService:
             MaconomyEmployeeService()
         )
         self.vendor_service = MaconomyVendorService()
+        self.spec5_service = MaconomySpecification5Service()
+        self.purpose_service = MaconomyPurposeService()
 
     async def sync_recent_hires(
         self,
@@ -1001,6 +1017,12 @@ class PaycorEmployeeSyncService:
             mapping.is_emp_vendor_created = (
                 EmpVendorCreationStatus.SKIPPED
             )
+            mapping.is_spec5_created = (
+                Spec5CreationStatus.SKIPPED
+            )
+            mapping.is_purpose_created = (
+                PurposeCreationStatus.SKIPPED
+            )
 
             await self._write_log(
                 session,
@@ -1065,6 +1087,12 @@ class PaycorEmployeeSyncService:
 
                     mapping.is_emp_vendor_created = (
                         EmpVendorCreationStatus.SKIPPED
+                    )
+                    mapping.is_spec5_created = (
+                        Spec5CreationStatus.SKIPPED
+                    )
+                    mapping.is_purpose_created = (
+                        PurposeCreationStatus.SKIPPED
                     )
 
                     await self._write_log(
@@ -1375,6 +1403,98 @@ class PaycorEmployeeSyncService:
             )
             message_notes.append(
                 f"Employee vendor {vendor_number} created"
+            )
+
+        # Specification 5 creation. Runs only for freshly created
+        # employees; a failure must never fail the already-created employee record.
+        emp_lastname = str(created_employee.get("lastname") or "").strip()
+        emp_firstname = str(created_employee.get("firstname") or "").strip()
+
+        if emp_lastname and emp_firstname:
+            spec5_description = f"{emp_lastname}, {emp_firstname}"
+        else:
+            spec5_description = vendor_employee_name
+
+        try:
+            print("In create specification 5")
+            created_spec5 = (
+                await self.spec5_service.create_specification5(
+                    employee_number=maconomy_employee_number,
+                    description=spec5_description,
+                )
+            )
+
+            await Specification5LogService.record_specification5_result(
+                session,
+                mapping=mapping,
+                paycor_employee_id=paycor_employee_id,
+                paycor_employee_number=paycor_employee_number,
+                legal_entity_id=legal_entity_id,
+                status=Spec5CreationStatus.SUCCESS,
+                spec5_name=maconomy_employee_number,
+            )
+            message_notes.append(
+                f"Specification 5 '{maconomy_employee_number}' created"
+            )
+
+        except Exception as exc:  # Deliberate: never fail employee record
+            spec5_failure_message = (
+                f"Specification 5 creation failed for "
+                f"{maconomy_employee_number}: {exc}"
+            )
+            message_notes.append(spec5_failure_message)
+
+            await Specification5LogService.record_specification5_result(
+                session,
+                mapping=mapping,
+                paycor_employee_id=paycor_employee_id,
+                paycor_employee_number=paycor_employee_number,
+                legal_entity_id=legal_entity_id,
+                status=Spec5CreationStatus.FAILURE,
+                error_message=spec5_failure_message,
+            )
+
+        # Purpose creation. Runs only for freshly created
+        # employees; a failure must never fail the already-created employee record.
+        purpose_description = spec5_description
+
+        try:
+            print("In create purpose")
+            created_purpose = (
+                await self.purpose_service.create_purpose(
+                    employee_number=maconomy_employee_number,
+                    description=purpose_description,
+                )
+            )
+
+            await PurposeLogService.record_purpose_result(
+                session,
+                mapping=mapping,
+                paycor_employee_id=paycor_employee_id,
+                paycor_employee_number=paycor_employee_number,
+                legal_entity_id=legal_entity_id,
+                status=PurposeCreationStatus.SUCCESS,
+                purpose_name=maconomy_employee_number,
+            )
+            message_notes.append(
+                f"Purpose '{maconomy_employee_number}' created"
+            )
+
+        except Exception as exc:  # Deliberate: never fail employee record
+            purpose_failure_message = (
+                f"Purpose creation failed for "
+                f"{maconomy_employee_number}: {exc}"
+            )
+            message_notes.append(purpose_failure_message)
+
+            await PurposeLogService.record_purpose_result(
+                session,
+                mapping=mapping,
+                paycor_employee_id=paycor_employee_id,
+                paycor_employee_number=paycor_employee_number,
+                legal_entity_id=legal_entity_id,
+                status=PurposeCreationStatus.FAILURE,
+                error_message=purpose_failure_message,
             )
 
         if omitted_department_name is not None:

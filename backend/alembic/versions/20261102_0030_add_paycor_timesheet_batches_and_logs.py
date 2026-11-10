@@ -13,7 +13,7 @@ from sqlalchemy.dialects import postgresql
 
 
 revision: str = "20261102_0030"
-down_revision: Union[str, None] = "20261021_0028"
+down_revision: Union[str, None] = "20261027_0029"
 branch_labels: Union[
     str,
     Sequence[str],
