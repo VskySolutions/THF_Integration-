@@ -15,6 +15,12 @@ SAP_CONCUR_EXPENSE_SYNC_PATH = "/api/v1/sap-concur/sync-sap-concur-expense-repor
 SAP_CONCUR_EXPENSE_SYNC_JOB_ID = "sap_concur_expense_sync"
 HUBSPOT_SYNC_PATH = "/api/v1/hubspot/sync/customers"
 HUBSPOT_SYNC_JOB_ID = "maconomy_hubspot_sync"
+HUBSPOT_CONTACT_CONSOLIDATED_SYNC_PATH = (
+    "/api/v1/hubspot-consolidated/sync/customers"
+)
+HUBSPOT_CONTACT_CONSOLIDATED_SYNC_JOB_ID = (
+    "maconomy_hubspot_contact_consolidated_sync"
+)
 PAYCOR_EASTERN_TIMEZONE = "America/New_York"
 #Paycor Payroll
 PAYCOR_PAYROLL_SYNC_PATH = "/api/v1/paycor/payroll/sync-payroll-to-maconomy"

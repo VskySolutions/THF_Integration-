@@ -33,6 +33,11 @@ from app.features.paycor_integration.routers import paycor_router,paycor_update_
 from app.features.paycor_payroll_integration.routers import payroll_processing_router as paycor_payroll_processing_router
 
 #Hubspot imports
+from app.features.hubspot_contact_consolidated_integration.routers import (
+    consolidated_bulk_sync_router,
+    consolidated_company_manual_sync_router,
+    consolidated_contact_manual_sync_router,
+)
 from app.features.hubspot_integration.routers.get_recent_customers_contacts import (
     router as maconomy_customers_contacts_router,
 )
@@ -105,3 +110,8 @@ app.include_router(paycor_payroll_processing_router, prefix=settings.api_v1_pref
 # HubSpot router
 app.include_router(maconomy_customers_contacts_router, prefix=settings.api_v1_prefix)
 app.include_router(hubspot_manual_sync_router, prefix=settings.api_v1_prefix)
+
+# Consolidated HubSpot contact integration router
+app.include_router(consolidated_bulk_sync_router, prefix=settings.api_v1_prefix)
+app.include_router(consolidated_company_manual_sync_router, prefix=settings.api_v1_prefix)
+app.include_router(consolidated_contact_manual_sync_router, prefix=settings.api_v1_prefix)

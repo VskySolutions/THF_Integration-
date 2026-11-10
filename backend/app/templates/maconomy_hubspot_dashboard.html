@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Maconomy to HubSpot sync{% endblock %}
+{% block title %}{{ integration.display_name }}{% endblock %}
 
 {% block head %}
 <link href="https://cdn.datatables.net/v/bs5/dt-3.1.2/datatables.min.css" rel="stylesheet">
@@ -48,7 +48,7 @@
     <nav aria-label="breadcrumb" class="mb-3">
         <ol class="breadcrumb">
             <li class="breadcrumb-item"><a href="{{ url_for('dashboard') }}">Integrations</a></li>
-            <li class="breadcrumb-item active" aria-current="page">Maconomy to HubSpot sync</li>
+            <li class="breadcrumb-item active" aria-current="page">{{ integration.display_name }}</li>
         </ol>
     </nav>
 
@@ -243,6 +243,7 @@
 {% set failed_records = details.get('failed_records', []) %}
 {% set skipped_records = details.get('skipped_records', []) %}
 {% set record_results = details.get('record_results', []) %}
+{% set group_summaries = details.get('group_summaries', []) %}
 <template id="hubspotRunDetails-{{ run.request_id }}">
     <div class="row g-2 mb-4" aria-label="Run outcome summary">
         <div class="col-4"><div class="run-detail-summary h-100">
@@ -303,6 +304,32 @@
                     {{ item.get('message') or item.get('reason') }}
                     {% else %}&mdash;{% endif %}
                 </td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+    {% if group_summaries %}
+    <h3 class="h6 fw-bold mt-4 mb-2">Consolidated contact groups</h3>
+    <div class="table-responsive mb-4">
+        <table class="table table-hover align-middle mb-0">
+            <thead><tr>
+                <th>Master Contact Person</th><th>Action</th>
+                <th>Members</th><th>Upserted</th><th>Stamped</th>
+            </tr></thead>
+            <tbody>
+            {% for group in group_summaries %}
+            <tr>
+                <td>
+                    {% set master_number = group.get('master_contact_person_number') or group.get('master') %}
+                    {% if master_number %}<code>{{ master_number }}</code>
+                    {% else %}<span class="text-secondary">&mdash;</span>{% endif %}
+                </td>
+                <td>{{ group.get('action', 'unknown') | replace('_', ' ') | title }}</td>
+                <td>{{ group.get('members', 0) }}</td>
+                <td>{{ 'Yes' if group.get('upserted') else 'No' }}</td>
+                <td>{{ group.get('stamped_members', 0) }}</td>
             </tr>
             {% endfor %}
             </tbody>
@@ -388,7 +415,7 @@
     <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content">
             <form method="post"
-                  action="{{ url_for('retry_hubspot_record', integration_id=integration.id) }}"
+                  action="{{ retry_url }}"
                   id="hubspotRetryForm">
                 <div class="modal-header">
                     <h2 class="modal-title fs-5" id="hubspotRetryModalLabel">Retry a HubSpot record</h2>
@@ -397,8 +424,13 @@
                 <div class="modal-body">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                     <p class="text-secondary small">
+                        {% if is_consolidated %}
+                        Synchronize one Maconomy Customer as a Company, or synchronize
+                        the master Contact Person selected for an email group.
+                        {% else %}
                         Synchronize one Maconomy Customer with all its Contact Persons,
                         or one Contact Person under its existing HubSpot Company.
+                        {% endif %}
                     </p>
                     <label for="hubspotRecordType" class="form-label">Record type</label>
                     <select class="form-select mb-3" id="hubspotRecordType" name="record_type" required>
