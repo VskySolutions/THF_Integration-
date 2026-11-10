@@ -29,11 +29,11 @@ CONTAINER_CONTENT_TYPE = (
 
 
 TIMESHEET_FIELDS = [
-    "activitynumber",
+    # "activitynumber",
     "approvedbysuperior",
     "employeenumber",
     "instancekey",
-    "jobnumber",
+    # "jobnumber",
     "linenumber",
     "numberday1",
     "numberday2",
@@ -42,18 +42,17 @@ TIMESHEET_FIELDS = [
     "numberday5",
     "numberday6",
     "numberday7",
-    "descriptionday1",
-    "descriptionday2",
-    "descriptionday3",
-    "descriptionday4",
-    "descriptionday5",
-    "descriptionday6",
-    "descriptionday7",
+    # "descriptionday1",
+    # "descriptionday2",
+    # "descriptionday3",
+    # "descriptionday4",
+    # "descriptionday5",
+    # "descriptionday6",
+    # "descriptionday7",
     "periodstart",
     "taskname",
-    "weektotal",
     "entityname",
-    "specification4name",
+    
 ]
 
 
@@ -96,6 +95,12 @@ class MaconomyTimesheetService:
             f"{shortname}/timesheetlines"
         )
 
+        self.entities_url = (
+            f"{settings.maconomy_url}"
+            f"/maconomy-api/containers/"
+            f"{shortname}/entities"
+        )
+
     async def get_approved_timesheet_lines(
         self,
         *,
@@ -116,6 +121,94 @@ class MaconomyTimesheetService:
                 period_start_to=period_start_to,
             )
         )
+
+    async def get_entity_descriptions_by_code(
+        self,
+    ) -> dict[str, str]:
+        """Return active Maconomy Entity descriptions by code."""
+
+        response = await self._post(
+            "/filter",
+            {
+                "fields": [
+                    "entityname",
+                    "description",
+                    "blocked",
+                ],
+                "offset": 0,
+                "limit": 1000,
+            },
+            base_url=self.entities_url,
+        )
+
+        try:
+            records = response.json()["panes"][
+                "filter"
+            ]["records"]
+        except (KeyError, TypeError, ValueError) as exc:
+            raise MaconomyTimesheetServiceError(
+                "Invalid Maconomy Entity filter response"
+            ) from exc
+
+        if not isinstance(records, list):
+            raise MaconomyTimesheetServiceError(
+                "Invalid Maconomy Entity filter response"
+            )
+
+        descriptions_by_code: dict[str, str] = {}
+
+        for record in records:
+            if not isinstance(record, dict):
+                raise MaconomyTimesheetServiceError(
+                    "Invalid Maconomy Entity record"
+                )
+
+            data = record.get("data")
+
+            if not isinstance(data, dict):
+                raise MaconomyTimesheetServiceError(
+                    "Invalid Maconomy Entity record"
+                )
+
+            if data.get("blocked") is True:
+                continue
+
+            entity_code = str(
+                data.get("entityname") or ""
+            ).strip()
+            description = " ".join(
+                str(
+                    data.get("description") or ""
+                ).split()
+            )
+
+            if not entity_code or not description:
+                continue
+
+            existing_description = (
+                descriptions_by_code.get(entity_code)
+            )
+
+            if (
+                existing_description is not None
+                and existing_description.casefold()
+                != description.casefold()
+            ):
+                raise MaconomyTimesheetServiceError(
+                    "Multiple Maconomy Entity descriptions "
+                    f"were returned for code {entity_code}"
+                )
+
+            descriptions_by_code[
+                entity_code
+            ] = description
+
+        if not descriptions_by_code:
+            raise MaconomyTimesheetServiceError(
+                "Maconomy returned no usable Entities"
+            )
+
+        return descriptions_by_code
 
     async def _headers(
         self,
@@ -282,13 +375,15 @@ class MaconomyTimesheetService:
         self,
         path: str,
         payload: dict[str, Any],
+        *,
+        base_url: str | None = None,
     ) -> httpx.Response:
         headers = await self._headers()
+        request_url = f"{base_url or self.timesheet_lines_url}{path}"
 
         try:
             response = await self.client.post(
-                f"{self.timesheet_lines_url}"
-                f"{path}",
+                request_url,
                 headers=headers,
                 json=payload,
             )
@@ -305,8 +400,7 @@ class MaconomyTimesheetService:
                 headers = await self._headers()
 
                 response = await self.client.post(
-                    f"{self.timesheet_lines_url}"
-                    f"{path}",
+                    request_url,
                     headers=headers,
                     json=payload,
                 )
@@ -353,7 +447,7 @@ class MaconomyTimesheetService:
             MAX_TIMESHEET_FILTER_PAGES
         ):
             payload = {
-                "fields": TIMESHEET_FIELDS,
+                "fields": list(TIMESHEET_FIELDS),
                 "restriction": restriction,
                 "offset": offset,
                 "limit": TIMESHEET_PAGE_SIZE,
@@ -372,6 +466,13 @@ class MaconomyTimesheetService:
             ) = self._parse_filter_page(
                 response
             )
+            
+            if row_offset != offset:
+                raise MaconomyTimesheetServiceError(
+                    "Maconomy timesheet filter returned "
+                    f"offset {row_offset}; expected {offset}"
+                )
+            
 
             results.extend(records)
 
@@ -597,8 +698,23 @@ class MaconomyTimesheetService:
         value: Any,
         field_name: str,
     ) -> int | None:
-        if value is None or value == "":
+        if value is None:
             return None
+
+        if isinstance(value, int) and value == -1:
+            return None
+
+        if isinstance(value, str):
+            normalized_value = value.strip()
+
+            if normalized_value in {"", "-1"}:
+                return None
+
+            if (
+                normalized_value.endswith("+")
+                and normalized_value[:-1].isdigit()
+            ):
+                return None
 
         return cls._parse_filter_count(
             value,

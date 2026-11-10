@@ -224,10 +224,10 @@
                     <option value="create">Create employee</option>
                     <option value="update">Update employee</option>
                 </select>
-                <label for="paycorEmployeeId" class="form-label">Paycor employee ID</label>
-                <input type="text" class="form-control font-monospace" id="paycorEmployeeId"
-                       name="paycor_employee_id" maxlength="36" autocomplete="off"
-                       placeholder="Employee UUID" required>
+                <label for="paycorEmployeeNumber" class="form-label">Paycor employee number</label>
+                <input type="text" class="form-control font-monospace" id="paycorEmployeeNumber"
+                       name="paycor_employee_number" maxlength="100" autocomplete="off"
+                       placeholder="Employee number" required>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
@@ -282,7 +282,7 @@
             bootstrap.Tooltip.getInstance(this)?.hide();
         });
         $('#paycorRetryModal').on('shown.bs.modal', function () {
-            $('#paycorEmployeeId').trigger('focus');
+            $('#paycorEmployeeNumber').trigger('focus');
         });
         $('#paycorRetryForm').on('submit', function () {
             const submitButton = $('#submitPaycorRetry');

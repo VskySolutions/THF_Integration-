@@ -1,5 +1,6 @@
 """Service for reading and creating employees in Maconomy."""
 
+import asyncio
 import base64
 import uuid
 from typing import Any
@@ -125,6 +126,52 @@ class MaconomyEmployeeService:
                 "Unable to retrieve Maconomy employees"
             ) from exc
 
+    async def get_employee_reference_lookups(
+        self,
+    ) -> tuple[dict[str, str], dict[str, str]]:
+        """Return Entity and Specification 4 codes by description."""
+
+        try:
+            async with httpx.AsyncClient(
+                timeout=self.timeout
+            ) as client:
+                reconnect_token = (
+                    await self._get_reconnect_token(
+                        client
+                    )
+                )
+
+                (
+                    entities_by_description,
+                    specification4_by_description,
+                ) = await asyncio.gather(
+                    self._get_reference_lookup(
+                        client,
+                        reconnect_token,
+                        container_name="entities",
+                        code_field="entityname",
+                    ),
+                    self._get_reference_lookup(
+                        client,
+                        reconnect_token,
+                        container_name="specification4",
+                        code_field="specification4name",
+                    ),
+                )
+
+                return (
+                    entities_by_description,
+                    specification4_by_description,
+                )
+
+        except MaconomyEmployeeServiceError:
+            raise
+        except httpx.HTTPError as exc:
+            raise MaconomyEmployeeServiceError(
+                "Unable to retrieve Maconomy employee "
+                "reference data"
+            ) from exc
+
     async def create_employee(
         self,
         paycor_employee_data: dict[str, Any],
@@ -233,6 +280,18 @@ class MaconomyEmployeeService:
             )
 
         try:
+            expected_paycor_employee_number = str(
+                paycor_employee_data.get(
+                    "employeeNumber",
+                    "",
+                )
+            ).strip()
+
+            if not expected_paycor_employee_number:
+                raise ValueError(
+                    "Paycor employee number is required"
+                )
+
             expected_paycor_employee_id = str(
                 uuid.UUID(
                     str(
@@ -310,6 +369,16 @@ class MaconomyEmployeeService:
                     raise MaconomyEmployeeServiceError(
                         "Maconomy returned a different "
                         "employee number"
+                    )
+
+                if (
+                    loaded_employee_number
+                    != expected_paycor_employee_number
+                ):
+                    raise MaconomyEmployeeServiceError(
+                        "Maconomy employee number does not match "
+                        "the Paycor employee number; "
+                        "manual reconciliation is required"
                     )
 
                 current_paycor_employee_id = str(
@@ -459,7 +528,7 @@ class MaconomyEmployeeService:
         client: httpx.AsyncClient,
         reconnect_token: str,
     ) -> set[str]:
-        url = f"{self._employees_url()}/filter"
+        url = f"{self._employees_read_url()}/filter"
         headers = self._container_headers(reconnect_token)
 
         employee_numbers: set[str] = set()
@@ -561,10 +630,12 @@ class MaconomyEmployeeService:
                     employee_number
                 ).strip()
 
-                if normalized_employee_number:
-                    employee_numbers.add(
-                        normalized_employee_number
-                    )
+                if not normalized_employee_number:
+                    continue
+
+                employee_numbers.add(
+                    normalized_employee_number
+                )
 
             next_offset = row_offset + row_count
 
@@ -586,6 +657,117 @@ class MaconomyEmployeeService:
             "Maconomy employee filter exceeded "
             "the maximum page limit"
         )
+
+    async def _get_reference_lookup(
+        self,
+        client: httpx.AsyncClient,
+        reconnect_token: str,
+        *,
+        container_name: str,
+        code_field: str,
+    ) -> dict[str, str]:
+        shortname = quote(
+            self.settings.maconomy_shortname,
+            safe="",
+        )
+        url = (
+            f"{self.settings.maconomy_url}"
+            "/maconomy-api/containers/"
+            f"{shortname}/{container_name}/filter"
+        )
+        response = await client.post(
+            url,
+            headers=self._container_headers(
+                reconnect_token
+            ),
+            json={
+                "fields": [
+                    code_field,
+                    "description",
+                    "blocked",
+                ],
+                "offset": 0,
+                "limit": 1000,
+            },
+        )
+        response.raise_for_status()
+
+        try:
+            filter_pane = response.json()["panes"][
+                "filter"
+            ]
+            records = filter_pane["records"]
+        except (KeyError, TypeError, ValueError) as exc:
+            raise MaconomyEmployeeServiceError(
+                "Invalid Maconomy "
+                f"{container_name} filter response"
+            ) from exc
+
+        if not isinstance(records, list):
+            raise MaconomyEmployeeServiceError(
+                "Invalid Maconomy "
+                f"{container_name} filter response"
+            )
+
+        lookup: dict[str, str] = {}
+
+        for record in records:
+            if not isinstance(record, dict):
+                raise MaconomyEmployeeServiceError(
+                    "Invalid Maconomy "
+                    f"{container_name} record"
+                )
+
+            data = record.get("data")
+
+            if not isinstance(data, dict):
+                raise MaconomyEmployeeServiceError(
+                    "Invalid Maconomy "
+                    f"{container_name} record"
+                )
+
+            if data.get("blocked") is True:
+                continue
+
+            description_value = data.get(
+                "description"
+            )
+            code_value = data.get(code_field)
+
+            description = (
+                str(description_value).strip()
+                if description_value is not None
+                else ""
+            )
+            code = (
+                str(code_value).strip()
+                if code_value is not None
+                else ""
+            )
+
+            if not description or not code:
+                continue
+
+            normalized_description = (
+                " ".join(description.split()).casefold()
+            )
+            existing_code = lookup.get(
+                normalized_description
+            )
+
+            if (
+                existing_code is not None
+                and existing_code != code
+            ):
+                raise MaconomyEmployeeServiceError(
+                    "Maconomy reference data contains "
+                    "multiple active codes for description "
+                    f"{description!r}"
+                )
+
+            lookup[normalized_description] = code
+
+        return lookup
 
     async def _start_employee_creation(
         self,
@@ -884,13 +1066,12 @@ class MaconomyEmployeeService:
         headers["Maconomy-Concurrency-Control"] = (
             concurrency_token
         )
-
         response = await client.post(
             url,
             headers=headers,
             json={"data": employee_data},
         )
-
+        
         if response.is_error:
             response_text = (
                 response.text.strip()
@@ -994,6 +1175,18 @@ class MaconomyEmployeeService:
             f"{self.settings.maconomy_url}"
             f"/maconomy-api/containers/"
             f"{shortname}/employees"
+        )
+
+    def _employees_read_url(self) -> str:
+        shortname = quote(
+            self.settings.maconomy_shortname,
+            safe="",
+        )
+
+        return (
+            f"{self.settings.maconomy_url}"
+            "/maconomy-api/containers/"
+            f"{shortname}/showemployeeshr"
         )
         
     def _employee_revisions_url(self) -> str:

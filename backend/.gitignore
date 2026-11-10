@@ -12,3 +12,4 @@ sdlc-processes
 code_ref
 ./backend/sdlc-processes
 ../sdlc-processes
+.env.t01

@@ -1,7 +1,6 @@
 """Paycor employee update routes."""
 
 import logging
-import uuid
 from typing import Annotated, Any
 
 from fastapi import (
@@ -43,7 +42,7 @@ DatabaseSession = Annotated[
 
 
 @router.post(
-    "/employees/{paycor_employee_id}"
+    "/employees/by-number/{paycor_employee_number}"
     "/update-with-maconomy",
     response_model=dict[str, Any],
     dependencies=[
@@ -56,7 +55,7 @@ DatabaseSession = Annotated[
     ],
 )
 async def update_employee_with_maconomy(
-    paycor_employee_id: uuid.UUID,
+    paycor_employee_number: str,
     session: DatabaseSession,
 ) -> dict[str, Any]:
     """Update one Maconomy employee using Paycor data."""
@@ -64,10 +63,10 @@ async def update_employee_with_maconomy(
     try:
         return await (
             PaycorEmployeeSyncService()
-            .update_employee_by_id(
+            .update_employee_by_number(
                 session,
-                paycor_employee_id=(
-                    paycor_employee_id
+                paycor_employee_number=(
+                    paycor_employee_number
                 ),
             )
         )

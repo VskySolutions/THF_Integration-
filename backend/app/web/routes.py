@@ -1,4 +1,5 @@
 import uuid
+from datetime import date, timedelta
 from typing import Annotated
 from urllib.parse import quote
 
@@ -22,7 +23,10 @@ from app.features.hubspot_integration.models import HubSpotIntegrationRunLog
 from app.features.maconomy_caseware_cloud_intergration.models import (
     MaconomyCasewareRequestLog,
 )
-from app.features.paycor_integration.models import PaycorIntegrationLog
+from app.features.paycor_integration.models import (
+    PaycorIntegrationLog,
+    PaycorTimesheetIntegrationLog,
+)
 from app.features.paycor_payroll_integration.models import PaycorPayrollIntegrationLog
 from app.features.sap_concur_integration.models import SAPConcurIntegrationLog
 from app.features.user_activity.models import UserActivityLog
@@ -337,7 +341,7 @@ async def retry_paycor_employee(
     current_user: AuthenticatedUser,
     csrf_token: Annotated[str, Form(min_length=1)],
     retry_action: Annotated[str, Form(min_length=1)],
-    paycor_employee_id: Annotated[str, Form(min_length=1, max_length=36)],
+    paycor_employee_number: Annotated[str, Form(min_length=1, max_length=100)],
     session: Annotated[AsyncSession, Depends(get_db)],
 ) -> RedirectResponse:
     """Manually retry a Paycor employee create or update synchronization."""
@@ -367,11 +371,15 @@ async def retry_paycor_employee(
         request.url_for("integration_logs", integration_id=integration.id),
         status_code=status.HTTP_303_SEE_OTHER,
     )
-    normalized_employee_id = paycor_employee_id.strip()
-    try:
-        employee_id = uuid.UUID(normalized_employee_id)
-    except ValueError:
-        _set_flash(request, "Enter a valid Paycor employee ID (UUID).", "danger")
+    normalized_employee_number = (
+        paycor_employee_number.strip()
+    )
+    if not normalized_employee_number:
+        _set_flash(
+            request,
+            "Enter a valid Paycor employee number.",
+            "danger",
+        )
         return redirect
 
     paths_by_action = {
@@ -384,12 +392,18 @@ async def retry_paycor_employee(
         return redirect
 
     settings = get_settings()
+    encoded_employee_number = quote(
+        normalized_employee_number,
+        safe="",
+    )
     sync_path = (
         f"{settings.api_v1_prefix.rstrip('/')}/paycor/employees/"
-        f"{employee_id}/{endpoint_action}"
+        f"by-number/{encoded_employee_number}/{endpoint_action}"
     )
     activity_data = {
-        "paycor_employee_id": str(employee_id),
+        "paycor_employee_number": (
+            normalized_employee_number
+        ),
         "retry_action": retry_action,
         "integration_id": str(integration.id),
     }
@@ -449,7 +463,187 @@ async def retry_paycor_employee(
     operation = "create" if retry_action == "create" else "update"
     _set_flash(
         request,
-        f"Paycor employee {employee_id} {operation} retry completed successfully.",
+        "Paycor employee "
+        f"{normalized_employee_number} {operation} retry "
+        "completed successfully.",
+        "success",
+    )
+    return redirect
+
+
+@router.post(
+    "/integrations/{integration_id}/retry-paycor-timesheets",
+    name="retry_paycor_timesheets",
+    include_in_schema=False,
+)
+async def retry_paycor_timesheets(
+    integration_id: uuid.UUID,
+    request: Request,
+    current_user: AuthenticatedUser,
+    csrf_token: Annotated[str, Form(min_length=1)],
+    start_date: Annotated[str, Form(min_length=10, max_length=10)],
+    end_date: Annotated[str, Form(min_length=10, max_length=10)],
+    session: Annotated[AsyncSession, Depends(get_db)],
+) -> RedirectResponse:
+    """Manually retry one Maconomy timesheet source week."""
+
+    if not valid_csrf_token(request, csrf_token):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired form token.",
+        )
+
+    result = await session.execute(
+        select(IntegrationService).where(
+            IntegrationService.id == integration_id,
+            IntegrationService.identifier_unique_name
+            == IntegrationServiceIdentifier
+            .PAYCOR_SYNC_TIMESHEETS.value,
+            IntegrationService.is_deleted.is_(False),
+        )
+    )
+    integration = result.scalar_one_or_none()
+
+    if integration is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                "Paycor timesheet synchronization "
+                "integration service not found."
+            ),
+        )
+
+    redirect = RedirectResponse(
+        request.url_for(
+            "integration_logs",
+            integration_id=integration.id,
+        ),
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+    try:
+        parsed_start_date = date.fromisoformat(
+            start_date.strip()
+        )
+        parsed_end_date = date.fromisoformat(
+            end_date.strip()
+        )
+    except ValueError:
+        _set_flash(
+            request,
+            "Enter valid start and end dates.",
+            "danger",
+        )
+        return redirect
+
+    if (
+        parsed_end_date - parsed_start_date
+        != timedelta(days=6)
+        or parsed_start_date.weekday() != 0
+        or parsed_end_date.weekday() != 6
+    ):
+        _set_flash(
+            request,
+            "Select one complete Monday-through-Sunday week.",
+            "danger",
+        )
+        return redirect
+
+    settings = get_settings()
+    sync_path = (
+        f"{settings.api_v1_prefix.rstrip('/')}"
+        "/paycor/timesheets/paygrid-by-daterange"
+    )
+    activity_data = {
+        "start_date": parsed_start_date.isoformat(),
+        "end_date": parsed_end_date.isoformat(),
+        "integration_id": str(integration.id),
+    }
+
+    try:
+        async with httpx.AsyncClient(
+            base_url=settings.scheduler_api_url,
+            headers={
+                "X-API-KEY": (
+                    settings.scheduler_api_key
+                    .get_secret_value()
+                ),
+                "X-Request-ID": str(
+                    request.state.request_id
+                ),
+                "Accept": "*/*",
+            },
+            timeout=httpx.Timeout(
+                settings.scheduler_request_timeout_seconds
+            ),
+        ) as client:
+            response = await client.post(
+                sync_path,
+                params={
+                    "start_date": (
+                        parsed_start_date.isoformat()
+                    ),
+                    "end_date": (
+                        parsed_end_date.isoformat()
+                    ),
+                },
+            )
+    except httpx.RequestError:
+        await log_activity(
+            session,
+            action="manual_retry",
+            user=current_user.username,
+            service=integration.identifier_unique_name,
+            data=activity_data,
+            status="FAILED",
+        )
+        _set_flash(
+            request,
+            "The Paycor timesheet integration API could "
+            "not be reached. Please try again.",
+            "danger",
+        )
+        return redirect
+
+    payload_value = _json_response_value(response)
+    payload = (
+        payload_value
+        if isinstance(payload_value, dict)
+        else {}
+    )
+
+    if not response.is_success:
+        await log_activity(
+            session,
+            action="manual_retry",
+            user=current_user.username,
+            service=integration.identifier_unique_name,
+            data=activity_data,
+            status="FAILED",
+        )
+        _set_flash(
+            request,
+            _internal_api_error(
+                payload,
+                response.status_code,
+            ),
+            "danger",
+        )
+        return redirect
+
+    await log_activity(
+        session,
+        action="manual_retry",
+        user=current_user.username,
+        service=integration.identifier_unique_name,
+        data=activity_data,
+        status="SUCCESS",
+    )
+    batch_count = payload.get("batchCount", 0)
+    _set_flash(
+        request,
+        "Paycor timesheet retry completed for "
+        f"{batch_count} batch(es).",
         "success",
     )
     return redirect
@@ -797,6 +991,82 @@ async def integration_logs(
                     ),
                     "latest_activity": (
                         activity_logs[0] if activity_logs else None
+                    ),
+                },
+                "flash_message": flash_message,
+                "flash_category": flash_category,
+            },
+        )
+
+    if (
+        integration.identifier_unique_name
+        == IntegrationServiceIdentifier
+        .PAYCOR_SYNC_TIMESHEETS.value
+    ):
+        log_result = await session.execute(
+            select(PaycorTimesheetIntegrationLog)
+            .options(
+                selectinload(
+                    PaycorTimesheetIntegrationLog
+                    .timesheet_batch
+                )
+            )
+            .order_by(
+                PaycorTimesheetIntegrationLog
+                .created_on_utc.desc()
+            )
+            .limit(1000)
+        )
+        activity_logs = list(
+            log_result.scalars().all()
+        )
+        total_logs = len(activity_logs)
+        accepted_logs = sum(
+            log.status.value == "ACCEPTED"
+            for log in activity_logs
+        )
+
+        return templates.TemplateResponse(
+            request=request,
+            name="paycor_timesheet_dashboard.html",
+            context={
+                "current_user": current_user,
+                "csrf_token": ensure_csrf_token(request),
+                "integration": integration,
+                "activity_logs": activity_logs,
+                "metrics": {
+                    "total_activity": total_logs,
+                    "accepted": accepted_logs,
+                    "failed": sum(
+                        log.status.value == "FAILED"
+                        for log in activity_logs
+                    ),
+                    "unknown": sum(
+                        log.status.value == "UNKNOWN"
+                        for log in activity_logs
+                    ),
+                    "append": sum(
+                        log.submission_mode.value == "APPEND"
+                        for log in activity_logs
+                    ),
+                    "replace": sum(
+                        log.submission_mode.value == "REPLACE"
+                        for log in activity_logs
+                    ),
+                    "success_rate": (
+                        round(
+                            accepted_logs
+                            / total_logs
+                            * 100,
+                            1,
+                        )
+                        if total_logs
+                        else 0
+                    ),
+                    "latest_activity": (
+                        activity_logs[0]
+                        if activity_logs
+                        else None
                     ),
                 },
                 "flash_message": flash_message,
