@@ -155,7 +155,7 @@ async def sync_customer_by_number(
                 session,
                 run_log,
                 failure_stage="MACONOMY_CUSTOMER_LOOKUP",
-                error_message="Unable to retrieve the Customer from Maconomy",
+                error_message="2 Unable to retrieve the Customer from Maconomy",
                 failed_records=_failed_record(
                     "customer",
                     normalized_customer_number,
@@ -163,7 +163,7 @@ async def sync_customer_by_number(
                 ),
             )
             raise _upstream_error(
-                "Unable to retrieve the Customer from Maconomy",
+                "2 Unable to retrieve the Customer from Maconomy",
                 exc,
             ) from exc
 
