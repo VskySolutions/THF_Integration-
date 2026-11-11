@@ -112,6 +112,13 @@ class MaconomyInvoiceService:
             f"/maconomy-api/containers/{shortname}/vendorinvoiceallocation"
         )
 
+    def _show_vendor_invoices_url(self) -> str:
+        shortname = quote(self.settings.maconomy_shortname, safe="")
+        return (
+            f"{self.settings.maconomy_url}"
+            f"/maconomy-api/containers/{shortname}/showvendorinvoices"
+        )
+
     async def _retrieve_vendor_invoice_instance(
         self,
         client: httpx.AsyncClient,
@@ -334,6 +341,146 @@ class MaconomyInvoiceService:
             if candidate is not None and str(candidate).strip():
                 return str(candidate).strip()
         return ""
+
+    # ==================== Pre-check: already-synced invoices
+    # (WO[#27.11]) ====================
+
+    @staticmethod
+    def _build_remark5_restriction(invoice_ids: list[str]) -> str:
+        """or-joined ``remark5 = '<id>'`` clauses (user 2026-11-11).
+
+        Escapes ``'`` -> ``''`` and drops blanks (NFR-3
+        restriction-injection convention; mirrors expense
+        ``_build_or_restriction``).
+        """
+        escaped = [
+            str(v).strip().replace("'", "''")
+            for v in invoice_ids
+            if v is not None and str(v).strip()
+        ]
+        return " or ".join(f"remark5 = '{v}'" for v in escaped)
+
+    async def _get_maconomy_invoices_by_ids(
+        self,
+        client: httpx.AsyncClient,
+        reconnect_token: str,
+        invoice_ids: list[str],
+    ) -> list[dict[str, Any]]:
+        """ONE ``showvendorinvoices/filter`` call for the whole window.
+
+        Payload per user 2026-11-11: fields list + ``remark5`` (D-2 —
+        required to map records back to Concur ids) + ``limit 500``
+        (D-3). Returns ``{"sap_invoice_id", "invoicenumber",
+        "journalnumber", "linenumber", "instancekey"}`` per record with
+        a non-blank ``remark5`` (blank skipped — expense L1333-1345
+        pattern); HTTP errors bubble to the public wrapper, bad JSON
+        shapes raise ``MaconomyInvoiceServiceError``.
+        """
+        payload = {
+            "restriction": self._build_remark5_restriction(invoice_ids),
+            "fields": [
+                "amountcurrency",
+                "currency",
+                "entrydate",
+                "entrytext",
+                "exchangerate",
+                "fixedexchangerateforpayment",
+                "instancekey",
+                "invoicenumber",
+                "journalnumber",
+                "linenumber",
+                "name1",
+                "transactionnumber",
+                "vendornumber",
+                "remark5",
+            ],
+            "limit": 500,
+        }
+        response = await client.post(
+            f"{self._show_vendor_invoices_url()}/filter",
+            headers=self._container_headers(reconnect_token),
+            json=payload,
+        )
+        response.raise_for_status()
+
+        try:
+            records = response.json()["panes"]["filter"]["records"]
+        except (KeyError, TypeError, ValueError) as exc:
+            raise MaconomyInvoiceServiceError(
+                "Invalid showvendorinvoices response"
+            ) from exc
+
+        existing: list[dict[str, Any]] = []
+        for record in records:
+            if not (
+                isinstance(record, dict)
+                and isinstance(record.get("data"), dict)
+            ):
+                continue
+            data = record["data"]
+            sap_invoice_id = str(data.get("remark5") or "").strip()
+            if not sap_invoice_id:
+                continue
+            existing.append(
+                {
+                    "sap_invoice_id": sap_invoice_id,
+                    "invoicenumber": data.get("invoicenumber"),
+                    "journalnumber": data.get("journalnumber"),
+                    "linenumber": data.get("linenumber"),
+                    "instancekey": data.get("instancekey"),
+                }
+            )
+
+        # Tripwires (expense pattern): records without remark5 would let
+        # everything proceed; rowCount == limit risks truncation.
+        if records and not existing:
+            print(
+                "WARNING: Maconomy returned",
+                len(records),
+                "record(s) but none carried remark5 -",
+                "every invoice will proceed to creation. "
+                "Investigate the raw response.",
+            )
+        if len(records) >= payload["limit"]:
+            print(
+                "WARNING: showvendorinvoices/filter returned",
+                len(records),
+                "record(s) (== limit) - possible truncation; "
+                "already-synced invoices beyond the limit may proceed.",
+            )
+        return existing
+
+    async def get_existing_invoice_ids(
+        self, invoice_ids: list[str]
+    ) -> list[dict[str, Any]]:
+        """SAP Concur ids ALREADY synced in Maconomy (via ``remark5``).
+
+        Pre-check for invoice creation (WO[#27.11], user 2026-11-11);
+        mirrors expense ``get_expense_sheets_by_report_ids``: blank-only
+        input -> ``[]`` with no HTTP call, otherwise one filtered
+        retrieval for the whole sync window.
+        """
+        if not any(v is not None and str(v).strip() for v in invoice_ids):
+            print(
+                "No SAP Concur invoice IDs provided; "
+                "skipping Maconomy precheck"
+            )
+            return []
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                reconnect_token = await self._get_reconnect_token(client)
+                existing = await self._get_maconomy_invoices_by_ids(
+                    client, reconnect_token, invoice_ids
+                )
+        except httpx.HTTPError as exc:
+            raise MaconomyInvoiceServiceError(
+                f"Maconomy showvendorinvoices request failed: {exc}"
+            ) from exc
+        print(
+            f"========= Precheck: {len(existing)} existing "
+            f"invoice(s) found ========="
+        )
+        return existing
 
     async def create_journal_with_invoices(
         self,

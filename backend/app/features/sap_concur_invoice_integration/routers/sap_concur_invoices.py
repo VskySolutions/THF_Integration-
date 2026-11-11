@@ -14,11 +14,17 @@ invoice 1's lines -> row 2 -> invoice 2's lines -> ... — inside
 DB logging (WO[#27.9]): mapping + integration-log rows written at the
 stage boundaries (reference: sap_concur_integration router pattern) —
 logging never masks or changes the sync outcome.
+
+Pre-check (WO[#27.11]): once all Concur invoices are retrieved, one
+filtered Maconomy call (``remark5`` = Concur invoice id) finds invoices
+already synced — only the non-matching ones proceed to creation;
+matched invoices get a SKIPPED integration-log row.
 """
 
 import uuid
 from typing import Annotated, Any
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -49,14 +55,15 @@ DatabaseSession = Annotated[AsyncSession, Depends(get_db)]
 
 
 def _sap_line_id(line_item: dict[str, Any] | None, line_index: int) -> str:
-    """Best-effort SAP Concur line id for the allocation-map key (WO[#27.9]).
+    """SAP Concur line id for the allocation-map key (WO[#27.9], WO[#27.12]).
 
-    ``ID`` -> ``LineNumber`` -> ``str(line_index)`` fallback (the exact
-    Concur line-id key is a live-confirm point; the fallback keeps the
-    map complete).
+    ``LineItemId`` -> ``ID`` -> ``LineNumber`` -> ``str(line_index)``
+    fallback. ``LineItemId`` is the live-confirmed per-line id (2026-11-11
+    probe, e.g. ``D5FC26E64574214DB85F31860CC12CBB``); the index fallback
+    is last resort only, so the map stays complete if a line has no id.
     """
     if isinstance(line_item, dict):
-        for key in ("ID", "LineNumber"):
+        for key in ("LineItemId", "ID", "LineNumber"):
             value = line_item.get(key)
             if value is not None and str(value).strip():
                 return str(value).strip()
@@ -64,12 +71,15 @@ def _sap_line_id(line_item: dict[str, Any] | None, line_index: int) -> str:
 
 
 def _extract_allocation_line_number(result: Any) -> str | None:
-    """Maconomy allocation line number from a line-POST response (WO[#27.9]).
+    """Maconomy allocation line number from a line-POST response
+    (WO[#27.9], WO[#27.12]).
 
     Guarded paths mirroring ``_extract_row_line_number`` (service,
     read-only): ``panes -> table -> records -> data -> linenumber``
-    (list scanned for the first non-empty) -> ``data.linenumber`` ->
-    root ``linenumber`` -> ``None``.
+    (list scanned in REVERSE — the just-created line is the last
+    record, expense ``records[-1]`` convention; present only because
+    ``linenumber`` is in the instance table slice, WO[#27.12] Step 1)
+    -> ``data.linenumber`` -> root ``linenumber`` -> ``None``.
     """
     if not isinstance(result, dict):
         return None
@@ -79,7 +89,7 @@ def _extract_allocation_line_number(result: Any) -> str | None:
     table = panes.get("table") if isinstance(panes, dict) else None
     records = table.get("records") if isinstance(table, dict) else None
     if isinstance(records, list):
-        for record in records:
+        for record in reversed(records):
             data = record.get("data") if isinstance(record, dict) else None
             if isinstance(data, dict):
                 candidates.append(data.get("linenumber"))
@@ -169,6 +179,106 @@ async def sync_sap_concur_invoices(
             detail=str(exc),
         ) from exc
 
+    # --- Pre-check (WO[#27.11], user 2026-11-11): collect the Concur
+    # invoice ids of this window (step 1), ask Maconomy which of them
+    # already exist via remark5 (step 2), compare both ends (step 3)
+    # and let only the non-matching proceed (step 4). Mirrors the
+    # expense report pre-check (sap_concur_integration). ---
+    concur_invoice_ids: list[str] = []
+    for entry in results:
+        invoice = entry.get("invoice") or {}
+        lookup_id = str(
+            invoice.get("PaymentRequestId") or invoice.get("ID") or ""
+        ).strip()
+        if lookup_id:
+            concur_invoice_ids.append(lookup_id)
+
+    if concur_invoice_ids:
+        try:
+            existing_invoices = (
+                await MaconomyInvoiceService().get_existing_invoice_ids(
+                    concur_invoice_ids
+                )
+            )
+        except (MaconomyInvoiceServiceError, httpx.HTTPError) as exc:
+            # Fail-closed: without the pre-check a re-run could create
+            # duplicate rows -> log BEFORE the 500 (WO[#27.9] pattern;
+            # mirrors expense REPORT_FETCH handling).
+            await _save_integration_log(
+                session,
+                mapping_id=None,
+                invoice_id="N/A",
+                status=IntegrationStatus.FAILED,
+                stage=ProcessingStage.INVOICE_FETCH,
+                message=(
+                    "Failed to pre-check existing Maconomy invoices: "
+                    f"{str(exc)[:1000]}"
+                ),
+                details={"stage": "INVOICE_FETCH", "error": str(exc)[:1000]},
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=str(exc),
+            ) from exc
+    else:
+        existing_invoices = []
+
+    synced_invoice_ids: set[str] = {
+        str(item.get("sap_invoice_id") or "").strip()
+        for item in existing_invoices
+        if item.get("sap_invoice_id")
+    }
+    existing_by_id: dict[str, dict[str, Any]] = {
+        str(item.get("sap_invoice_id") or "").strip(): item
+        for item in existing_invoices
+        if item.get("sap_invoice_id")
+    }
+    unexpected_synced_ids = sorted(
+        synced_invoice_ids - set(concur_invoice_ids)
+    )
+    if unexpected_synced_ids:
+        # Tripwire (expense pattern): the restriction should only
+        # return requested ids.
+        print(
+            "WARNING: Maconomy returned invoice ids that were NOT "
+            "requested - restriction may not be filtering:",
+            unexpected_synced_ids,
+        )
+
+    # Step 4: only invoices WITHOUT a Maconomy match proceed; matched
+    # ones are recorded as SKIPPED in the integration log (D-4) and
+    # never enter the journal phase.
+    new_results: list[dict[str, Any]] = []
+    for result_entry in results:
+        result_invoice = result_entry.get("invoice") or {}
+        result_invoice_id = str(
+            result_invoice.get("PaymentRequestId")
+            or result_invoice.get("ID")
+            or ""
+        ).strip()
+        if result_invoice_id and result_invoice_id in synced_invoice_ids:
+            # Blank-id invoices are not pre-checkable and proceed
+            # (D-5; the row mapper enforces remark5 at write time).
+            await _save_integration_log(
+                session,
+                mapping_id=None,
+                invoice_id=result_invoice_id,
+                status=IntegrationStatus.SKIPPED,
+                stage=ProcessingStage.JOURNAL_CREATION,
+                message=(
+                    f"Invoice {result_invoice_id} already exists in "
+                    "Maconomy (remark5 match) - creation skipped"
+                ),
+                details={
+                    "precheck": {
+                        "sap_invoice_id": result_invoice_id,
+                        "maconomy": existing_by_id.get(result_invoice_id),
+                    }
+                },
+            )
+            continue
+        new_results.append(result_entry)
+
     # --- Phases 3+4 in ONE pass (WO[#27.8]): entries pair each Concur
     # invoice with its lineItems; the service creates row N and then
     # immediately invoice N's allocation lines before row N+1 (FR-12
@@ -176,16 +286,17 @@ async def sync_sap_concur_invoices(
     # call). Line batches are NOT built here and no journalnumber
     # short-circuit lives in the router: linkage extraction (primary
     # path panes->card->records->data->journalnumber) and the D-6 skip
-    # are both inside the service. ---
+    # are both inside the service. Built from ``new_results`` (the
+    # pre-check already removed already-synced invoices). ---
     entries: list[dict[str, Any]] = [
         {
             "invoice": entry.get("invoice") or {},
             "lineItems": entry.get("lineItems") or [],
         }
-        for entry in results
+        for entry in new_results
     ]
     if not entries:
-        # No Concur invoices -> no journal is created (unchanged guard).
+        # No NEW invoices -> no journal is created (unchanged guard).
         response = {
             "invoice_create": False,
             "lines_created": False,
@@ -194,14 +305,24 @@ async def sync_sap_concur_invoices(
             "lines": [],
             "line_error": None,
         }
-        # --- Log point 1 (WO[#27.9]): empty retrieval -> SKIPPED. ---
+        # --- Log point 1 (WO[#27.9]): empty run -> SKIPPED; distinguish
+        # "nothing retrieved" from "all skipped by the pre-check". ---
+        if results:
+            empty_message = (
+                f"All {len(results)} retrieved invoice(s) already synced "
+                "in Maconomy; nothing to create"
+            )
+        else:
+            empty_message = (
+                "No SAP Concur invoices found in the current sync window"
+            )
         await _save_integration_log(
             session,
             mapping_id=None,
             invoice_id="N/A",
             status=IntegrationStatus.SKIPPED,
             stage=ProcessingStage.INVOICE_FETCH,
-            message="No SAP Concur invoices found in the current sync window",
+            message=empty_message,
             details=response,
         )
         return response

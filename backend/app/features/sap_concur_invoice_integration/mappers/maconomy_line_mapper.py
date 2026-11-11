@@ -5,7 +5,7 @@ Contents:
   (``{"row": "end"}``), reused by BOTH containers' table init.
 - ``build_vendor_invoice_allocation_instance_payload()`` — instance
   retrieval for ``vendorinvoiceallocation`` (stakeholder 62-field slice
-  from WO[#21.11] + the 2 Q-1 linkage fields = **64 table fields**;
+  from WO[#21.11] + ``linenumber`` (WO[#27.12]) = **63 table fields**;
   R-9 resolved 2026-11-10: Maconomy REJECTED the added ``unitprice``
   field name with 400 "Invalid field name 'unitprice'
   ... for the 'table' pane"; the container's valid unit-price field is
@@ -54,10 +54,12 @@ def build_vendor_invoice_allocation_instance_payload() -> dict[str, Any]:
     """Instance-retrieval payload for the vendorinvoiceallocation container.
 
     Card fields: empty (no card writes for allocation lines). Table
-    fields: stakeholder 62-field slice (WO[#21.11]) verbatim + the 2
-    Q-1 linkage fields (``journalnumber``/``journallinenumber``, user
-    2026-11-10 — the line payload writes both, so both must be sliced)
-    = **64 fields**. R-9 resolved 2026-11-10 (user-confirmed): the
+    fields: stakeholder 62-field slice (WO[#21.11]) verbatim +
+    ``linenumber`` = **63 fields** (WO[#27.12] — allocation-line
+    numbers must be returned on record projections; the Q-1 linkage
+    fields ``journalnumber``/``journallinenumber`` are un-sliced
+    container key fields — written/returned without slicing).
+    R-9 resolved 2026-11-10 (user-confirmed): the
     container has NO ``unitprice`` field (live 400), only
     ``unitpricecurrency`` which is already in the slice. SYNC RULE:
     every key of
@@ -200,6 +202,7 @@ def build_vendor_invoice_allocation_instance_payload() -> dict[str, Any]:
                 "lineapprovedorrejectedbyvar",
                 "linecurrentstatusvar",
                 "linelocalaccountdescriptionvar",
+                "linenumber",
                 "lineremarkvar",
                 "localaccountnumber",
                 "localspec10name",
@@ -292,8 +295,8 @@ def map_concur_invoice_line_to_allocation_row(
     Missing/empty mapped field raises ``ValueError`` naming the field(s)
     (service records the line FAILED and continues the batch); a
     non-numeric Unit Price or ``journallinenumber`` also raises
-    ``ValueError``. Every ``data`` key is covered by the 64-field
-    instance slice (10 ⊆ 64).
+    ``ValueError``. Every ``data`` key is covered by the 63-field
+    instance slice (10 ⊆ 63).
     """
     engagement = _concur_line_value(line_item, "Custom10", "Engagement")
     task = _concur_line_value(line_item, "Custom11", "Task")
