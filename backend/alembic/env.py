@@ -27,6 +27,10 @@ from app.features.maconomy_caseware_cloud_intergration.models import (  # noqa: 
 from app.features.xcm_cch_axcess_integration.models import (  # noqa: F401
     XCMCCHIntegrationRunLog,
 )
+from app.features.sap_concur_invoice_integration.models import (  # noqa: F401
+    SAPConcurInvoiceMapping,
+    SAPConcurInvoiceIntegrationLog,
+)
 
 config = context.config
 

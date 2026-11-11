@@ -51,7 +51,6 @@ class MaconomyInvoiceService:
         # return "NTE2NGM2NzYtMTdiNC00NDcyLTliNGUtMWVjODU4MzM5ODI3:M2M1NTM2ODctZWRiZi00MjFjLThhMGQtY2EzNDUyOTA1YjMyHzYyZjMzNTAxOThmZjRiMDE4NmQyMDQ1ZWQ3MDZlYjUzHzEwHzE3OTQzMTUzMTc4MjAfUGFzc3dvcmRMb2dpbh5XZWJMb2dpbh9vRFnTwZEY6gzzlY/E5WD3"
         shortname = quote(self.settings.maconomy_shortname, safe="")
         url = f"{self.settings.maconomy_url}/maconomy-api/auth/{shortname}/login"
-        print("URL:", url)
         credentials = (
             f"{self.settings.maconomy_username}:"
             f"{self.settings.maconomy_password.get_secret_value()}"
@@ -68,7 +67,6 @@ class MaconomyInvoiceService:
                 "Authorization": f"Basic {encoded_credentials}",
             },
         )
-        print(response.text)
         response.raise_for_status()
 
         token = response.headers.get("Maconomy-Reconnect", "").strip()
@@ -123,18 +121,11 @@ class MaconomyInvoiceService:
         payload = build_vendor_invoice_instance_payload()
 
         print("======= _retrieve_vendor_invoice_instance ==========")
-        # Debug: invoice API visibility — POST payload + status/body
-        print(f"[invoice-api] POST {url} payload={payload}")
         response = await client.post(
             url,
             headers=self._container_headers(reconnect_token),
             json=payload,
         )
-        print(response.text)
-        # print(
-        #     f"[invoice-api] POST {url} -> "
-        #     f"status={response.status_code} body={response.text}"
-        # )
         response.raise_for_status()
 
         try:
@@ -165,17 +156,11 @@ class MaconomyInvoiceService:
         headers = self._container_headers(reconnect_token)
         headers["Maconomy-Concurrency-Control"] = concurrency_token
         print("========= _initialize_vendor_invoice_card =========")
-        # Debug: invoice API visibility — POST payload + status/body
-        print(f"[invoice-api] POST {url} payload={{}}")
         response = await client.post(
             url,
             headers=headers,
             json={},
         )
-        # print(
-        #     f"[invoice-api] POST {url} -> "
-        #     f"status={response.status_code} body={response.text}"
-        # )
 
         response.raise_for_status()
 
@@ -212,17 +197,11 @@ class MaconomyInvoiceService:
         headers["Maconomy-Concurrency-Control"] = concurrency_token
         payload = build_vendor_invoice_table_init_payload()
         print("========= _initialize_vendor_invoice_table =========")
-        # Debug: invoice API visibility — POST payload + status/body
-        print(f"[invoice-api] POST {url} payload={payload}")
         response = await client.post(
             url,
             headers=headers,
             json=payload,
         )
-        # print(
-        #     f"[invoice-api] POST {url} -> "
-        #     f"status={response.status_code} body={response.text}"
-        # )
 
         response.raise_for_status()
 
@@ -407,9 +386,7 @@ class MaconomyInvoiceService:
         try:
             
             async with httpx.AsyncClient(timeout=self.timeout) as client:
-                print("Hi")
                 reconnect_token = await self._get_reconnect_token(client)
-                print("reconnect",reconnect_token)
 
                 instance_id, concurrency_token = (
                     await self._retrieve_vendor_invoice_instance(
@@ -417,7 +394,6 @@ class MaconomyInvoiceService:
                         reconnect_token=reconnect_token,
                     )
                 )
-                print("instance_id:", instance_id)
 
                 _, concurrency_token = await self._initialize_vendor_invoice_card(
                     client=client,
@@ -426,7 +402,6 @@ class MaconomyInvoiceService:
                     concurrency_token=concurrency_token,
                 )
 
-                print("concurrency_token:", concurrency_token)
                 # --- Create the journal (card pane, STATIC payload) ---
                 print("======== Journal Creation Started =========")
                 card_url = (
@@ -436,17 +411,10 @@ class MaconomyInvoiceService:
                 card_headers = self._container_headers(reconnect_token)
                 card_headers["Maconomy-Concurrency-Control"] = concurrency_token
                 card_payload = map_concur_invoice_to_maconomy_vendor_invoice()
-                # Debug: invoice API visibility — POST payload + status/body
-                print(f"[invoice-api] POST {card_url} payload={card_payload}")
                 card_response = await client.post(
                     card_url,
                     headers=card_headers,
                     json=card_payload,
-                )
-                print(
-                    f"[invoice-api] POST {card_url} -> "
-                    f"status={card_response.status_code} "
-                    f"body={card_response.text}"
                 )
                 card_response.raise_for_status()
 
@@ -517,20 +485,10 @@ class MaconomyInvoiceService:
                         row_headers["Maconomy-Concurrency-Control"] = (
                             concurrency_token
                         )
-                        # Debug: invoice API — payload + status/body
-                        print(
-                            f"[invoice-api] POST {table_url} "
-                            f"payload={row_payload}"
-                        )
                         row_response = await client.post(
                             table_url,
                             headers=row_headers,
                             json=row_payload,
-                        )
-                        print(
-                            f"[invoice-api] POST {table_url} -> "
-                            f"status={row_response.status_code} "
-                            f"body={row_response.text}"
                         )
                         row_response.raise_for_status()
 
@@ -559,7 +517,8 @@ class MaconomyInvoiceService:
                             # Diagnostic (user 2026-11-10 live miss):
                             # the load step needs this value — say so
                             # right where the row response was parsed
-                            # (the raw body is printed just above).
+                            # (response-body dumps removed per
+                            # WO[#27.10] — highlights only).
                             print(
                                 f"[invoice-api] WARN: no extractable "
                                 f"linenumber in row response "
@@ -655,16 +614,10 @@ class MaconomyInvoiceService:
         payload = build_vendor_invoice_allocation_instance_payload()
 
         print("======= _retrieve_vendor_invoice_allocation_instance ==========")
-        # Debug: invoice API visibility — POST payload + status/body
-        print(f"[invoice-api] POST {url} payload={payload}")
         response = await client.post(
             url,
             headers=self._container_headers(reconnect_token),
             json=payload,
-        )
-        print(
-            f"[invoice-api] POST {url} -> "
-            f"status={response.status_code} body={response.text}"
         )
         response.raise_for_status()
 
@@ -722,12 +675,7 @@ class MaconomyInvoiceService:
         headers["Maconomy-Concurrency-Control"] = concurrency_token
 
         print("========= _load_vendor_invoice_allocation_data =========")
-        print(f"[invoice-api] POST {url} payload={{}}")
         response = await client.post(url, headers=headers, json={})
-        print(
-            f"[invoice-api] POST {url} -> "
-            f"status={response.status_code} body={response.text}"
-        )
         try:
             response.raise_for_status()
         except httpx.HTTPError as exc:
@@ -756,13 +704,7 @@ class MaconomyInvoiceService:
         payload = build_vendor_invoice_table_init_payload()
 
         print("========= _initialize_vendor_invoice_allocation_table =========")
-        # Debug: invoice API visibility — POST payload + status/body
-        print(f"[invoice-api] POST {url} payload={payload}")
         response = await client.post(url, headers=headers, json=payload)
-        print(
-            f"[invoice-api] POST {url} -> "
-            f"status={response.status_code} body={response.text}"
-        )
         response.raise_for_status()
 
         try:

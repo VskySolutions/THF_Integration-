@@ -64,409 +64,189 @@ def build_vendor_invoice_allocation_instance_payload() -> dict[str, Any]:
     ``map_concur_invoice_line_to_allocation_row(...)["data"]`` must be
     present in this slice (Maconomy rejects writes to unsliced fields).
     """
-    # return {
-    #     "panes": {
-    #         "card": {"fields": []},
-    #         "table": {
-    #             "fields": [
-    #                 "accountnumber",
-    #                 "amountcurrency",
-    #                 "amountinclvatcurrency",
-    #                 "employeenamevar",
-    #                 "employeenumber",
-    #                 "entityname",
-    #                 "entrytext",
-    #                 "itemnumber",
-    #                 "jobnamevar",
-    #                 "jobnumber",
-    #                 "journallinenumber",
-    #                 "journalnumber",
-    #                 "lineremarkvar",
-    #                 "localspec10name",
-    #                 "locationname",
-    #                 "movementtransactionlinenumber",
-    #                 "movementtransactionnumber",
-    #                 "numberof",
-    #                 "posted",
-    #                 "projectname",
-    #                 "purchaselinetype",
-    #                 "purposename",
-    #                 "reversed",
-    #                 "specification10name",
-    #                 "specification4name",
-    #                 "taskname",
-    #                 "tasktextvar",
-    #                 "totalforsubcontractorreconciliation",
-    #                 "unit",
-    #                 "unitpricecurrency",
-    #                 "instancekey",
-    #             ]
-    #         },
-    #     }
-    # }
 
     return {
 
     "panes": {
-
         "card": {
-
             "fields": [
-
                 "allocatedexclvatcurrencyvar",
-
                 "allocatedinclvatcurrencyvar",
-
                 "allocatedvat1currencyvar",
-
                 "allocatedvat2currencyvar",
-
                 "allocatedvat3currencyvar",
-
                 "allocatedvatcurrencyvar",
-
                 "allocationcodename",
-
                 "allocationresponsible",
-
                 "allocationresponsiblenamevar",
-
                 "amountcurrency",
-
                 "amountexcldiscountcurrencyvar",
-
                 "amountexclvatcurrency",
-
                 "approvalgroupdatesubmittedvar",
-
                 "approvalgroupinstancekey",
-
                 "approvalgroupsubmittedbyvar",
-
                 "approvalhierarchyenabledheadervar",
-
                 "approvalhierarchyenabledlinesvar",
-
                 "area",
-
                 "bankaccount",
-
                 "bankregistrationnumber",
-
                 "basecurrencyvar",
-
                 "cardprojectdescriptionvar",
-
                 "cardrelationtitlevar",
-
                 "cashdiscountdate",
-
                 "companynumber",
-
                 "companyvatcode",
-
                 "copyfrominvoicenumber",
-
                 "copyfromjournallinenumber",
-
                 "copyfromjournalnumber",
-
                 "copyfromvendornumber",
-
                 "creditmemoreference",
-
                 "currency",
-
                 "disclosable",
-
                 "documentarchivenumber",
-
                 "documentdescriptionvar",
-
                 "duedate",
-
                 "entityname",
-
                 "entrydate",
-
                 "entrytext",
-
                 "exchangerate",
-
                 "filename",
-
                 "financevatcode",
-
                 "financevatcode2",
-
                 "financevatcode3",
-
                 "fixedexchangerateforpayment",
-
                 "headerapprovaldatevar",
-
                 "headerapprovedorrejectedbyvar",
-
                 "headercurrentapprovalstatusdescriptionvar",
-
                 "headerremarkvar",
-
                 "invoicecompanynamevar",
-
                 "invoicedate",
-
                 "invoicenumber",
-
                 "journalnumber",
-
                 "locationname",
-
                 "nextheaderapproverdescriptionvar",
-
                 "nextheaderapproveremployeenumbervar",
-
                 "nextheaderapprovernamevar",
-
                 "nonallocatedexvatcurrency",
-
                 "nonallocatedinclvatcurrencyvar",
-
                 "nonallocatedvat1currencyvar",
-
                 "nonallocatedvat2currencyvar",
-
                 "nonallocatedvat3currencyvar",
-
                 "nonallocatedvatcurrency",
-
                 "numberoflinesmissingapprovalvar",
-
                 "numberofrejectedlinesvar",
-
                 "originalexchangeratewhencopying",
-
                 "payeridentification",
-
                 "paymentbankaccountvar",
-
                 "paymentbankregistrationnumbervar",
-
                 "paymentdescription",
-
                 "paymentmode",
-
                 "paymentvendornumber",
-
                 "paywhenpaid",
-
                 "possiblecashdiscountcurrency",
-
                 "possiblecashdiscountpercentage",
-
                 "posted",
-
                 "projectname",
-
                 "purchaseordernumber",
-
                 "purchasetransactiontype",
-
                 "reallocationdate",
-
                 "referencedate",
-
                 "registrationcodename",
-
                 "remark1",
-
                 "remark2",
-
                 "remark3",
-
                 "reopened",
-
                 "responsible",
-
                 "responsiblenamevar",
-
                 "reversewhencopying",
-
                 "showpostedentriesvar",
-
                 "showreversedentriesvar",
-
                 "standardtext",
-
                 "status",
-
                 "subledgerentrytype",
-
                 "submitted",
-
                 "tablerelationtitlevar",
-
                 "transactionnumber",
-
                 "transactiontype",
-
                 "vat1currency",
-
                 "vat2currency",
-
                 "vat3currency",
-
                 "vatcurrency",
-
                 "vendorgiro",
-
                 "vendorinvoicecreationvar",
-
                 "vendorinvoicestatusvar",
-
                 "vendorname1var",
-
                 "vendornumber",
-
                 "workflowstatusvar"
-
             ]
-
         },
-
         "table": {
-
             "fields": [
-
                 "accountnumber",
-
                 "amountcurrency",
-
                 "amountinclvatcurrency",
-
                 "employeenamevar",
-
                 "employeenumber",
-
                 "entityname",
-
                 "entrytext",
-
                 "financevatcode",
-
                 "financevatcode2",
-
                 "financevatcode3",
-
                 "itemnumber",
-
                 "jobnamevar",
-
                 "jobnumber",
-
                 "lineaccounttextvar",
-
                 "lineapprovaldatevar",
-
                 "lineapprovedorrejectedbyvar",
-
                 "linecurrentstatusvar",
-
                 "linelocalaccountdescriptionvar",
-
                 "lineremarkvar",
-
                 "localaccountnumber",
-
                 "localspec10name",
-
                 "localspec1name",
-
                 "localspec2name",
-
                 "localspec3name",
-
                 "localspec4name",
-
                 "localspec5name",
-
                 "localspec6name",
-
                 "localspec7name",
-
                 "localspec8name",
-
                 "localspec9name",
-
                 "locationname",
-
                 "movementtransactionlinenumber",
-
                 "movementtransactionnumber",
-
                 "nextlineapproverdescriptionvar",
-
                 "nextlineapproveremployeenumbervar",
-
                 "nextlineapprovernamevar",
-
                 "numberof",
-
                 "posted",
-
                 "projectname",
-
                 "purchaselinetype",
-
                 "purposename",
-
                 "reversed",
-
                 "specification10name",
-
                 "specification1name",
-
                 "specification2name",
-
                 "specification3name",
-
                 "specification4name",
-
                 "specification5name",
-
                 "specification6name",
-
                 "specification7name",
-
                 "specification8name",
-
                 "specification9name",
-
                 "supplierdeliverynotenumber",
-
                 "taskname",
-
                 "tasktextvar",
-
                 "totalforsubcontractorreconciliation",
-
                 "unit",
-
                 "unitpricecurrency",
-
                 "vat1currency",
-
                 "vat2currency",
-
                 "vat3currency",
-
                 "instancekey"
-
             ]
-
         }
-
     }
-
 }
  
 
@@ -516,9 +296,7 @@ def map_concur_invoice_line_to_allocation_row(
     instance slice (10 ⊆ 64).
     """
     engagement = _concur_line_value(line_item, "Custom10", "Engagement")
-    print("engagement:", engagement)
     task = _concur_line_value(line_item, "Custom11", "Task")
-    print("task:", task)
     department = _concur_line_value(line_item, "Department", "Custom2")
     unit_price_raw = _concur_line_value(line_item, "UnitPrice", "Unit Price")
     journal_number_value = str(journalnumber or "").strip()
