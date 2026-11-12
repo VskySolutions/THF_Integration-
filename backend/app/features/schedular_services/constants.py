@@ -13,6 +13,11 @@ PAYCOR_CREATE_SYNC_JOB_ID = "paycor_create_employee_sync"
 PAYCOR_UPDATE_SYNC_JOB_ID = "paycor_update_employee_sync"
 SAP_CONCUR_EXPENSE_SYNC_PATH = "/api/v1/sap-concur/sync-sap-concur-expense-reports-with-maconomy"
 SAP_CONCUR_EXPENSE_SYNC_JOB_ID = "sap_concur_expense_sync"
+
+# SAP Concur Employee Sync (5-minute scheduler)
+SAP_CONCUR_EMPLOYEE_SYNC_PATH = "/api/v1/sap-concur-employees/sync-cycle"
+SAP_CONCUR_EMPLOYEE_SYNC_JOB_ID = "maconomy_sap_concur_employee_sync"
+
 HUBSPOT_SYNC_PATH = "/api/v1/hubspot/sync/customers"
 HUBSPOT_SYNC_JOB_ID = "maconomy_hubspot_sync"
 PAYCOR_EASTERN_TIMEZONE = "America/New_York"

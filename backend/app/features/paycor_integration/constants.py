@@ -28,6 +28,12 @@ class PurposeCreationStatus(str, Enum):
     SKIPPED = "SKIPPED"
 
 
+class SAPConcurUserCreationStatus(str, Enum):
+    SUCCESS = "SUCCESS"
+    FAILURE = "FAILURE"
+    SKIPPED = "SKIPPED"
+
+
 class TimesheetSubmissionMode(str, Enum):
     APPEND = "APPEND"
     REPLACE = "REPLACE"

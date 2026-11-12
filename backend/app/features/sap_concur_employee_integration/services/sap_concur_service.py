@@ -158,50 +158,68 @@ class SAPConcurEmployeeService:
         response: httpx.Response,
     ) -> list[dict[str, Any]]:
         """Validate a SCIM BulkResponse and normalise operation results."""
+        if response.is_error:
+            raise SAPConcurEmployeeServiceError(
+                f"SAP Concur HTTP {response.status_code}: {response.text[:2000]}"
+            )
+
         try:
             payload = response.json()
         except (TypeError, ValueError) as exc:
             raise SAPConcurEmployeeServiceError(
-                "Invalid SAP Concur bulk response"
+                f"Invalid SAP Concur bulk response: {response.text[:1000]}"
             ) from exc
 
         if not isinstance(payload, dict):
             raise SAPConcurEmployeeServiceError(
-                "Invalid SAP Concur bulk response"
+                f"Invalid SAP Concur bulk response format: {payload}"
             )
 
         operations = payload.get("Operations")
-        if not isinstance(operations, list) or any(
-            not isinstance(operation, dict)
-            for operation in operations
-        ):
-            raise SAPConcurEmployeeServiceError(
-                "Invalid SAP Concur bulk response"
-            )
-
-        results: list[dict[str, Any]] = []
-        for operation in operations:
-            status = SAPConcurEmployeeService._coerce_status(
-                operation.get("status")
-            )
-            success = status in (200, 201)
-
-            detail: Any = None
-            if not success:
-                detail = (
-                    operation.get("response")
-                    or operation.get("message")
-                    or operation.get("detail")
+        if isinstance(operations, list):
+            results: list[dict[str, Any]] = []
+            for operation in operations:
+                status = SAPConcurEmployeeService._coerce_status(
+                    operation.get("status")
                 )
+                success = status in (200, 201)
 
-            results.append(
+                detail: Any = None
+                if not success:
+                    detail = (
+                        operation.get("response")
+                        or operation.get("message")
+                        or operation.get("detail")
+                    )
+
+                results.append(
+                    {
+                        "bulkId": operation.get("bulkId"),
+                        "status": status,
+                        "success": success,
+                        "detail": detail,
+                    }
+                )
+            return results
+
+        # SAP Concur UPS v4 asynchronous Provisioning response
+        # e.g., {'schemas': ['urn:...:Provision:Status'], 'id': '...', 'operationsCount': {'pending': 1}, 'status': {'completed': False}}
+        if "operationsCount" in payload or "provisionType" in payload:
+            provision_id = payload.get("id")
+            location = payload.get("meta", {}).get("location")
+            return [
                 {
-                    "bulkId": operation.get("bulkId"),
-                    "status": status,
-                    "success": success,
-                    "detail": detail,
+                    "bulkId": provision_id,
+                    "status": response.status_code,
+                    "success": response.status_code in (200, 201, 202),
+                    "id": provision_id,
+                    "detail": location or "Asynchronous provision accepted",
                 }
-            )
+            ]
+
+        raise SAPConcurEmployeeServiceError(
+            f"Invalid SAP Concur bulk operations list in response: {payload}"
+        )
 
         return results
 

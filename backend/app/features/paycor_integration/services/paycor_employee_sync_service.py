@@ -18,6 +18,7 @@ from app.features.paycor_integration.constants import (
     IntegrationAction,
     IntegrationStatus,
     PurposeCreationStatus,
+    SAPConcurUserCreationStatus,
     Spec5CreationStatus,
 )
 from app.features.paycor_integration.mappers import (
@@ -45,6 +46,12 @@ from app.features.paycor_integration.services.maconomy_purpose_service import (
 )
 from app.features.paycor_integration.services.purpose_log_service import (
     PurposeLogService,
+)
+from app.features.paycor_integration.services.sap_concur_employee_log_service import (
+    SAPConcurEmployeeLogService,
+)
+from app.features.sap_concur_employee_integration.services.sap_concur_service import (
+    SAPConcurEmployeeService,
 )
 from app.features.paycor_integration.services.paycor_employee_service import (
     PaycorService,
@@ -88,6 +95,7 @@ class PaycorEmployeeSyncService:
         self.vendor_service = MaconomyVendorService()
         self.spec5_service = MaconomySpecification5Service()
         self.purpose_service = MaconomyPurposeService()
+        self.sap_concur_service = SAPConcurEmployeeService()
 
     async def sync_recent_hires(
         self,
@@ -1023,6 +1031,9 @@ class PaycorEmployeeSyncService:
             mapping.is_purpose_created = (
                 PurposeCreationStatus.SKIPPED
             )
+            mapping.is_sap_concur_created = (
+                SAPConcurUserCreationStatus.SKIPPED
+            )
 
             await self._write_log(
                 session,
@@ -1093,6 +1104,9 @@ class PaycorEmployeeSyncService:
                     )
                     mapping.is_purpose_created = (
                         PurposeCreationStatus.SKIPPED
+                    )
+                    mapping.is_sap_concur_created = (
+                        SAPConcurUserCreationStatus.SKIPPED
                     )
 
                     await self._write_log(
@@ -1495,6 +1509,67 @@ class PaycorEmployeeSyncService:
                 legal_entity_id=legal_entity_id,
                 status=PurposeCreationStatus.FAILURE,
                 error_message=purpose_failure_message,
+            )
+
+        # SAP Concur user creation. Runs only for freshly created
+        # employees; a failure must never fail the already-created employee record.
+        try:
+            print("In create SAP Concur user")
+            concur_result = (
+                await self.sap_concur_service.create_employee(
+                    created_employee
+                )
+            )
+
+            # Check if created successfully in the SCIM bulk response
+            created_count = int(concur_result.get("created") or 0)
+            details = concur_result.get("details") or []
+            concur_user_id = None
+            if details and isinstance(details[0], dict):
+                concur_user_id = details[0].get("id")
+
+            if created_count > 0:
+                await SAPConcurEmployeeLogService.record_sap_concur_result(
+                    session,
+                    mapping=mapping,
+                    paycor_employee_id=paycor_employee_id,
+                    paycor_employee_number=paycor_employee_number,
+                    legal_entity_id=legal_entity_id,
+                    status=SAPConcurUserCreationStatus.SUCCESS,
+                    sap_concur_user_id=concur_user_id,
+                )
+                message_notes.append("SAP Concur user created")
+            else:
+                error_text = "SAP Concur user creation returned no created records"
+                if details and isinstance(details[0], dict) and details[0].get("error"):
+                    error_text = f"SAP Concur: {details[0]['error']}"
+
+                await SAPConcurEmployeeLogService.record_sap_concur_result(
+                    session,
+                    mapping=mapping,
+                    paycor_employee_id=paycor_employee_id,
+                    paycor_employee_number=paycor_employee_number,
+                    legal_entity_id=legal_entity_id,
+                    status=SAPConcurUserCreationStatus.FAILURE,
+                    error_message=error_text,
+                )
+                message_notes.append(f"SAP Concur user creation failed: {error_text}")
+
+        except Exception as exc:  # Deliberate: never fail employee record
+            concur_failure_message = (
+                f"SAP Concur user creation failed for "
+                f"{maconomy_employee_number}: {exc}"
+            )
+            message_notes.append(concur_failure_message)
+
+            await SAPConcurEmployeeLogService.record_sap_concur_result(
+                session,
+                mapping=mapping,
+                paycor_employee_id=paycor_employee_id,
+                paycor_employee_number=paycor_employee_number,
+                legal_entity_id=legal_entity_id,
+                status=SAPConcurUserCreationStatus.FAILURE,
+                error_message=concur_failure_message,
             )
 
         if omitted_department_name is not None:

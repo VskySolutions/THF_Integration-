@@ -203,11 +203,12 @@ def _build_phone_numbers(
     employee: dict[str, Any],
     country_iso2: str | None,
 ) -> list[dict[str, str]]:
+    """Build Home Phone for SCIM User."""
     phone = _phone_digits(employee.get("phone"))
     if phone is None:
         return []
 
-    phone_number = {"type": "work", "value": phone}
+    phone_number = {"type": "home", "value": phone}
     if country_iso2 is not None:
         phone_number["issuingCountry"] = country_iso2
     return [phone_number]
@@ -217,7 +218,13 @@ def _build_addresses(
     employee: dict[str, Any],
     country_iso2: str | None,
 ) -> list[dict[str, str]]:
-    address: dict[str, str] = {"type": "work"}
+    """Build Home Address for SCIM User.
+
+    Per client notes, Work Address is automatically populated in SAP Concur
+    by selecting Assigned Location (Spec 4) and enabling 'Address same as assigned location'.
+    Therefore, the employee's address in Maconomy represents their Home Address.
+    """
+    address: dict[str, str] = {"type": "home"}
 
     street_address = _clean_str(
         employee.get("name2")
@@ -253,6 +260,11 @@ def _build_enterprise_extension(
     department = _clean_str(employee.get("entityname"))
     if department is not None:
         extension["department"] = department
+
+    # Spec 4 is Executing office / Assigned Location (e.g., Lakeland, Panama City, Tallahassee, Tampa, Dade City)
+    location = _clean_str(employee.get("specification4name"))
+    if location is not None:
+        extension["location"] = location
 
     start_date = _format_scim_datetime(employee.get("dateemployed"))
     if start_date is not None:

@@ -22,6 +22,7 @@ from app.db.base import Base
 from app.features.paycor_integration.constants import (
     EmpVendorCreationStatus,
     PurposeCreationStatus,
+    SAPConcurUserCreationStatus,
     Spec5CreationStatus,
 )
 
@@ -111,6 +112,23 @@ class PaycorEmployeeMappingLog(Base):
     )
 
     maconomy_purpose_name: Mapped[
+        str | None
+    ] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    is_sap_concur_created: Mapped[
+        SAPConcurUserCreationStatus | None
+    ] = mapped_column(
+        Enum(
+            SAPConcurUserCreationStatus,
+            name="paycor_sap_concur_user_creation_status",
+        ),
+        nullable=True,
+    )
+
+    sap_concur_user_id: Mapped[
         str | None
     ] = mapped_column(
         Text,

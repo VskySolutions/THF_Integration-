@@ -8,12 +8,14 @@ from app.features.schedular_services.constants import (
     HUBSPOT_SYNC_JOB_ID,
     MACONOMY_CASEWARE_SYNC_JOB_ID,
     MACONOMY_CCH_SYNC_JOB_ID,
+    SAP_CONCUR_EMPLOYEE_SYNC_JOB_ID,
     SAP_CONCUR_EXPENSE_SYNC_JOB_ID,
 )
 from app.features.schedular_services.services import (
     run_hubspot_sync,
     run_maconomy_caseware_sync,
     run_maconomy_cch_sync,
+    run_maconomy_concur_employee_sync,
     run_sap_concur_expense_sync,
 )
 
@@ -89,6 +91,18 @@ class SchedulerService:
             coalesce=True,
             misfire_grace_time=60,
         )
+        scheduler.add_job(
+            self._run_sap_concur_employee_sync,
+            trigger="interval",
+            minutes=5,
+            args=[client],
+            id=SAP_CONCUR_EMPLOYEE_SYNC_JOB_ID,
+            name="Maconomy to SAP Concur 5-minute employee delta sync",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=60,
+        )
 
         try:
             scheduler.start()
@@ -139,3 +153,7 @@ class SchedulerService:
     async def _run_hubspot_sync(self, client: httpx.AsyncClient) -> None:
         async with self._integration_lock:
             await run_hubspot_sync(client)
+
+    async def _run_sap_concur_employee_sync(self, client: httpx.AsyncClient) -> None:
+        async with self._integration_lock:
+            await run_maconomy_concur_employee_sync(client)
