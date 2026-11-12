@@ -30,6 +30,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
 from app.features.auth.dependencies import require_api_key
+from app.features.integration_services import (
+    IntegrationServiceIdentifier,
+    require_active_integration_service,
+)
 from app.features.sap_concur_invoice_integration.constants import (
     IntegrationAction,
     IntegrationStatus,
@@ -137,7 +141,17 @@ async def _save_integration_log(
         print(f"[invoice-log] failed to persist integration log: {exc}")
 
 
-@router.post("/sync-sap-concur-invoices", response_model=dict[str, Any])
+@router.post(
+    "/sync-sap-concur-invoices",
+    response_model=dict[str, Any],
+    dependencies=[
+        Depends(
+            require_active_integration_service(
+                IntegrationServiceIdentifier.MACONOMY_SAP_CONCUR_INVOICE_SYNC
+            )
+        )
+    ],
+)
 async def sync_sap_concur_invoices(
     session: DatabaseSession,
 ) -> dict[str, Any]:
