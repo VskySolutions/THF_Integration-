@@ -9,6 +9,7 @@ from app.features.schedular_services.constants import (
     HUBSPOT_SYNC_JOB_ID,
     MACONOMY_CASEWARE_SYNC_JOB_ID,
     MACONOMY_CCH_SYNC_JOB_ID,
+    SAP_CONCUR_ENGAGEMENTS_TASKS_SYNC_JOB_ID,
     SAP_CONCUR_EXPENSE_SYNC_JOB_ID,
     SAP_CONCUR_INVOICE_SYNC_JOB_ID,
 )
@@ -17,6 +18,7 @@ from app.features.schedular_services.services import (
     run_hubspot_sync,
     run_maconomy_caseware_sync,
     run_maconomy_cch_sync,
+    run_sap_concur_engagements_tasks_sync,
     run_sap_concur_expense_sync,
     run_sap_concur_invoice_sync,
 )
@@ -88,6 +90,21 @@ class SchedulerService:
             args=[client],
             id=SAP_CONCUR_INVOICE_SYNC_JOB_ID,
             name="Maconomy to SAP Concur invoice sync",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=60,
+        )
+        scheduler.add_job(
+            self._run_sap_concur_engagements_tasks_sync,
+            trigger="interval",
+            minutes=(
+                self._settings
+                .scheduler_sap_concur_engagements_tasks_interval_minutes
+            ),
+            args=[client],
+            id=SAP_CONCUR_ENGAGEMENTS_TASKS_SYNC_JOB_ID,
+            name="Maconomy to SAP Concur engagements and tasks sync",
             replace_existing=True,
             max_instances=1,
             coalesce=True,
@@ -169,6 +186,13 @@ class SchedulerService:
     async def _run_sap_concur_invoice_sync(self, client: httpx.AsyncClient) -> None:
         async with self._integration_lock:
             await run_sap_concur_invoice_sync(client)
+
+    async def _run_sap_concur_engagements_tasks_sync(
+        self,
+        client: httpx.AsyncClient,
+    ) -> None:
+        async with self._integration_lock:
+            await run_sap_concur_engagements_tasks_sync(client)
 
     async def _run_hubspot_sync(self, client: httpx.AsyncClient) -> None:
         async with self._integration_lock:

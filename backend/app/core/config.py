@@ -123,6 +123,10 @@ class Settings(BaseSettings):
     scheduler_caseware_interval_minutes: int = Field(default=5, ge=1)
     scheduler_sap_concur_interval_minutes: int = Field(default=5, ge=1)
     scheduler_sap_concur_invoice_interval_minutes: int = Field(default=5, ge=1)
+    scheduler_sap_concur_engagements_tasks_interval_minutes: int = Field(
+        default=5,
+        ge=1,
+    )
     scheduler_hubspot_interval_minutes: int = Field(default=5, ge=1)
     scheduler_hubspot_contact_consolidated_enabled: bool = True
     scheduler_hubspot_contact_consolidated_interval_minutes: int = Field(

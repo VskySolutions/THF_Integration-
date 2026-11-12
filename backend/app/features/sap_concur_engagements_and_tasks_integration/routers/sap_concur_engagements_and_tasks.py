@@ -25,6 +25,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
 from app.features.auth.dependencies import require_api_key
+from app.features.integration_services.constants import IntegrationServiceIdentifier
+from app.features.integration_services.dependencies.active_service import (
+    require_active_integration_service,
+)
 from app.features.sap_concur_engagements_and_tasks_integration.constants import (
     DEFAULT_JOBS_LIMIT,
 )
@@ -55,7 +59,15 @@ from app.features.sap_concur_engagements_and_tasks_integration.services.sap_conc
 router = APIRouter(
     prefix="/sap-concur-engagements-and-tasks",
     tags=["sap-concur-engagements-and-tasks-integration"],
-    dependencies=[Depends(require_api_key)],
+    dependencies=[
+        Depends(require_api_key),
+        Depends(
+            require_active_integration_service(
+                IntegrationServiceIdentifier
+                .MACONOMY_SAP_CONCUR_ENGAGEMENTS_AND_TASKS_SYNC
+            )
+        ),
+    ],
 )
 
 DatabaseSession = Annotated[AsyncSession, Depends(get_db)]
