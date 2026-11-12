@@ -101,7 +101,11 @@ class Settings(BaseSettings):
     )
     sap_concur_client_id: SecretStr
     sap_concur_client_secret: SecretStr
-    sap_concur_refresh_token: SecretStr    
+    sap_concur_refresh_token: SecretStr
+    # List id of the SAP Concur list holding engagements (parents) and
+    # tasks (children) for the bulk list endpoint; blank until the env
+    # var is configured (manual step).
+    sap_engagement_list_id: str = ""
 
     # HubSpot integration settings (service key auth: Bearer {HUBSPOT_SERVICE_KEY})
     hubspot_api_base_url: AnyHttpUrl = AnyHttpUrl(
