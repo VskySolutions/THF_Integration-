@@ -44,7 +44,7 @@ A Maconomy engagement will be eligible for synchronization when:
 - Its `locationname` value is `2`.
 - It is not an engagement template.
 - It is open.
-- Its `text20` field is empty.
+- Its `text18` field is empty.
 - Its engagement number does not already exist as a CCH Client account number.
 - The required employee and engagement information can be resolved.
 
@@ -55,7 +55,7 @@ The primary Maconomy selection conditions are:
 | `locationname` | `2` |
 | `template` | `false` |
 | `closed` | `false` |
-| `text20` | Empty |
+| `text18` | Empty |
 | `createddate` | Within the configured new-engagement discovery period |
 
 Before creating the CCH records, the following information must also be
@@ -267,8 +267,8 @@ engagement.
 
 | CCH result | Maconomy update |
 | --- | --- |
-| Client and Task created successfully | Update `date5` and `text20` |
-| Client created but Task creation failed | Update `date5` only |
+| Client and Task created successfully | Update `date3` and `text18` |
+| Client created but Task creation failed | Update `date3` only |
 | Client creation failed | Do not update the Maconomy engagement |
 | Engagement is ineligible | Do not update the Maconomy engagement |
 | Client already exists in CCH | Exclude the engagement from creation processing |
@@ -277,8 +277,8 @@ The writeback fields are:
 
 | Maconomy field | Value |
 | --- | --- |
-| `date5` | Calculated period-end date |
-| `text20` | CCH Task ID |
+| `date3` | Calculated period-end date |
+| `text18` | CCH Task ID |
 
 The integration verifies that the Maconomy engagement version has not changed
 before saving the result.
@@ -286,8 +286,8 @@ before saving the result.
 After the update, it reads the engagement again and verifies that:
 
 - The Maconomy version increased.
-- `date5` was saved correctly.
-- `text20` contains the correct CCH Task ID when Task creation succeeded.
+- `date3` was saved correctly.
+- `text18` contains the correct CCH Task ID when Task creation succeeded.
 
 ## 7. In Scope
 
@@ -298,7 +298,7 @@ The following items are included in the integration scope:
 - Identification of newly created tax engagements.
 - Tax-engagement identification using `locationname = 2 (TAX)`.
 - Exclusion of templates and closed engagements.
-- Exclusion of engagements already containing a CCH Task ID in `text20`.
+- Exclusion of engagements already containing a CCH Task ID in `text18`.
 - Retrieval of related customer information.
 - Retrieval and resolution of employee email addresses.
 - Retrieval of Specification 1 and Specification 2 descriptions.
@@ -309,8 +309,8 @@ The following items are included in the integration scope:
 - Creation of one CCH Task for each newly created Client.
 - Search for existing CCH Clients before Client creation.
 - Duplicate Client prevention using the engagement number.
-- Storage of the calculated period-end date in Maconomy `date5`.
-- Storage of the CCH Task ID in Maconomy `text20`.
+- Storage of the calculated period-end date in Maconomy `date3`.
+- Storage of the CCH Task ID in Maconomy `text18`.
 - Verification of Maconomy writeback.
 - Integration-run monitoring and troubleshooting information.
 - Isolation of individual engagement failures so other eligible engagements can

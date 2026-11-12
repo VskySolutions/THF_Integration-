@@ -265,8 +265,8 @@
     {% if job_results %}
     <div class="alert alert-primary py-2 mb-3">
         <strong>Maconomy writeback:</strong>
-        successful client creation writes the period-end date to <code>date5</code>;
-        successful task creation also writes the CCH task ID to <code>text20</code>.
+        successful client creation writes the period-end date to <code>date3</code>;
+        successful task creation also writes the CCH task ID to <code>text18</code>.
         Both values are saved in one Maconomy update.
     </div>
     <div class="table-responsive">
@@ -292,24 +292,24 @@
                 <td>{{ client_stage.get('status') | default('Not recorded', true) | replace('_', ' ') | title }}</td>
                 <td>{{ task_stage.get('status') | default('Not recorded', true) | replace('_', ' ') | title }}</td>
                 <td>
-                    {% if 'date5' in written_fields %}
+                    {% if 'date3' in written_fields %}
                     <span class="badge text-bg-success">Written</span>
-                    <div class="small text-secondary mt-1"><code>date5</code> &larr; period-end date</div>
+                    <div class="small text-secondary mt-1"><code>date3</code> &larr; period-end date</div>
                     {% elif writeback_stage.get('status') == 'failed' %}
                     <span class="badge text-bg-danger">Failed</span>
-                    <div class="small text-secondary mt-1"><code>date5</code> not written</div>
+                    <div class="small text-secondary mt-1"><code>date3</code> not written</div>
                     {% else %}
                     <span class="badge text-bg-secondary">Not written</span>
                     <div class="small text-secondary mt-1">Client was not created</div>
                     {% endif %}
                 </td>
                 <td>
-                    {% if 'text20' in written_fields %}
+                    {% if 'text18' in written_fields %}
                     <span class="badge text-bg-success">Written</span>
-                    <div class="small text-secondary mt-1"><code>text20</code> &larr; CCH task ID</div>
+                    <div class="small text-secondary mt-1"><code>text18</code> &larr; CCH task ID</div>
                     {% elif task_stage.get('status') == 'created' and writeback_stage.get('status') == 'failed' %}
                     <span class="badge text-bg-danger">Failed</span>
-                    <div class="small text-secondary mt-1"><code>text20</code> not written</div>
+                    <div class="small text-secondary mt-1"><code>text18</code> not written</div>
                     {% else %}
                     <span class="badge text-bg-secondary">Not written</span>
                     <div class="small text-secondary mt-1">Task was not created</div>

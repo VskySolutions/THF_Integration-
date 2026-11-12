@@ -41,8 +41,8 @@ JOB_FIELDS = [
     "employeenumber6",        
     "specification1name",        
     "specification5name",
-    "text20",
-    "date5",
+    "text18",
+    "date3",
     "versionnumber",
     "purposename"
 ]
@@ -370,7 +370,7 @@ class MaconomyService:
         self,
         jobs: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
-        """Write date5 and an optional task ID to each processed Maconomy job."""
+        """Write date3 and an optional task ID to each processed Maconomy job."""
         await self.authenticate()
         updated_jobs: list[dict[str, Any]] = []
         for job in jobs:
@@ -409,9 +409,9 @@ class MaconomyService:
                     period_end_date=period_end_date,
                     task_id=task_id,
                 )
-                updated_job["date5"] = period_end_date
+                updated_job["date3"] = period_end_date
                 if task_id is not None:
-                    updated_job["text20"] = task_id
+                    updated_job["text18"] = task_id
                 updated_job["versionnumber"] = saved_version
                 updated_job["maconomywritebackstatus"] = "updated"
             except Exception as exc:
@@ -465,20 +465,20 @@ class MaconomyService:
                 )
 
         if task_id is not None:
-            current_task_id = job.get("text20")
+            current_task_id = job.get("text18")
             if current_task_id is not None and (
                 not isinstance(current_task_id, str) or current_task_id.strip()
             ):
                 raise MaconomyServiceError(
-                    f"Maconomy job {job_number} already has a text20 mapping"
+                    f"Maconomy job {job_number} already has a text18 mapping"
                 )
 
         maconomy_period_end_date = datetime.strptime(
             period_end_date, "%m/%d/%Y"
         ).strftime("%Y-%m-%d")
-        data: dict[str, Any] = {"date5": maconomy_period_end_date}
+        data: dict[str, Any] = {"date3": maconomy_period_end_date}
         if task_id is not None:
-            data["text20"] = task_id
+            data["text18"] = task_id
 
         await self._post_job_request(
             f"/instances/{instance_id}/data/panes/card/0",
@@ -492,13 +492,13 @@ class MaconomyService:
             raise MaconomyServiceError(
                 f"Maconomy job {job_number} version did not increase by one"
             )
-        if str(saved_job.get("date5", "")).strip() != maconomy_period_end_date:
+        if str(saved_job.get("date3", "")).strip() != maconomy_period_end_date:
             raise MaconomyServiceError(
-                f"Maconomy job {job_number} date5 write could not be verified"
+                f"Maconomy job {job_number} date3 write could not be verified"
             )
-        if task_id is not None and str(saved_job.get("text20", "")).strip() != task_id:
+        if task_id is not None and str(saved_job.get("text18", "")).strip() != task_id:
             raise MaconomyServiceError(
-                f"Maconomy job {job_number} text20 write could not be verified"
+                f"Maconomy job {job_number} text18 write could not be verified"
             )
         return saved_version
 
@@ -513,8 +513,8 @@ class MaconomyService:
                         "fields": [
                             "jobnumber",
                             "versionnumber",
-                            "text20",
-                            "date5",
+                            "text18",
+                            "date3",
                         ]
                     }
                 }
@@ -629,7 +629,7 @@ class MaconomyService:
     ) -> str:
         restriction = (
             "template=false and locationname='2' "
-            "and closed=false and text20=''"
+            "and closed=false and text18=''"
         )
         if not jobnumbers:
             yesterday = date.today() - timedelta(days=1)
@@ -732,12 +732,12 @@ class MaconomyService:
     @staticmethod
     def _is_syncable_tax_job(record: dict[str, Any]) -> bool:
         location_name = record.get("locationname")
-        task_internal_id = record.get("text20")
+        task_internal_id = record.get("text18")
         return (
             record.get("template") is False
             and record.get("closed") is False
             and str(location_name) == "2"
-            and "text20" in record
+            and "text18" in record
             and (task_internal_id is None or task_internal_id == "")
         )
 

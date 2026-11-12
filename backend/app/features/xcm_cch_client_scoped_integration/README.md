@@ -24,7 +24,7 @@ flowchart LR
     H --> I{Client created?}
     I -- No --> J[Record client failure]
     I -- Yes --> K[Create CCH task]
-    K --> L[Write date5 and optional text20 to Maconomy]
+    K --> L[Write date3 and optional text18 to Maconomy]
     J --> M[Complete run log]
     L --> M
 ```
@@ -110,7 +110,7 @@ Every selected job must satisfy:
 | `template` | `false` |
 | `locationname` | `2` |
 | `closed` | `false` |
-| `text20` | Empty |
+| `text18` | Empty |
 
 When specific `jobnumbers` are supplied, they are added as grouped OR
 conditions. Scheduled discovery applies the implementation's created-date
@@ -273,8 +273,8 @@ flowchart TD
     D --> E[Maconomy writeback skipped]
     B -- Yes --> F[Create CCH task]
     F --> G{Task successful?}
-    G -- Yes --> H[Write date5 and text20]
-    G -- No --> I[Write date5 only]
+    G -- Yes --> H[Write date3 and text18]
+    G -- No --> I[Write date3 only]
 ```
 
 ## Maconomy writeback
@@ -285,12 +285,12 @@ update.
 
 | CCH result | Maconomy update |
 |---|---|
-| Client created and task created | Write `date5` and `text20` together |
-| Client created and task failed or skipped | Write only `date5`; leave `text20` unchanged |
+| Client created and task created | Write `date3` and `text18` together |
+| Client created and task failed or skipped | Write only `date3`; leave `text18` unchanged |
 | Client creation failed | Skip Maconomy update |
 
-`date5` receives `periodenddate`, converted from `MM/DD/YYYY` to `YYYY-MM-DD`.
-`text20` receives the CCH `taskId` only when task creation succeeds.
+`date3` receives `periodenddate`, converted from `MM/DD/YYYY` to `YYYY-MM-DD`.
+`text18` receives the CCH `taskId` only when task creation succeeds.
 
 Before writing, the integration confirms that the Maconomy job
 `versionnumber` has not changed since discovery. If it changed, the writeback

@@ -120,7 +120,7 @@ conditions:
 - `template = false`
 - `locationname = 2`
 - `closed = false`
-- `text20` is empty
+- `text18` is empty
 - `createddate` is within the configured new-engagement discovery period
 
 Maconomy returns at most 5,000 records from the filter request. The integration
@@ -157,7 +157,7 @@ sequenceDiagram
         end
     end
 
-    I->>M: Write date5 and optional text20
+    I->>M: Write date3 and optional text18
     I->>D: Complete run log
     I-->>S: Return engagement results
 ```
@@ -186,8 +186,8 @@ flowchart TD
     E -- "No" --> F["Record Client failure<br/>Skip Task and writeback"]
     E -- "Yes" --> G["Create CCH Task"]
     G --> H{"Task created?"}
-    H -- "Yes" --> I["Write period-end date to date5<br/>Write Task ID to text20"]
-    H -- "No" --> J["Write period-end date to date5 only"]
+    H -- "Yes" --> I["Write period-end date to date3<br/>Write Task ID to text18"]
+    H -- "No" --> J["Write period-end date to date3 only"]
     I --> K["Verify Maconomy version and saved values"]
     J --> K
     K --> L["Record run result"]
@@ -202,8 +202,8 @@ flowchart TD
 | Required role email is missing | Mark the engagement ineligible. |
 | Return Type is blank or `default` | Mark the engagement ineligible. |
 | Client creation fails | Record the failure, skip Task creation, and skip Maconomy writeback. |
-| Client creation succeeds and Task creation succeeds | Write the period-end date to `date5` and Task ID to `text20`. |
-| Client creation succeeds but Task creation fails | Write only the period-end date to `date5`; leave `text20` unchanged. |
+| Client creation succeeds and Task creation succeeds | Write the period-end date to `date3` and Task ID to `text18`. |
+| Client creation succeeds but Task creation fails | Write only the period-end date to `date3`; leave `text18` unchanged. |
 | Maconomy changes before writeback | Re-read the engagement and retry the version-controlled write once. |
 
 ## 7. Data design
@@ -221,7 +221,7 @@ flowchart TD
 | Engagement Partner email | Employee email for `purposename` |
 
 The calculated period-end date is formatted as `MM/DD/YYYY` for the CCH
-payload and converted to `YYYY-MM-DD` when saved to Maconomy `date5`.
+payload and converted to `YYYY-MM-DD` when saved to Maconomy `date3`.
 
 ### 7.2 CCH Client mapping
 
@@ -257,13 +257,13 @@ payload and converted to `YYYY-MM-DD` when saved to Maconomy `date5`.
 
 | CCH processing result | Maconomy update |
 | --- | --- |
-| Client and Task created | Write `date5` and `text20`. |
-| Client created but Task failed | Write `date5` only. |
+| Client and Task created | Write `date3` and `text18`. |
+| Client created but Task failed | Write `date3` only. |
 | Client creation failed | No writeback. |
 | Engagement is ineligible | No writeback. |
 | Client already exists | Engagement is excluded before writeback. |
 
-`text20` stores the CCH Task ID and is also used to exclude an engagement from
+`text18` stores the CCH Task ID and is also used to exclude an engagement from
 future creation runs.
 
 ### 7.5 Run log
@@ -305,8 +305,8 @@ the write is retried once with the new version. After the update, the service
 verifies that:
 
 - The Maconomy version increased by exactly one.
-- `date5` contains the expected period-end date.
-- `text20` contains the expected Task ID when Task creation succeeded.
+- `date3` contains the expected period-end date.
+- `text18` contains the expected Task ID when Task creation succeeded.
 
 ### Failure isolation
 
@@ -357,7 +357,7 @@ Recommended support sequence:
 3. Confirm the engagement satisfies the Maconomy discovery conditions.
 4. Confirm the required employee role emails and Return Type.
 5. Search CCH using the engagement number as `accountNumber`.
-6. Review Maconomy `date5`, `text20`, and `versionnumber`.
+6. Review Maconomy `date3`, `text18`, and `versionnumber`.
 7. Correct the underlying data or service issue and follow the approved
    recovery process.
 

@@ -68,9 +68,9 @@ async def complete_run_from_jobs(
         written_fields: list[str] = []
         if writeback_status == "updated":
             jobs_updated += 1
-            written_fields.append("date5")
+            written_fields.append("date3")
             if task["status"] == "created":
-                written_fields.append("text20")
+                written_fields.append("text18")
             succeeded_stages.append(
                 f"MACONOMY_WRITEBACK({','.join(written_fields)})"
             )

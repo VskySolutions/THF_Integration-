@@ -132,6 +132,119 @@ flowchart TD
 
 Communication between the two parallel branches and the association phase is the `JOIN barrier`: Company IDs resolved in Branch 1 and MASTER contact IDs from Branch 2 are both required before association mapping starts.
 
+## Proposed Company pre-check and Contact bootstrap (documentation only)
+
+**Status: proposed logic for review; not implemented yet.**
+
+This change handles an old Maconomy Customer that is updated inside the current
+two-day window but does not yet exist as a Company in HubSpot. Its Contact
+Persons may be older than two days and therefore absent from normal Contact
+discovery.
+
+### Required steps
+
+1. Before Company upsert, batch-search HubSpot for every Company candidate by
+   `maconomy_customer_number`.
+2. Split the Customer candidates into:
+   - `existing_company_customers` - Company already exists in HubSpot.
+   - `missing_company_customers` - Company does not exist and will be created.
+3. Process `existing_company_customers` through the normal Company update flow.
+   Their Contacts continue through normal changed-Contact discovery.
+4. For every `missing_company_customer`, fetch its complete Contact Person list
+   from Maconomy without applying the two-day Contact discovery filter.
+5. Create the missing Company in HubSpot and process its complete Contact list
+   through the same normalized-email grouping, MASTER resolution/election,
+   MASTER Contact upsert, stamping, checkpoint, and association logic already
+   used by the consolidated Contact branch.
+
+### Proposed flow
+
+```mermaid
+flowchart TD
+    A[Maconomy Customer candidates<br/>NEW plus UPDATED] --> B[HubSpot batch lookup Companies<br/>by maconomy_customer_number]
+    B --> C{Company exists in HubSpot?}
+
+    C -->|Yes| D[existing_company_customers]
+    D --> E[Normal Company mapping and upsert/update]
+    E --> F[Normal changed-Contact flow]
+
+    C -->|No| G[missing_company_customers]
+    G --> H[Fetch complete Contact Persons for Customer<br/>no Contact date-window filter]
+    H --> I[Map and create Company in HubSpot]
+    H --> J[Add historical Contacts to Contact coverage set]
+
+    J --> K[Deduplicate by contactpersonnumber]
+    K --> L[Group by normalized email in memory]
+    L --> M[Resolve remark4 MASTER or back-query full email group]
+    M --> N[Elect lowest contactpersonnumber when no MASTER exists]
+    N --> O[Upsert only the resolved MASTER Contact]
+    O --> P[Write remark4 group stamps]
+    P --> Q[Write remark5 for confirmed MASTER upsert]
+
+    I --> R[Company and Contact join barrier]
+    Q --> R
+    F --> R
+    R --> S[Associate each MASTER Contact to all group Companies]
+```
+
+### Partition and processing rules
+
+| Company lookup result | Company action | Contact action |
+|---|---|---|
+| Company found | Run the normal Company update/upsert path. | Process Contacts discovered as changed inside the two-day window. |
+| Company not found | Fetch complete Customer Contacts, then create the Company. | Process all fetched Contacts for coverage even when they are older than two days or `remark5` says unchanged. |
+| Company lookup failed | Do not treat the Company as missing. Record a lookup error and stop the affected Company from being created blindly. | Do not start bootstrap Contact processing for the uncertain Company result. |
+
+### Contact rules for a missing Company
+
+- Complete Contacts fetched for a missing Company are bootstrap candidates and
+  must not be removed only because they are outside the two-day window.
+- The Contacts are still consolidated by normalized email; the integration does
+  not create one HubSpot Contact for every Maconomy Contact Person.
+- If one `remark4` MASTER is already stored, use that MASTER number.
+- If the stored MASTER record is not present in the fetched Customer contacts,
+  back-query the full live group by email to obtain the MASTER record.
+- If no MASTER exists, elect the lowest `contactpersonnumber` using the current
+  election rule.
+- Upsert only the resolved MASTER Contact, stamp group members using the current
+  `remark4` rules, and write `remark5` only after HubSpot confirms the MASTER
+  upsert.
+- After the Company and MASTER Contact IDs are confirmed, run the existing
+  one-MASTER-to-many-Companies association phase.
+
+### Failure and checkpoint rules
+
+- A failed Company pre-check must not be interpreted as "Company missing".
+- If complete Contact loading fails for a missing Company, do not consider that
+  Company's bootstrap complete.
+- For an existing Company, retain the normal Customer checkpoint rule after its
+  confirmed Company upsert/update.
+- For a missing Company bootstrap, defer `customerremark26` until the Company is
+  confirmed and every required email group has a confirmed MASTER Contact ID.
+  This prevents a partial Company-only result from being marked complete.
+- Contact failures remain separately visible in the run ledger. The manual
+  Customer retry flow must use the same complete-contact bootstrap logic so an
+  operator can recover the Company and its Contacts together.
+- Company creation and MASTER Contact upsert are idempotent because they use
+  `maconomy_customer_number` and `maconomy_contact_person_number` respectively.
+- Association remains a mapping phase and does not write another Maconomy
+  version checkpoint.
+
+### Data handling and monitoring
+
+Run details may store only Customer numbers, Contact Person numbers, counts,
+actions, and sanitized failure information. Email is used in memory for group
+resolution and must not be persisted in the database.
+
+Suggested monitoring counts for this change:
+
+- Companies found in HubSpot
+- Companies missing in HubSpot
+- Missing Companies created
+- Bootstrap Contact Persons loaded
+- MASTER Contacts created or updated
+- MASTER-to-Company associations completed
+
 
 MASTER decision per group:
 - `remark4` already stamped on any member -> MASTER = that stored number; the MASTER record itself is only refreshed in HubSpot if it changed inside the 2-day window; otherwise the group is **stamp-only** (no HubSpot Contact upsert).
