@@ -5,7 +5,7 @@ import time
 from typing import Any, ClassVar
 
 import httpx
-
+from datetime import datetime, timedelta
 from app.core.config import Settings, get_settings
 
 
@@ -194,6 +194,9 @@ class SAPConcurInvoiceService:
         complete digest list is retrieved; no additional query parameters
         are ever added by this client. Bounded by `_MAX_PAGES`.
         """
+        today = datetime.now().date()
+        yesterday = today - timedelta(days=1)
+        tomorrow = today + timedelta(days=1)
         url = (
             f"{self.settings.sap_concur_api_base_url}"
             "/api/v3.0/invoice/paymentrequestdigests"
@@ -203,7 +206,10 @@ class SAPConcurInvoiceService:
             "Content-Type": "application/x-www-form-urlencoded",
         }
         page_one_params: dict[str, Any] = {
-            "createDateAfter": self._DIGEST_CREATE_DATE_AFTER,
+            # "createDateAfter": self._DIGEST_CREATE_DATE_AFTER,
+            "approvalStatus": "A_APPR",
+            "lastModifiedDateAfter": yesterday.isoformat(),
+            "lastModifiedDateBefore": tomorrow.isoformat(),
         }
 
         all_items: list[dict[str, Any]] = []
