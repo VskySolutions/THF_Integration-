@@ -12,8 +12,8 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 
-revision: str = "20261111_0035"
-down_revision: Union[str, None] = "20261110_0034"
+revision: str = "20261111_0040"
+down_revision: Union[str, None] = "20261112_0039"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
