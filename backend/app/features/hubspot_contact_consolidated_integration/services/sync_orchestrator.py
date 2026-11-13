@@ -119,9 +119,14 @@ class ConsolidatedSyncService:
             hubspot = HubSpotService(client)
 
             try:
-                customer_records, contact_records = await asyncio.gather(
+                (
+                    customer_records,
+                    contact_records,
+                    specification1_descriptions,
+                ) = await asyncio.gather(
                     maconomy.discover_customers(),
                     maconomy.discover_contact_persons(),
+                    maconomy.get_specification1_descriptions(),
                 )
             except MaconomyError as exc:
                 if run_started:
@@ -234,6 +239,7 @@ class ConsolidatedSyncService:
                 maconomy,
                 all_customers,
                 customers_by_id,
+                specification1_descriptions,
                 ledger,
             )
             contact_branch = self._run_contact_branch(
@@ -242,6 +248,7 @@ class ConsolidatedSyncService:
                 consolidator,
                 groups,
                 customers_by_id,
+                specification1_descriptions,
                 ledger,
             )
             try:
@@ -271,6 +278,7 @@ class ConsolidatedSyncService:
                 groups,
                 company_ids,
                 contact_state,
+                specification1_descriptions,
                 ledger,
             )
 
@@ -325,6 +333,27 @@ class ConsolidatedSyncService:
             hubspot = HubSpotService(client)
 
             try:
+                specification1_descriptions = (
+                    await maconomy.get_specification1_descriptions()
+                )
+            except MaconomyError as exc:
+                if run_started:
+                    await self._logger.fail_run(
+                        failure_stage="MACONOMY_SPECIFICATION1_LOOKUP",
+                        error_message=(
+                            "Unable to retrieve Specification 1 reference data"
+                        ),
+                        customers_discovered=1,
+                    )
+                raise HTTPException(
+                    status_code=502,
+                    detail=(
+                        "Unable to retrieve Specification 1 reference data "
+                        "from Maconomy"
+                    ),
+                ) from exc
+
+            try:
                 customer = await maconomy.get_customer_with_contacts(
                     normalized_customer_number
                 )
@@ -354,7 +383,14 @@ class ConsolidatedSyncService:
                     detail="1 Unable to retrieve the Customer from Maconomy",
                 ) from exc
 
-            company_payload = CompanyMapper().build_upsert_payload([customer])
+            company_mapper = CompanyMapper()
+            enriched_customer = company_mapper.enrich_customer(
+                customer,
+                specification1_descriptions,
+            )
+            company_payload = company_mapper.build_upsert_payload(
+                [enriched_customer]
+            )
             print(company_payload)
             if not company_payload["inputs"]:
                 if run_started:
@@ -499,6 +535,27 @@ class ConsolidatedSyncService:
             hubspot = HubSpotService(client)
 
             try:
+                specification1_descriptions = (
+                    await maconomy.get_specification1_descriptions()
+                )
+            except MaconomyError as exc:
+                if run_started:
+                    await self._logger.fail_run(
+                        failure_stage="MACONOMY_SPECIFICATION1_LOOKUP",
+                        error_message=(
+                            "Unable to retrieve Specification 1 reference data"
+                        ),
+                        contacts_discovered=1,
+                    )
+                raise HTTPException(
+                    status_code=502,
+                    detail=(
+                        "Unable to retrieve Specification 1 reference data "
+                        "from Maconomy"
+                    ),
+                ) from exc
+
+            try:
                 contact: dict[str, Any] = await maconomy.get_contact_person(
                     normalized_contact_number
                 )
@@ -621,7 +678,9 @@ class ConsolidatedSyncService:
                 raise HTTPException(status_code=422, detail=detail)
 
             try:
-                parent_names = await maconomy.get_customer_names([parent_number])
+                parent_customers = await maconomy.get_customer_contact_details(
+                    [parent_number]
+                )
             except MaconomyError as exc:
                 ledger.add_error(
                     {
@@ -631,12 +690,15 @@ class ConsolidatedSyncService:
                         "message": str(exc),
                     }
                 )
-                parent_names = {}
+                parent_customers = {}
 
             mapper = ContactMapper()
-            master_record = mapper.enrich_contact(
+            parent_customer = parent_customers.get(parent_number, {})
+            master_record = self._enrich_master_contact(
                 group.master_record or contact,
-                parent_names.get(parent_number),
+                {parent_number: parent_customer},
+                specification1_descriptions,
+                mapper,
             )
             contact_payload = mapper.build_upsert_payload([master_record])
             if not contact_payload["inputs"]:
@@ -735,6 +797,7 @@ class ConsolidatedSyncService:
                     hubspot,
                     parent_number,
                     run_started,
+                    specification1_descriptions,
                     ledger,
                 )
             association_count = 0
@@ -883,6 +946,32 @@ class ConsolidatedSyncService:
         looked_up_name = str(lookup_names.get(parent_number) or "").strip()
         return looked_up_name or None
 
+    @staticmethod
+    def _enrich_master_contact(
+        master_record: dict[str, Any],
+        customers_by_id: dict[str, dict[str, Any]],
+        specification1_descriptions: dict[str, str],
+        mapper: ContactMapper | None = None,
+    ) -> dict[str, Any]:
+        """Enrich only the selected contact from its own parent Customer."""
+        parent_number = str(
+            master_record.get(CONTACT_COMPANY_NUMBER_FIELD) or ""
+        ).strip()
+        parent_customer = customers_by_id.get(parent_number, {})
+        specification1_name = str(
+            parent_customer.get("specification1name") or ""
+        ).strip()
+        contact_mapper = mapper or ContactMapper()
+        return contact_mapper.enrich_contact(
+            master_record,
+            str(parent_customer.get("name1") or "").strip() or None,
+            str(
+                parent_customer.get("theaccountmanagername") or ""
+            ).strip()
+            or None,
+            specification1_descriptions.get(specification1_name),
+        )
+
     async def _resolve_groups_with_back_query(
         self,
         maconomy: MaconomyService,
@@ -955,6 +1044,7 @@ class ConsolidatedSyncService:
         hubspot: HubSpotService,
         parent_number: str,
         run_started: bool,
+        specification1_descriptions: dict[str, str],
         ledger: _RunLedger,
     ) -> str | None:
         """STEP H for the manual contact flow: never-synced parent recovery."""
@@ -1007,7 +1097,12 @@ class ConsolidatedSyncService:
             )
             return None
 
-        payload = CompanyMapper().build_upsert_payload([record])
+        company_mapper = CompanyMapper()
+        enriched_record = company_mapper.enrich_customer(
+            record,
+            specification1_descriptions,
+        )
+        payload = company_mapper.build_upsert_payload([enriched_record])
         for skipped in payload["skipped"]:
             ledger.add_error(
                 {
@@ -1110,12 +1205,20 @@ class ConsolidatedSyncService:
         maconomy: MaconomyService,
         all_customers: list[dict[str, Any]],
         customers_by_id: dict[str, dict[str, Any]],
+        specification1_descriptions: dict[str, str],
         ledger: _RunLedger,
     ) -> dict[str, Any]:
         company_ids: dict[str, str] = {}
         customer_checkpoint_ids: set[str] = set()
 
-        company_payload = CompanyMapper().build_upsert_payload(all_customers)
+        company_mapper = CompanyMapper()
+        enriched_customers = company_mapper.enrich_customers(
+            all_customers,
+            specification1_descriptions,
+        )
+        company_payload = company_mapper.build_upsert_payload(
+            enriched_customers
+        )
         for skipped in company_payload["skipped"]:
             record = skipped.get("record") or {}
             ledger.add_skip(
@@ -1199,6 +1302,7 @@ class ConsolidatedSyncService:
         consolidator: ContactConsolidator,
         groups: list[ContactGroup],
         customers_by_id: dict[str, dict[str, Any]],
+        specification1_descriptions: dict[str, str],
         ledger: _RunLedger,
     ) -> _ContactBranchState:
         state = _ContactBranchState(groups=groups)
@@ -1230,10 +1334,12 @@ class ConsolidatedSyncService:
                 not in customers_by_id
             }
         )
-        lookup_names: dict[str, str] = {}
+        lookup_customers: dict[str, dict[str, Any]] = {}
         if missing_parents:
             try:
-                lookup_names = await maconomy.get_customer_names(missing_parents)
+                lookup_customers = await maconomy.get_customer_contact_details(
+                    missing_parents
+                )
             except MaconomyError:
                 ledger.add_error(
                     {
@@ -1248,17 +1354,22 @@ class ConsolidatedSyncService:
                 )
 
         mapper = ContactMapper()
-        enriched_masters = [
-            mapper.enrich_contact(
-                master_record,
-                self._parent_name_for(
+        enriched_masters: list[dict[str, Any]] = []
+        for _, master_record in master_pairs:
+            parent_number = str(
+                master_record.get(CONTACT_COMPANY_NUMBER_FIELD) or ""
+            ).strip()
+            enriched_masters.append(
+                self._enrich_master_contact(
                     master_record,
-                    customers_by_id,
-                    lookup_names,
-                ),
+                    {
+                        parent_number: customers_by_id.get(parent_number)
+                        or lookup_customers.get(parent_number, {})
+                    },
+                    specification1_descriptions,
+                    mapper,
+                )
             )
-            for _, master_record in master_pairs
-        ]
         contact_payload = mapper.build_upsert_payload(enriched_masters)
         for skipped in contact_payload["skipped"]:
             record = skipped.get("record") or {}
@@ -1465,6 +1576,7 @@ class ConsolidatedSyncService:
         hubspot: HubSpotService,
         numbers: list[str],
         company_ids: dict[str, str],
+        specification1_descriptions: dict[str, str],
         ledger: _RunLedger,
     ) -> None:
         """STEP H: create HubSpot Companies for parents never synced.
@@ -1509,7 +1621,12 @@ class ConsolidatedSyncService:
                 )
 
         recovered = list(records.values())
-        payload = CompanyMapper().build_upsert_payload(recovered)
+        company_mapper = CompanyMapper()
+        enriched_recovered = company_mapper.enrich_customers(
+            recovered,
+            specification1_descriptions,
+        )
+        payload = company_mapper.build_upsert_payload(enriched_recovered)
         for skipped in payload["skipped"]:
             record = skipped.get("record") or {}
             ledger.add_error(
@@ -1613,6 +1730,7 @@ class ConsolidatedSyncService:
         groups: list[ContactGroup],
         company_ids: dict[str, str],
         contact_state: _ContactBranchState,
+        specification1_descriptions: dict[str, str],
         ledger: _RunLedger,
     ) -> dict[str, Any]:
         usable = [group for group in groups if not group.unresolved]
@@ -1671,6 +1789,7 @@ class ConsolidatedSyncService:
             hubspot,
             [number for number in sorted(needed_companies) if number not in company_ids],
             company_ids,
+            specification1_descriptions,
             ledger,
         )
 

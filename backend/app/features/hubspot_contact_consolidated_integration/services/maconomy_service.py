@@ -14,13 +14,14 @@ from app.features.hubspot_contact_consolidated_integration.constants import (
     CONTACT_COMPANY_NUMBER_FIELD,
     CONTACT_PERSON_NUMBER_FIELD,
     CUSTOMER_CARD_FIELDS,
+    CUSTOMER_CONTACT_LOOKUP_FIELDS,
     CUSTOMER_FILTER_BATCH_SIZE,
-    CUSTOMER_NAME_LOOKUP_FIELDS,
     CUSTOMER_NUMBER_FIELD,
     CUSTOMER_SYNCED_VERSION_FIELD,
     EMAIL_BACK_QUERY_BATCH_SIZE,
     EMAIL_FIELD,
     MID_RUN_BACK_QUERY_CONCURRENCY,
+    SPECIFICATION1_FIELDS,
     SYNC_WINDOW_DAYS,
     VERSION_FIELD,
 )
@@ -128,6 +129,32 @@ class MaconomyService:
 
     def _contact_persons_url(self) -> str:
         return self._container_url("contactpersons")
+
+    def _specification1_url(self) -> str:
+        return self._container_url("specification1")
+
+    async def get_specification1_descriptions(self) -> dict[str, str]:
+        """Load the Specification 1 name-to-description reference map once."""
+        client = self._require_client()
+        reconnect_token = await self.authenticate()
+        records = await self._filter_records(
+            client,
+            reconnect_token,
+            self._specification1_url(),
+            "",
+            SPECIFICATION1_FIELDS,
+            "specification1",
+            limit=1000,
+            offset=0,
+        )
+        return {
+            str(record.get("specification1name") or "").strip(): str(
+                record.get("description") or ""
+            ).strip()
+            for record in records
+            if str(record.get("specification1name") or "").strip()
+            and str(record.get("description") or "").strip()
+        }
 
     async def discover_customers(self) -> list[dict[str, Any]]:
         """Active customers created/changed inside the sync window."""
@@ -255,11 +282,23 @@ class MaconomyService:
         self,
         customer_numbers: list[str],
     ) -> dict[str, str]:
+        customers = await self.get_customer_contact_details(customer_numbers)
+        return {
+            number: str(customer.get("name1") or "").strip()
+            for number, customer in customers.items()
+            if str(customer.get("name1") or "").strip()
+        }
+
+    async def get_customer_contact_details(
+        self,
+        customer_numbers: list[str],
+    ) -> dict[str, dict[str, Any]]:
+        """Fields needed to enrich a HubSpot Contact from its parent Customer."""
         if not customer_numbers:
             return {}
         client = self._require_client()
         reconnect_token = await self.authenticate()
-        names: dict[str, str] = {}
+        customers: dict[str, dict[str, Any]] = {}
         for offset in range(0, len(customer_numbers), CUSTOMER_FILTER_BATCH_SIZE):
             batch = customer_numbers[offset : offset + CUSTOMER_FILTER_BATCH_SIZE]
             clauses = [
@@ -272,17 +311,16 @@ class MaconomyService:
                 reconnect_token,
                 self._customer_card_url(),
                 " or ".join(f"({clause})" for clause in clauses),
-                CUSTOMER_NAME_LOOKUP_FIELDS,
+                CUSTOMER_CONTACT_LOOKUP_FIELDS,
                 "customer card",
             )
             for record in records:
                 customer_number = str(
                     record.get(CUSTOMER_NUMBER_FIELD) or ""
                 ).strip()
-                name1 = str(record.get("name1") or "").strip()
-                if customer_number and name1:
-                    names[customer_number] = name1
-        return names
+                if customer_number:
+                    customers[customer_number] = record
+        return customers
 
     async def get_customers_by_numbers(
         self,
@@ -786,15 +824,21 @@ class MaconomyService:
         restriction: str,
         fields: list[str],
         response_name: str,
+        *,
+        limit: int = 5000,
+        offset: int | None = None,
     ) -> list[dict[str, Any]]:
+        payload: dict[str, Any] = {
+            "restriction": restriction,
+            "fields": fields,
+            "limit": limit,
+        }
+        if offset is not None:
+            payload["offset"] = offset
         response = await client.post(
             f"{container_url}/filter",
             headers=MaconomyService._container_headers(reconnect_token),
-            json={
-                "restriction": restriction,
-                "fields": fields,
-                "limit": 5000,
-            },
+            json=payload,
         )
         try:
             response.raise_for_status()

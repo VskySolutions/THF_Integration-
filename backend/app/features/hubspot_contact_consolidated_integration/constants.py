@@ -22,9 +22,11 @@ CUSTOMER_CARD_FIELDS = [
     "name2",
     "name3",
     "postaldistrict",
+    "specification1name",
     "specification5name",
     "specification6name",
     "telephone",
+    "theaccountmanagername",
     "versionnumber",
     "zipcode",
 ]
@@ -51,7 +53,13 @@ CONTACT_PERSON_FIELDS = [
     "versionnumber",
 ]
 
-CUSTOMER_NAME_LOOKUP_FIELDS = ["customernumber", "name1"]
+CUSTOMER_CONTACT_LOOKUP_FIELDS = [
+    "customernumber",
+    "name1",
+    "theaccountmanagername",
+    "specification1name",
+]
+SPECIFICATION1_FIELDS = ["specification1name", "description"]
 
 CUSTOMER_NUMBER_FIELD = "customernumber"
 CONTACT_PERSON_NUMBER_FIELD = "contactpersonnumber"
@@ -60,3 +68,5 @@ EMAIL_FIELD = "electronicmailaddress"
 VERSION_FIELD = "versionnumber"
 
 PARENT_COMPANY_NAME_FIELD = "parent_customer_name1"
+PARENT_CUSTOMER_CSE_FIELD = "parent_customer_cse"
+PARENT_CUSTOMER_INDUSTRY_FIELD = "parent_customer_industry"

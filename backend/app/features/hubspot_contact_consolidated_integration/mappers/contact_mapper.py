@@ -2,6 +2,8 @@ from typing import Any
 
 from app.features.hubspot_contact_consolidated_integration.constants import (
     PARENT_COMPANY_NAME_FIELD,
+    PARENT_CUSTOMER_CSE_FIELD,
+    PARENT_CUSTOMER_INDUSTRY_FIELD,
 )
 
 CONTACT_FIELD_MAPPING: dict[str, str] = {
@@ -13,6 +15,8 @@ CONTACT_FIELD_MAPPING: dict[str, str] = {
     "telephone": "phone",
     "position": "jobtitle",
     PARENT_COMPANY_NAME_FIELD: "company",
+    PARENT_CUSTOMER_CSE_FIELD: "cse",
+    PARENT_CUSTOMER_INDUSTRY_FIELD: "industry",
     "name2": "address",
     "name3": "street_address_2",
     "mobilephone": "mobilephone",
@@ -28,12 +32,20 @@ class ContactMapper:
         self,
         contact: dict[str, Any],
         parent_name: str | None,
+        cse: str | None = None,
+        industry: str | None = None,
     ) -> dict[str, Any]:
-        """Return a copy of the contact carrying the parent customer name1."""
+        """Return a copy enriched from the selected contact's parent Customer."""
         copy = {**contact}
-        normalized_name = str(parent_name or "").strip()
-        if normalized_name:
-            copy[PARENT_COMPANY_NAME_FIELD] = normalized_name
+        enrichments = {
+            PARENT_COMPANY_NAME_FIELD: parent_name,
+            PARENT_CUSTOMER_CSE_FIELD: cse,
+            PARENT_CUSTOMER_INDUSTRY_FIELD: industry,
+        }
+        for field, value in enrichments.items():
+            normalized_value = str(value or "").strip()
+            if normalized_value:
+                copy[field] = normalized_value
         return copy
 
     def enrich_contacts(

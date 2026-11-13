@@ -1,21 +1,33 @@
 """Unit tests for the consolidated contact grouping and mapping logic."""
 
+import asyncio
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
 import pytest
 
 from app.features.hubspot_contact_consolidated_integration.constants import (
     CONTACT_MASTER_FIELD,
     CONTACT_PERSON_NUMBER_FIELD,
     PARENT_COMPANY_NAME_FIELD,
+    PARENT_CUSTOMER_CSE_FIELD,
+    PARENT_CUSTOMER_INDUSTRY_FIELD,
 )
 from app.features.hubspot_contact_consolidated_integration.mappers.contact_groups import (
     ContactConsolidator,
     ContactGroup,
+)
+from app.features.hubspot_contact_consolidated_integration.mappers.company_mapper import (
+    CompanyMapper,
 )
 from app.features.hubspot_contact_consolidated_integration.mappers.contact_mapper import (
     ContactMapper,
 )
 from app.features.hubspot_contact_consolidated_integration.services.sync_orchestrator import (
     ConsolidatedSyncService,
+)
+from app.features.hubspot_contact_consolidated_integration.services.maconomy_service import (
+    MaconomyService,
 )
 from app.features.hubspot_contact_consolidated_integration.services.integration_run_log_service import (
     sanitize_group_summaries,
@@ -241,6 +253,24 @@ class TestCompanies:
         )
         assert group.parent_companies() == {"10001", "10002"}
 
+    def test_company_maps_account_manager_and_resolved_industry(self):
+        mapper = CompanyMapper()
+        customer = mapper.enrich_customer(
+            {
+                "customernumber": "10001",
+                "theaccountmanagername": "Jane Manager",
+                "specification1name": "IND-A",
+                "specification5name": "Must Not Be Used",
+            },
+            {"IND-A": "Manufacturing"},
+        )
+
+        payload = mapper.build_upsert_payload([customer])
+        properties = payload["inputs"][0]["properties"]
+        assert properties["cse"] == "Jane Manager"
+        assert properties["industry"] == "Manufacturing"
+        assert "Must Not Be Used" not in properties.values()
+
 
 class TestContactMapper:
     def test_payload_maps_fields_and_trace_id(self):
@@ -272,8 +302,17 @@ class TestContactMapper:
         enriched = ContactMapper().enrich_contact(
             _contact("1"),
             "Parent Co",
+            "Jane Manager",
+            "Manufacturing",
         )
         assert enriched[PARENT_COMPANY_NAME_FIELD] == "Parent Co"
+        assert enriched[PARENT_CUSTOMER_CSE_FIELD] == "Jane Manager"
+        assert enriched[PARENT_CUSTOMER_INDUSTRY_FIELD] == "Manufacturing"
+
+        payload = ContactMapper().build_upsert_payload([enriched])
+        properties = payload["inputs"][0]["properties"]
+        assert properties["cse"] == "Jane Manager"
+        assert properties["industry"] == "Manufacturing"
 
     def test_enrich_contact_ignores_blank_parent(self):
         original = _contact("1")
@@ -305,6 +344,61 @@ class TestParentNameResolution:
             {},
         )
         assert name is None
+
+
+class TestMasterCustomerEnrichment:
+    def test_uses_only_the_selected_contacts_parent_customer(self):
+        enriched = ConsolidatedSyncService._enrich_master_contact(
+            _contact("1", company="10001"),
+            {
+                "10001": {
+                    "name1": "Primary Co",
+                    "theaccountmanagername": "Primary CSE",
+                    "specification1name": "IND-A",
+                },
+                "10002": {
+                    "name1": "Associated Co",
+                    "theaccountmanagername": "Other CSE",
+                    "specification1name": "IND-B",
+                },
+            },
+            {"IND-A": "Manufacturing", "IND-B": "Healthcare"},
+        )
+
+        assert enriched[PARENT_COMPANY_NAME_FIELD] == "Primary Co"
+        assert enriched[PARENT_CUSTOMER_CSE_FIELD] == "Primary CSE"
+        assert enriched[PARENT_CUSTOMER_INDUSTRY_FIELD] == "Manufacturing"
+
+
+def test_specification1_reference_data_is_loaded_once_as_mapping():
+    service = MaconomyService(
+        client=object(),
+        settings=SimpleNamespace(
+            maconomy_url="https://maconomy.example",
+            maconomy_shortname="demo",
+        ),
+    )
+    service.authenticate = AsyncMock(return_value="token")
+    service._filter_records = AsyncMock(
+        return_value=[
+            {"specification1name": "IND-A", "description": "Manufacturing"},
+            {"specification1name": "IND-B", "description": "Healthcare"},
+        ]
+    )
+
+    mapping = asyncio.run(service.get_specification1_descriptions())
+
+    assert mapping == {"IND-A": "Manufacturing", "IND-B": "Healthcare"}
+    service._filter_records.assert_awaited_once_with(
+        service.client,
+        "token",
+        "https://maconomy.example/maconomy-api/containers/demo/specification1",
+        "",
+        ["specification1name", "description"],
+        "specification1",
+        limit=1000,
+        offset=0,
+    )
 
 
 class TestRunLogPrivacy:
