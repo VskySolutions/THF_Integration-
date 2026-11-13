@@ -21,6 +21,9 @@ from sqlalchemy.orm import (
 from app.db.base import Base
 from app.features.paycor_integration.constants import (
     EmpVendorCreationStatus,
+    PurposeCreationStatus,
+    SAPConcurUserCreationStatus,
+    Spec5CreationStatus,
 )
 
 if TYPE_CHECKING:
@@ -75,6 +78,57 @@ class PaycorEmployeeMappingLog(Base):
     )
 
     maconomy_emp_vendor_number: Mapped[
+        str | None
+    ] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    is_spec5_created: Mapped[
+        Spec5CreationStatus | None
+    ] = mapped_column(
+        Enum(
+            Spec5CreationStatus,
+            name="paycor_spec5_creation_status",
+        ),
+        nullable=True,
+    )
+
+    maconomy_spec5_name: Mapped[
+        str | None
+    ] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    is_purpose_created: Mapped[
+        PurposeCreationStatus | None
+    ] = mapped_column(
+        Enum(
+            PurposeCreationStatus,
+            name="paycor_purpose_creation_status",
+        ),
+        nullable=True,
+    )
+
+    maconomy_purpose_name: Mapped[
+        str | None
+    ] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    is_sap_concur_created: Mapped[
+        SAPConcurUserCreationStatus | None
+    ] = mapped_column(
+        Enum(
+            SAPConcurUserCreationStatus,
+            name="paycor_sap_concur_user_creation_status",
+        ),
+        nullable=True,
+    )
+
+    sap_concur_user_id: Mapped[
         str | None
     ] = mapped_column(
         Text,

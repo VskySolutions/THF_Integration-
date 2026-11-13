@@ -16,6 +16,24 @@ class EmpVendorCreationStatus(str, Enum):
     SKIPPED = "SKIPPED"
 
 
+class Spec5CreationStatus(str, Enum):
+    SUCCESS = "SUCCESS"
+    FAILURE = "FAILURE"
+    SKIPPED = "SKIPPED"
+
+
+class PurposeCreationStatus(str, Enum):
+    SUCCESS = "SUCCESS"
+    FAILURE = "FAILURE"
+    SKIPPED = "SKIPPED"
+
+
+class SAPConcurUserCreationStatus(str, Enum):
+    SUCCESS = "SUCCESS"
+    FAILURE = "FAILURE"
+    SKIPPED = "SKIPPED"
+
+
 class TimesheetSubmissionMode(str, Enum):
     APPEND = "APPEND"
     REPLACE = "REPLACE"
