@@ -1,6 +1,7 @@
 """Service for retrieving employees from Paycor."""
 
 import asyncio
+import logging
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urljoin
@@ -11,6 +12,9 @@ from app.core.config import Settings, get_settings
 from app.features.paycor_integration.mappers import (
     map_paycor_employee,
 )
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 
@@ -141,6 +145,154 @@ class PaycorService:
         """Return employees, departments, and person details."""
 
         return await self._retrieve_employee_data()
+
+    async def get_creation_custom_fields_by_employee_ids(
+        self,
+        employee_ids: list[str],
+    ) -> dict[str, dict[str, Any]]:
+        """Retrieve creation-only custom fields for employees."""
+
+        normalized_ids = list(
+            dict.fromkeys(
+                normalized_id
+                for employee_id in employee_ids
+                if (
+                    normalized_id
+                    := self._normalize_person_id(
+                        employee_id
+                    )
+                )
+            )
+        )
+
+        if not normalized_ids:
+            return {}
+
+        async with httpx.AsyncClient(
+            timeout=self.timeout
+        ) as client:
+            access_token = await self._get_access_token(
+                client
+            )
+            semaphore = asyncio.Semaphore(10)
+
+            async def load_employee_fields(
+                employee_id: str,
+            ) -> tuple[str, dict[str, Any]]:
+                async with semaphore:
+                    initial_url = (
+                        f"{self.settings.paycor_url.rstrip('/')}"
+                        f"/v1/employees/{employee_id}"
+                        "/customfields"
+                    )
+
+                    try:
+                        records = await (
+                            self._get_all_paginated_records(
+                                client=client,
+                                access_token=access_token,
+                                initial_url=initial_url,
+                                initial_params=None,
+                                resource_name=(
+                                    "employee custom field"
+                                ),
+                            )
+                        )
+                    except (
+                        PaycorServiceError,
+                        httpx.HTTPError,
+                    ) as exc:
+                        return employee_id, {
+                            "billRateDescription": None,
+                            "skillLevel": None,
+                            "_error": (
+                                "Unable to retrieve Paycor custom "
+                                f"fields: {exc}"
+                            ),
+                        }
+
+                    target_fields = {
+                        "bill rate description": (
+                            "billRateDescription",
+                            "Bill Rate Description",
+                        ),
+                        "skill level": (
+                            "skillLevel",
+                            "Skill Level",
+                        ),
+                    }
+                    values_by_field: dict[
+                        str,
+                        set[str],
+                    ] = {
+                        output_field: set()
+                        for output_field, _ in (
+                            target_fields.values()
+                        )
+                    }
+
+                    for record in records:
+                        field_config = target_fields.get(
+                            str(record.get("fieldName") or "")
+                            .strip()
+                            .casefold()
+                        )
+
+                        if field_config is None:
+                            continue
+
+                        normalized_value = (
+                            self._normalize_optional_text(
+                                record.get("value")
+                            )
+                        )
+
+                        if normalized_value is not None:
+                            values_by_field[
+                                field_config[0]
+                            ].add(normalized_value)
+
+                    errors: list[str] = []
+                    resolved_fields: dict[str, Any] = {}
+
+                    for (
+                        output_field,
+                        display_name,
+                    ) in target_fields.values():
+                        values = values_by_field[
+                            output_field
+                        ]
+
+                        if len(values) > 1:
+                            resolved_fields[
+                                output_field
+                            ] = None
+                            errors.append(
+                                "Paycor returned conflicting "
+                                f"{display_name} values"
+                            )
+                        else:
+                            resolved_fields[
+                                output_field
+                            ] = next(iter(values), None)
+
+                    return employee_id, {
+                        **resolved_fields,
+                        "_error": (
+                            "; ".join(errors)
+                            if errors
+                            else None
+                        ),
+                    }
+
+            results = await asyncio.gather(
+                *(
+                    load_employee_fields(employee_id)
+                    for employee_id in normalized_ids
+                )
+            )
+
+        return dict(results)
     
     async def _map_employee_records(
         self,
@@ -177,7 +329,6 @@ class PaycorService:
                     ),
                 )
             )
-
             try:
                 mapped_employee = map_paycor_employee(
                     enriched_employee,
@@ -453,6 +604,7 @@ class PaycorService:
             initial_url=initial_url,
             initial_params=None,
             resource_name="pay rate",
+            allow_partial_pay_rate_cursor_error=True,
         )
 
     @classmethod
@@ -679,6 +831,57 @@ class PaycorService:
             ),
         }
 
+    @classmethod
+    def enrich_employee_with_custom_fields(
+        cls,
+        employee: dict[str, Any],
+        *,
+        custom_fields_by_employee_id: dict[
+            str,
+            dict[str, Any],
+        ],
+    ) -> dict[str, Any]:
+        """Attach resolved creation-only custom-field values."""
+
+        employee_id = cls._normalize_person_id(
+            employee.get("id")
+            or employee.get("paycorEmployeeId")
+        )
+        custom_field_data = (
+            custom_fields_by_employee_id.get(employee_id)
+            if employee_id is not None
+            else None
+        )
+
+        return {
+            **employee,
+            "billRateDescription": (
+                custom_field_data.get(
+                    "billRateDescription"
+                )
+                if isinstance(custom_field_data, dict)
+                else None
+            ),
+            "skillLevel": (
+                custom_field_data.get("skillLevel")
+                if isinstance(custom_field_data, dict)
+                else None
+            ),
+            "customFieldsError": (
+                custom_field_data.get("_error")
+                if isinstance(custom_field_data, dict)
+                else None
+            ),
+        }
+
+    @staticmethod
+    def _normalize_optional_text(value: Any) -> str | None:
+        if not isinstance(value, str):
+            return None
+
+        normalized_value = value.strip()
+        return normalized_value or None
+
     @staticmethod
     def _normalize_person_id(value: Any) -> str | None:
         if value is None:
@@ -697,6 +900,7 @@ class PaycorService:
             tuple[str, str]
         ] | None,
         resource_name: str,
+        allow_partial_pay_rate_cursor_error: bool = False,
     ) -> list[dict[str, Any]]:
         """Retrieve all pages from a Paycor list endpoint."""
 
@@ -729,6 +933,46 @@ class PaycorService:
                 response_text = (
                     exc.response.text.strip()
                 )
+
+                if (
+                    allow_partial_pay_rate_cursor_error
+                    and exc.response.status_code == 400
+                    and "employeepayrateid - not found"
+                    in response_text.casefold()
+                ):
+                    correlation_id: str | None = None
+
+                    try:
+                        error_data = exc.response.json()
+                    except (TypeError, ValueError):
+                        error_data = None
+
+                    if isinstance(error_data, dict):
+                        correlation_value = error_data.get(
+                            "CorrelationId"
+                        )
+
+                        if correlation_value is not None:
+                            correlation_id = str(
+                                correlation_value
+                            ).strip() or None
+
+                    continuation_token = (
+                        exc.request.url.params.get(
+                            "continuationToken"
+                        )
+                    )
+
+                    LOGGER.warning(
+                        "Paycor pay-rate pagination stopped after "
+                        "an invalid continuation cursor; retaining "
+                        "%s records (continuationToken=%s, "
+                        "correlationId=%s)",
+                        len(records),
+                        continuation_token or "<missing>",
+                        correlation_id or "<missing>",
+                    )
+                    return records
 
                 raise PaycorServiceError(
                     f"Paycor {resource_name} request "

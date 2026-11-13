@@ -388,6 +388,11 @@ async def get_paygrid_payload(
             .get_entity_descriptions_by_code()
         )
 
+        employee_classifications_by_number = await (
+            maconomy_service
+            .get_employee_classifications()
+        )
+
         (
             earning_codes,
             department_codes,
@@ -431,7 +436,10 @@ async def get_paygrid_payload(
 
         calculated_entries = (
             calculate_all_weekly_earnings(
-                daily_entries
+                daily_entries,
+                employee_classifications_by_number=(
+                    employee_classifications_by_number
+                ),
             )
         )
 

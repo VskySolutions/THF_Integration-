@@ -66,6 +66,13 @@ FIXED_WORKING_TIME_UPDATE_FIELDS = frozenset(
     }
 )
 
+PAYCOR_FLSA_TO_MACONOMY_EMPLOYEE_TYPE = {
+    "salaryexempt": "salary_exempt",
+    "salarynonexempt": "salary_non-exempt",
+    "hourlyexempt": "hourly_exempt",
+    "hourlynonexempt": "hourly_non-exempt",
+}
+
 
 # Employee update fields may be omitted and retried.
 
@@ -80,7 +87,7 @@ SKIPPABLE_MACONOMY_UPDATE_FIELDS = frozenset(
         "name1",
         "personaltitle",
         "position",
-        "remark2",
+        "employeetype",
         "remark5",
         "specification4name",
         "superioremployee",
@@ -147,6 +154,7 @@ class PaycorEmployeeSyncService:
             entities_by_description,
             specification4_by_description,
             countries_by_alias,
+            employee_types_by_description,
         ) = await (
             self._load_maconomy_employee_reference_lookups()
         )
@@ -154,6 +162,25 @@ class PaycorEmployeeSyncService:
         maconomy_employee_numbers = (
             await self
             ._load_maconomy_employee_numbers()
+        )
+
+        employees_to_create = [
+            employee
+            for employee in employees_to_process
+            if self._normalize_employee_number(
+                employee.get("employeeNumber")
+            )
+            not in maconomy_employee_numbers
+        ]
+        custom_fields_by_employee_id = await (
+            self.paycor_service
+            .get_creation_custom_fields_by_employee_ids(
+                [
+                    str(employee.get("id"))
+                    for employee in employees_to_create
+                    if employee.get("id") is not None
+                ]
+            )
         )
 
         results: list[dict[str, Any]] = []
@@ -175,6 +202,15 @@ class PaycorEmployeeSyncService:
                         enriched_raw_employee,
                         annual_hours_by_employee_id=(
                             annual_hours_by_employee_id
+                        ),
+                    )
+                )
+                enriched_raw_employee = (
+                    self.paycor_service
+                    .enrich_employee_with_custom_fields(
+                        enriched_raw_employee,
+                        custom_fields_by_employee_id=(
+                            custom_fields_by_employee_id
                         ),
                     )
                 )
@@ -200,6 +236,9 @@ class PaycorEmployeeSyncService:
                         ),
                         specification4_by_description=(
                             specification4_by_description
+                        ),
+                        employee_types_by_description=(
+                            employee_types_by_description
                         ),
                     )
                 )
@@ -271,6 +310,7 @@ class PaycorEmployeeSyncService:
             entities_by_description,
             specification4_by_description,
             countries_by_alias,
+            employee_types_by_description,
         ) = await (
             self._load_maconomy_employee_reference_lookups()
         )
@@ -282,6 +322,9 @@ class PaycorEmployeeSyncService:
                 ),
                 specification4_by_description=(
                     specification4_by_description
+                ),
+                employee_types_by_description=(
+                    employee_types_by_description
                 ),
             )
         )
@@ -311,6 +354,27 @@ class PaycorEmployeeSyncService:
             await self
             ._load_maconomy_employee_numbers()
         )
+
+        employee_number = self._require_employee_number(
+            employee.get("employeeNumber")
+        )
+
+        if employee_number not in maconomy_employee_numbers:
+            custom_fields_by_employee_id = await (
+                self.paycor_service
+                .get_creation_custom_fields_by_employee_ids(
+                    [str(employee.get("paycorEmployeeId"))]
+                )
+            )
+            employee = (
+                self.paycor_service
+                .enrich_employee_with_custom_fields(
+                    employee,
+                    custom_fields_by_employee_id=(
+                        custom_fields_by_employee_id
+                    ),
+                )
+            )
 
         return await self._sync_mapped_employee(
             session,
@@ -351,6 +415,7 @@ class PaycorEmployeeSyncService:
             entities_by_description,
             specification4_by_description,
             countries_by_alias,
+            employee_types_by_description,
         ) = await (
             self._load_maconomy_employee_reference_lookups()
         )
@@ -362,6 +427,9 @@ class PaycorEmployeeSyncService:
                 ),
                 specification4_by_description=(
                     specification4_by_description
+                ),
+                employee_types_by_description=(
+                    employee_types_by_description
                 ),
             )
         )
@@ -507,6 +575,7 @@ class PaycorEmployeeSyncService:
             entities_by_description,
             specification4_by_description,
             countries_by_alias,
+            employee_types_by_description,
         ) = await (
             self._load_maconomy_employee_reference_lookups()
         )
@@ -616,7 +685,6 @@ class PaycorEmployeeSyncService:
                         ),
                     )
                 )
-
                 employee = map_paycor_employee(
                     enriched_raw_employee,
                     departments_by_id=(
@@ -639,6 +707,9 @@ class PaycorEmployeeSyncService:
                         ),
                         specification4_by_description=(
                             specification4_by_description
+                        ),
+                        employee_types_by_description=(
+                            employee_types_by_description
                         ),
                     )
                 )
@@ -786,6 +857,7 @@ class PaycorEmployeeSyncService:
         dict[str, str],
         dict[str, str],
         dict[str, str],
+        dict[str, str],
     ]:
         """Load Maconomy employee reference values once."""
 
@@ -797,7 +869,8 @@ class PaycorEmployeeSyncService:
         except MaconomyEmployeeServiceError as exc:
             raise PaycorEmployeeSyncServiceError(
                 "Unable to retrieve Maconomy Entity, "
-                "Specification 4, and Countries reference data"
+                "Specification 4, Countries, and Employee "
+                "Types reference data"
             ) from exc
 
     @staticmethod
@@ -865,6 +938,7 @@ class PaycorEmployeeSyncService:
         *,
         entities_by_description: dict[str, str],
         specification4_by_description: dict[str, str],
+        employee_types_by_description: dict[str, str],
     ) -> dict[str, Any]:
         resolved_employee = dict(employee)
 
@@ -927,6 +1001,54 @@ class PaycorEmployeeSyncService:
         resolved_employee[
             "maconomySpecification4Name"
         ] = specification4_code
+
+        flsa = cls._normalize_reference_description(
+            employee.get("flsa")
+        )
+
+        if flsa is None:
+            resolved_employee.pop(
+                "maconomyEmployeeType",
+                None,
+            )
+            resolved_employee.pop(
+                "employeeTypeMappingError",
+                None,
+            )
+        else:
+            target_employee_type = (
+                PAYCOR_FLSA_TO_MACONOMY_EMPLOYEE_TYPE.get(
+                    cls._reference_lookup_key(flsa)
+                )
+            )
+
+            employee_type = (
+                employee_types_by_description.get(
+                    target_employee_type
+                )
+                if target_employee_type is not None
+                else None
+            )
+
+            if employee_type is None:
+                resolved_employee.pop(
+                    "maconomyEmployeeType",
+                    None,
+                )
+                resolved_employee[
+                    "employeeTypeMappingError"
+                ] = (
+                    "No confirmed active Maconomy Employee Type "
+                    f"mapping matches Paycor FLSA value {flsa!r}"
+                )
+            else:
+                resolved_employee[
+                    "maconomyEmployeeType"
+                ] = employee_type
+                resolved_employee.pop(
+                    "employeeTypeMappingError",
+                    None,
+                )
 
         return resolved_employee
 
@@ -1434,6 +1556,32 @@ class PaycorEmployeeSyncService:
             message_notes.append(
                 "Fixed working time was omitted: "
                 f"{working_time_error.strip()}"
+            )
+
+        custom_fields_error = employee_to_create.get(
+            "customFieldsError"
+        )
+
+        if (
+            isinstance(custom_fields_error, str)
+            and custom_fields_error.strip()
+        ):
+            message_notes.append(
+                "Employee custom-field warning: "
+                f"{custom_fields_error.strip()}"
+            )
+
+        employee_type_error = employee_to_create.get(
+            "employeeTypeMappingError"
+        )
+
+        if (
+            isinstance(employee_type_error, str)
+            and employee_type_error.strip()
+        ):
+            message_notes.append(
+                "Employee Type was omitted: "
+                f"{employee_type_error.strip()}"
             )
 
         # Employee vendor creation (Req FR-1..FR-8). Runs only for
@@ -2156,6 +2304,19 @@ class PaycorEmployeeSyncService:
             result_message = (
                 f"{result_message}; fixed working time update "
                 f"skipped: {working_time_error.strip()}"
+            )
+
+        employee_type_error = employee.get(
+            "employeeTypeMappingError"
+        )
+
+        if (
+            isinstance(employee_type_error, str)
+            and employee_type_error.strip()
+        ):
+            result_message = (
+                f"{result_message}; Employee Type update skipped: "
+                f"{employee_type_error.strip()}"
             )
 
         return result_message

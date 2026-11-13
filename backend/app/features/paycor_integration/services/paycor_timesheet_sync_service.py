@@ -110,6 +110,11 @@ class PaycorTimesheetSyncService:
             .get_entity_descriptions_by_code()
         )
 
+        employee_classifications_by_number = await (
+            self.maconomy_service
+            .get_employee_classifications()
+        )
+
         (
             earning_codes,
             department_codes,
@@ -144,7 +149,10 @@ class PaycorTimesheetSyncService:
 
         calculated_entries = (
             calculate_all_weekly_earnings(
-                daily_entries
+                daily_entries,
+                employee_classifications_by_number=(
+                    employee_classifications_by_number
+                ),
             )
         )
 

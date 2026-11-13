@@ -621,6 +621,15 @@ def map_paycor_employee(
         "hireDate": hire_date,
         "flsa": flsa,
         "annualHours": employee_data.get("annualHours"),
+        "billRateDescription": _normalize_optional_string(
+            employee_data.get("billRateDescription")
+        ),
+        "skillLevel": _normalize_optional_string(
+            employee_data.get("skillLevel")
+        ),
+        "customFieldsError": _normalize_optional_string(
+            employee_data.get("customFieldsError")
+        ),
         "position": job_title,
         "jobCode": job_code,
         "departmentId": department_id,
@@ -736,7 +745,11 @@ def map_paycor_employee_to_maconomy(
         ),
         "prefix": "personaltitle",
         "suffix": "text10",
-        "flsa": "remark2",
+        "maconomyEmployeeType": "employeetype",
+        "billRateDescription": (
+            "primaryemployeecategorynumber"
+        ),
+        "skillLevel": "jobpricegroupnumber",
         "maconomyEntityName": "entityname",
     }
     if include_name_components:
@@ -821,7 +834,7 @@ MACONOMY_EMPLOYEE_UPDATE_FIELDS = (
     "specification4name",
     "personaltitle",
     "text10",
-    "remark2",
+    "employeetype",
     "remark5",
     "superioremployee",
     "name2",

@@ -38,7 +38,7 @@ EMPLOYEE_FIELDS = (
     "lastname",
     # "initials",
     "specification4name",
-    "remark2",
+    "employeetype",
     "remark5",
     "country",
     "dateemployed",
@@ -61,6 +61,8 @@ EMPLOYEE_FIELDS = (
     "fixedworkingtimefriday",
     "fixedworkingtimesaturday",
     "fixedworkingtimesunday",
+    "primaryemployeecategorynumber",
+    "jobpricegroupnumber",
     
 )
 
@@ -87,7 +89,7 @@ EMPLOYEE_REVISION_TABLE_FIELDS = (
     "electronicmailaddress",
     "position",
     "specification4name",
-    "remark2",
+    "employeetype",
     "remark5",
     "text10",
     "date5",
@@ -158,8 +160,9 @@ class MaconomyEmployeeService:
         dict[str, str],
         dict[str, str],
         dict[str, str],
+        dict[str, str],
     ]:
-        """Return Entity, Specification 4, and Country lookups."""
+        """Return employee reference lookups."""
 
         try:
             async with httpx.AsyncClient(
@@ -175,6 +178,7 @@ class MaconomyEmployeeService:
                     entities_by_description,
                     specification4_by_description,
                     countries_by_alias,
+                    employee_types_by_description,
                 ) = await asyncio.gather(
                     self._get_reference_lookup(
                         client,
@@ -192,12 +196,17 @@ class MaconomyEmployeeService:
                         client,
                         reconnect_token,
                     ),
+                    self._get_employee_type_lookup(
+                        client,
+                        reconnect_token,
+                    ),
                 )
 
                 return (
                     entities_by_description,
                     specification4_by_description,
                     countries_by_alias,
+                    employee_types_by_description,
                 )
 
         except MaconomyEmployeeServiceError:
@@ -803,6 +812,160 @@ class MaconomyEmployeeService:
             lookup[normalized_description] = code
 
         return lookup
+
+    async def _get_employee_type_lookup(
+        self,
+        client: httpx.AsyncClient,
+        reconnect_token: str,
+    ) -> dict[str, str]:
+        """Return employee-type aliases mapped to canonical values."""
+
+        shortname = quote(
+            self.settings.maconomy_shortname,
+            safe="",
+        )
+        base_url = (
+            f"{self.settings.maconomy_url}"
+            "/maconomy-api/containers/"
+            f"{shortname}"
+        )
+        headers = self._container_headers(reconnect_token)
+        specification_response = await client.get(
+            f"{base_url}/employees/specification",
+            headers=headers,
+        )
+        specification_response.raise_for_status()
+
+        try:
+            panes = specification_response.json()["panes"]
+        except (KeyError, TypeError, ValueError) as exc:
+            raise MaconomyEmployeeServiceError(
+                "Invalid Maconomy Employees specification response"
+            ) from exc
+
+        if not isinstance(panes, dict):
+            raise MaconomyEmployeeServiceError(
+                "Invalid Maconomy Employees specification response"
+            )
+
+        subtype_container: str | None = None
+
+        for pane in panes.values():
+            if not isinstance(pane, dict):
+                continue
+
+            fields = pane.get("fields")
+
+            if not isinstance(fields, dict):
+                continue
+
+            field = fields.get("employeetype")
+
+            if not isinstance(field, dict):
+                continue
+
+            subtype_value = field.get("subtypeContainer")
+
+            if (
+                isinstance(subtype_value, str)
+                and subtype_value.strip()
+            ):
+                subtype_container = subtype_value.strip()
+                break
+
+        if subtype_container is None:
+            raise MaconomyEmployeeServiceError(
+                "Maconomy Employees employeetype popup metadata "
+                "is unavailable"
+            )
+
+        popup_response = await client.post(
+            f"{base_url}/{quote(subtype_container, safe='')}/filter",
+            headers=headers,
+            json={
+                "fields": [
+                    "value",
+                    "title",
+                    "hidden",
+                ],
+                "offset": 0,
+                "limit": 1000,
+            },
+        )
+        popup_response.raise_for_status()
+
+        try:
+            records = popup_response.json()["panes"][
+                "filter"
+            ]["records"]
+        except (KeyError, TypeError, ValueError) as exc:
+            raise MaconomyEmployeeServiceError(
+                "Invalid Maconomy Employee Type popup response"
+            ) from exc
+
+        if not isinstance(records, list):
+            raise MaconomyEmployeeServiceError(
+                "Invalid Maconomy Employee Type popup response"
+            )
+
+        lookup: dict[str, str] = {}
+
+        for record in records:
+            data = (
+                record.get("data")
+                if isinstance(record, dict)
+                else None
+            )
+
+            if not isinstance(data, dict) or data.get("hidden") is True:
+                continue
+
+            value = self._normalize_lookup_value(
+                data.get("value")
+            )
+
+            if value is None:
+                continue
+
+            aliases = {
+                value,
+                self._normalize_lookup_value(
+                    data.get("title")
+                ),
+            }
+
+            for alias in aliases:
+                if alias is None:
+                    continue
+
+                key = " ".join(alias.split()).casefold()
+                existing_value = lookup.get(key)
+
+                if (
+                    existing_value is not None
+                    and existing_value != value
+                ):
+                    raise MaconomyEmployeeServiceError(
+                        "Maconomy Employee Type popup contains "
+                        f"ambiguous value {alias!r}"
+                    )
+
+                lookup[key] = value
+
+        if not lookup:
+            raise MaconomyEmployeeServiceError(
+                "Maconomy Employee Type popup returned no usable values"
+            )
+
+        return lookup
+
+    @staticmethod
+    def _normalize_lookup_value(value: Any) -> str | None:
+        if value is None:
+            return None
+
+        normalized_value = " ".join(str(value).split())
+        return normalized_value or None
 
     async def _get_country_lookup(
         self,
