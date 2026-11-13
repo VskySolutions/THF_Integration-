@@ -16,6 +16,12 @@ from app.features.sap_concur_integration.routers.create_maconomy_expense_sheet i
 from app.features.sap_concur_employee_integration.routers import (
     router as sap_concur_employee_router,
 )
+from app.features.sap_concur_invoice_integration.routers import (
+    router as sap_concur_invoice_router,
+)
+from app.features.sap_concur_engagements_and_tasks_integration.routers import (
+    router as sap_concur_engagements_tasks_router,
+)
 from app.features.exception_logs import install_exception_logging
 from app.features.schedular_services import (
     PaycorSchedulerService,
@@ -113,6 +119,10 @@ app.include_router(maconomy_caseware_cloud_router, prefix=settings.api_v1_prefix
 app.include_router(job_sync_router, prefix=settings.api_v1_prefix)
 app.include_router(sap_concur_router, prefix=settings.api_v1_prefix)
 app.include_router(sap_concur_employee_router, prefix=settings.api_v1_prefix)
+app.include_router(sap_concur_invoice_router, prefix=settings.api_v1_prefix)
+app.include_router(
+    sap_concur_engagements_tasks_router, prefix=settings.api_v1_prefix
+)
 
 app.include_router(pending_cch_task_mapping_router, prefix=settings.api_v1_prefix)
 app.include_router(manual_cch_task_mapping_router, prefix=settings.api_v1_prefix)

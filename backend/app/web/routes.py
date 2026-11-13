@@ -31,7 +31,13 @@ from app.features.paycor_integration.models import (
     PaycorTimesheetIntegrationLog,
 )
 from app.features.paycor_payroll_integration.models import PaycorPayrollIntegrationLog
+from app.features.sap_concur_engagements_and_tasks_integration.models.integration_log import (
+    SAPConcurEngagementTaskIntegrationLog,
+)
 from app.features.sap_concur_integration.models import SAPConcurIntegrationLog
+from app.features.sap_concur_invoice_integration.models import (
+    SAPConcurInvoiceIntegrationLog,
+)
 from app.features.user_activity.models import UserActivityLog
 from app.features.user_activity.services import log_activity
 from app.features.xcm_cch_axcess_integration.models import XCMCCHIntegrationRunLog
@@ -1538,6 +1544,106 @@ async def integration_logs(
         return templates.TemplateResponse(
             request=request,
             name="sap_concur_dashboard.html",
+            context={
+                "current_user": current_user,
+                "csrf_token": ensure_csrf_token(request),
+                "integration": integration,
+                "activity_logs": activity_logs,
+                "metrics": {
+                    "total_activity": total_logs,
+                    "success_rate": (
+                        round(successful_logs / total_logs * 100, 1)
+                        if total_logs
+                        else 0
+                    ),
+                    "created": sum(
+                        log.action.value == "CREATE"
+                        for log in activity_logs
+                    ),
+                    "failed": sum(
+                        log.status.value == "FAILED"
+                        for log in activity_logs
+                    ),
+                    "latest_activity": (
+                        activity_logs[0] if activity_logs else None
+                    ),
+                },
+                "flash_message": flash_message,
+                "flash_category": flash_category,
+            },
+        )
+
+    if integration.identifier_unique_name == (
+        IntegrationServiceIdentifier.MACONOMY_SAP_CONCUR_ENGAGEMENTS_AND_TASKS_SYNC
+    ).value:
+        log_result = await session.execute(
+            select(SAPConcurEngagementTaskIntegrationLog)
+            .options(
+                selectinload(
+                    SAPConcurEngagementTaskIntegrationLog.engagement_task_mapping
+                )
+            )
+            .order_by(SAPConcurEngagementTaskIntegrationLog.created_on_utc.desc())
+            .limit(1000)
+        )
+        activity_logs = list(log_result.scalars().all())
+        successful_logs = sum(
+            log.status.value == "SUCCESS" for log in activity_logs
+        )
+        total_logs = len(activity_logs)
+        return templates.TemplateResponse(
+            request=request,
+            name="sap_concur_engagement_task_dashboard.html",
+            context={
+                "current_user": current_user,
+                "csrf_token": ensure_csrf_token(request),
+                "integration": integration,
+                "activity_logs": activity_logs,
+                "metrics": {
+                    "total_activity": total_logs,
+                    "success_rate": (
+                        round(successful_logs / total_logs * 100, 1)
+                        if total_logs
+                        else 0
+                    ),
+                    "synced": sum(
+                        log.status.value == "SUCCESS"
+                        for log in activity_logs
+                    ),
+                    "failed": sum(
+                        log.status.value == "FAILED"
+                        for log in activity_logs
+                    ),
+                    "latest_activity": (
+                        activity_logs[0] if activity_logs else None
+                    ),
+                },
+                "flash_message": flash_message,
+                "flash_category": flash_category,
+            },
+        )
+
+    if (
+        integration.identifier_unique_name
+        == IntegrationServiceIdentifier.MACONOMY_SAP_CONCUR_INVOICE_SYNC.value
+    ):
+        log_result = await session.execute(
+            select(SAPConcurInvoiceIntegrationLog)
+            .options(
+                selectinload(SAPConcurInvoiceIntegrationLog.invoice_mapping)
+            )
+            .order_by(SAPConcurInvoiceIntegrationLog.created_on_utc.desc())
+            .limit(1000)
+        )
+        activity_logs = list(log_result.scalars().all())
+        successful_logs = sum(
+            log.status.value == "SUCCESS" for log in activity_logs
+        )
+        total_logs = len(activity_logs)
+
+        return templates.TemplateResponse(
+            request=request,
+            name="sap_concur_invoice_dashboard.html",
             context={
                 "current_user": current_user,
                 "csrf_token": ensure_csrf_token(request),

@@ -12,6 +12,8 @@ class IntegrationAction(str, Enum):
     CREATE = "CREATE"
     UPDATE = "UPDATE"
     RETRY_CREATE = "RETRY_CREATE"
+    # Legacy PG enum label still present on historical log rows
+    RETRY = "RETRY"
 
 
 class ProcessingStage(str, Enum):

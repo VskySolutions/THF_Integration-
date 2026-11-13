@@ -75,6 +75,8 @@ def map_concur_expense_to_maconomy_expense(
     custom_department = custom_data_values.get("department", "") if custom_data_values else ""
     custom_travel_reason = custom_data_values.get("travel_reason", "") if custom_data_values else ""
     custom_job_number = custom_data_values.get("job_number", "") if custom_data_values else ""
+    custom_task_code = custom_data_values.get("task_code", "") if custom_data_values else ""
+    custom_engagement = custom_data_values.get("Engagement_number", "") if custom_data_values else ""
 
     print("custom_location:",custom_location , "custom_department:",custom_department,"custom_travel_reason:",custom_travel_reason,"custom_job_number:",custom_job_number)
 

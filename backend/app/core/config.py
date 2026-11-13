@@ -101,7 +101,11 @@ class Settings(BaseSettings):
     )
     sap_concur_client_id: SecretStr
     sap_concur_client_secret: SecretStr
-    sap_concur_refresh_token: SecretStr    
+    sap_concur_refresh_token: SecretStr
+    # List id of the SAP Concur list holding engagements (parents) and
+    # tasks (children) for the bulk list endpoint; blank until the env
+    # var is configured (manual step).
+    sap_engagement_list_id: str = ""
 
     # HubSpot integration settings (service key auth: Bearer {HUBSPOT_SERVICE_KEY})
     hubspot_api_base_url: AnyHttpUrl = AnyHttpUrl(
@@ -118,6 +122,11 @@ class Settings(BaseSettings):
     scheduler_cch_interval_minutes: int = Field(default=5, ge=1)
     scheduler_caseware_interval_minutes: int = Field(default=5, ge=1)
     scheduler_sap_concur_interval_minutes: int = Field(default=5, ge=1)
+    scheduler_sap_concur_invoice_interval_minutes: int = Field(default=5, ge=1)
+    scheduler_sap_concur_engagements_tasks_interval_minutes: int = Field(
+        default=5,
+        ge=1,
+    )
     scheduler_hubspot_interval_minutes: int = Field(default=5, ge=1)
     scheduler_hubspot_contact_consolidated_enabled: bool = True
     scheduler_hubspot_contact_consolidated_interval_minutes: int = Field(

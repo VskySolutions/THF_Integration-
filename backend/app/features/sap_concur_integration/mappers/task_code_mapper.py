@@ -1,8 +1,8 @@
-"""In-memory Maconomy job/task resolution helpers (Req #5).
+"""In-memory Maconomy job/task resolution helpers (Req #5, Req #26).
 
 Mapping chain:
-    SAP Job Number -> Maconomy Task List
-    -> Expense Type / Task Description -> Maconomy Task Code (taskname)
+    SAP custom10 (jobnumber) -> Maconomy Task List
+    -> custom11 task code (job|tasklist|taskcode) -> taskname
 """
 from typing import Any
 
@@ -21,7 +21,6 @@ def build_job_tasklist_map(job_records: list[dict[str, Any]]) -> dict[str, str]:
     resolver can report 'Task List not found for Job Number' (FR-6).
     First record wins for duplicate job numbers (Q-2).
     """
-    print("job records:", job_records)
     job_tasklist_map: dict[str, str] = {}
     for record in job_records or []:
         job_number = normalize(record.get("jobnumber"))
@@ -36,12 +35,13 @@ def build_task_code_map(
     task_records: list[dict[str, Any]],
     job_tasklist_map: dict[str, str],
 ) -> dict[str, str]:
-    """Composite key 'jobno|tasklist|description' (normalized) -> task code.
+    """Composite key 'jobno|tasklist|taskname' (normalized) -> task code.
 
     The Job's Task List is joined onto each task record via a reverse index
-    (tasklist -> jobs) built from job_tasklist_map (Req Q-2 composite key).
-    Only records with a non-empty taskname are eligible (taskname = Maconomy
-    Task Code, Req FR-9). First record wins on duplicate keys.
+    (tasklist -> jobs) built from job_tasklist_map (composite key). Keyed on
+    taskname (exact Maconomy Task Code membership — Req#26 FR-1); the task
+    record's description is NOT part of the key. Only records with a
+    non-empty taskname are eligible. First record wins on duplicate keys.
     """
     jobs_by_tasklist: dict[str, list[str]] = {}
     for job_number, tasklist in (job_tasklist_map or {}).items():
@@ -51,12 +51,12 @@ def build_task_code_map(
     task_code_map: dict[str, str] = {}
     for record in task_records or []:
         tasklist_key = normalize(record.get("tasklist"))
-        description_key = normalize(record.get("description"))
         task_code = str(record.get("taskname") or "").strip()
-        if not tasklist_key or not description_key or not task_code:
+        task_key = normalize(task_code)
+        if not tasklist_key or not task_code:
             continue
         for job_number in jobs_by_tasklist.get(tasklist_key, []):
-            key = f"{job_number}|{tasklist_key}|{description_key}"
+            key = f"{job_number}|{tasklist_key}|{task_key}"
             if key not in task_code_map:
                 task_code_map[key] = task_code
     return task_code_map
@@ -64,14 +64,15 @@ def build_task_code_map(
 
 def resolve_task_code(
     job_number: Any,
-    expense_type: Any,
+    concur_task_code: Any,
     job_tasklist_map: dict[str, str],
     task_code_map: dict[str, str],
 ) -> tuple[str | None, str | None, str | None]:
-    """Resolve one expense line. Returns (tasklist, task_code, skip_reason).
+    """Resolve one expense line from the custom11 task code.
 
-    Exactly one of (tasklist, task_code) or skip_reason is set; skip_reason
-    strings must match Req FR-20 verbatim.
+    Returns (tasklist, task_code, skip_reason). Exactly one of
+    (tasklist, task_code) or skip_reason is set; skip strings match
+    Req FR-20 verbatim (unchanged — Req#26 Q-1).
     """
     job_key = normalize(job_number)
     if not job_key or job_key not in job_tasklist_map:
@@ -81,12 +82,10 @@ def resolve_task_code(
     if not tasklist:
         return None, None, "Task List not found for Job Number"
 
-    key = f"{job_key}|{normalize(tasklist)}|{normalize(expense_type)}"
-    task_code = task_code_map.get(key)
-    print("task_code:", task_code)
-    task_code = "2500"
-    print("Expense Type:", key, "task_code:", task_code)
-    if not task_code:
+    task_code = str(concur_task_code or "").strip()
+    key = f"{job_key}|{normalize(tasklist)}|{normalize(task_code)}"
+    resolved = task_code_map.get(key) if task_code else None
+    if not resolved:
         return None, None, "Expense Type/Task not found for Job Number"
 
-    return tasklist, task_code, None
+    return tasklist, resolved, None
