@@ -2,13 +2,47 @@
 
 import uuid
 from datetime import date
+from decimal import Decimal, InvalidOperation, ROUND_CEILING
 from typing import Any
 
 
-# Add other country mappings only after confirmation.
-PAYCOR_TO_MACONOMY_COUNTRY = {
-    "USA": "united_states_of_america",
+US_COUNTRY_ALIASES = {
+    "us",
+    "usa",
+    "united states",
 }
+
+ADDRESS_FIELD_MAPPING = {
+    "streetLine1": "name2",
+    "city": "postaldistrict",
+    "zipCode": "zipcode",
+}
+
+WEEKDAY_FIXED_WORKING_TIME_FIELDS = (
+    "fixedworkingtimemonday",
+    "fixedworkingtimetuesday",
+    "fixedworkingtimewednesday",
+    "fixedworkingtimethursday",
+    "fixedworkingtimefriday",
+)
+
+WEEKEND_FIXED_WORKING_TIME_FIELDS = (
+    "fixedworkingtimesaturday",
+    "fixedworkingtimesunday",
+)
+
+FIXED_WORKING_TIME_FIELDS = (
+    *WEEKDAY_FIXED_WORKING_TIME_FIELDS,
+    *WEEKEND_FIXED_WORKING_TIME_FIELDS,
+)
+
+
+class EmployeeAddressMappingError(ValueError):
+    """Raised when an employee address cannot resolve a country."""
+
+
+class EmployeeAnnualHoursMappingError(ValueError):
+    """Raised when annual hours cannot produce a weekly schedule."""
 
 
 def _normalize_optional_string(
@@ -35,6 +69,142 @@ def _normalize_required_string(
         )
 
     return normalized_value
+
+
+def map_paycor_primary_address(
+    employee_data: dict[str, Any],
+    *,
+    countries_by_alias: dict[str, str],
+) -> dict[str, str]:
+    """Map one matched Paycor Primary address to Maconomy fields."""
+
+    person_error = _normalize_optional_string(
+        employee_data.get("personAddressError")
+    )
+
+    if person_error is not None:
+        raise EmployeeAddressMappingError(person_error)
+
+    person_id = _normalize_optional_string(
+        employee_data.get("personId")
+    )
+
+    if person_id is None:
+        raise EmployeeAddressMappingError(
+            "Paycor employee person ID is required for address mapping"
+        )
+
+    primary_address = employee_data.get("primaryAddress")
+
+    if not isinstance(primary_address, dict):
+        raise EmployeeAddressMappingError(
+            "Paycor Primary address is required"
+        )
+
+    paycor_country = _normalize_optional_string(
+        primary_address.get("country")
+    )
+
+    if paycor_country is None:
+        raise EmployeeAddressMappingError(
+            "Paycor Primary address country is required"
+        )
+
+    if paycor_country.casefold() in US_COUNTRY_ALIASES:
+        resolved_country = _normalize_optional_string(
+            primary_address.get("state")
+        )
+
+        if resolved_country is None:
+            raise EmployeeAddressMappingError(
+                "Paycor Primary address state is required for a US address"
+            )
+    else:
+        resolved_country = paycor_country
+
+    maconomy_country = countries_by_alias.get(
+        " ".join(resolved_country.split()).casefold()
+    )
+
+    if maconomy_country is None:
+        raise EmployeeAddressMappingError(
+            "No Maconomy Country matches Paycor address value "
+            f"{resolved_country!r}"
+        )
+
+    mapped_address: dict[str, str] = {
+        "country": maconomy_country,
+        "name5": "",
+    }
+
+    for paycor_field, maconomy_field in (
+        ADDRESS_FIELD_MAPPING.items()
+    ):
+        value = _normalize_optional_string(
+            primary_address.get(paycor_field)
+        )
+
+        if value is not None:
+            mapped_address[maconomy_field] = value
+
+    street_line_2 = (
+        _normalize_optional_string(
+            primary_address.get("streetLine2")
+        )
+        or _normalize_optional_string(
+            primary_address.get("suite")
+        )
+    )
+
+    if street_line_2 is not None:
+        mapped_address["name3"] = street_line_2
+
+    return mapped_address
+
+
+def map_annual_hours_to_fixed_working_time(
+    employee_data: dict[str, Any],
+) -> dict[str, int]:
+    """Divide annual hours by 260 and round each weekday up."""
+
+    annual_hours_value = employee_data.get("annualHours")
+
+    if annual_hours_value is None or isinstance(
+        annual_hours_value,
+        bool,
+    ):
+        raise EmployeeAnnualHoursMappingError(
+            "Paycor annual hours are unavailable"
+        )
+
+    try:
+        annual_hours = Decimal(str(annual_hours_value))
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise EmployeeAnnualHoursMappingError(
+            "Paycor annual hours are invalid"
+        ) from exc
+
+    if not annual_hours.is_finite() or annual_hours <= 0:
+        raise EmployeeAnnualHoursMappingError(
+            "Paycor annual hours must be greater than zero"
+        )
+
+    weekday_hours = int(
+        (annual_hours / Decimal("260")).to_integral_value(
+            rounding=ROUND_CEILING
+        )
+    )
+
+    return {
+        **{
+            field_name: weekday_hours
+            for field_name in WEEKDAY_FIXED_WORKING_TIME_FIELDS
+        },
+        **{
+            field_name: 0
+            for field_name in WEEKEND_FIXED_WORKING_TIME_FIELDS
+        },
+    }
 
 
 def _parse_paycor_date(
@@ -135,7 +305,6 @@ def map_paycor_employee(
     - Paycor employee UUID
     - Employee number
     - Legal entity ID
-    - Country
 
     All other fields are optional.
     """
@@ -260,6 +429,18 @@ def map_paycor_employee(
             "hire date",
         ).isoformat()
 
+    # FLSA is optional and comes from Paycor status data.
+    status_data = employee_data.get("statusData")
+
+    if isinstance(status_data, dict):
+        flsa = _normalize_optional_string(
+            status_data.get("flsa")
+        )
+    else:
+        flsa = _normalize_optional_string(
+            employee_data.get("flsa")
+        )
+
     # Position and manager are optional.
     position_data = employee_data.get(
         "positionData"
@@ -323,15 +504,13 @@ def map_paycor_employee(
             )
         )
 
-    # Work-location ID and name are optional,
-    # but country is required.
+    # Work-location ID and name identify Specification 4.
     work_location_data = employee_data.get(
         "workLocation"
     )
 
     work_location_id: str | None = None
     work_location_name: str | None = None
-    work_location_country: str | None = None
 
     if isinstance(work_location_data, dict):
         work_location_id = (
@@ -346,14 +525,7 @@ def map_paycor_employee(
             )
         )
 
-        work_location_country = (
-            _normalize_optional_string(
-                work_location_data.get("country")
-            )
-        )
-
-    # Supports already normalized data or a top-level
-    # Paycor country value.
+    # Supports already normalized data.
     if work_location_id is None:
         work_location_id = (
             _normalize_optional_string(
@@ -370,23 +542,6 @@ def map_paycor_employee(
                     "workLocationName"
                 )
             )
-        )
-
-    if work_location_country is None:
-        work_location_country = (
-            _normalize_optional_string(
-                employee_data.get(
-                    "workLocationCountry"
-                )
-            )
-            or _normalize_optional_string(
-                employee_data.get("country")
-            )
-        )
-
-    if work_location_country is None:
-        raise ValueError(
-            "Paycor country is required"
         )
 
     # Department is completely optional.
@@ -443,8 +598,7 @@ def map_paycor_employee(
                     )
                 )
 
-    # Prefix and suffix come from:
-    # /v1/tenants/{tenantId}/persons/{employeeUuid}
+    # Prefix and suffix come from the matched legal-entity person.
     prefix = _normalize_optional_string(
         employee_data.get("prefix")
     )
@@ -465,6 +619,17 @@ def map_paycor_employee(
         "suffix": suffix,
         "emailAddress": email_address,
         "hireDate": hire_date,
+        "flsa": flsa,
+        "annualHours": employee_data.get("annualHours"),
+        "billRateDescription": _normalize_optional_string(
+            employee_data.get("billRateDescription")
+        ),
+        "skillLevel": _normalize_optional_string(
+            employee_data.get("skillLevel")
+        ),
+        "customFieldsError": _normalize_optional_string(
+            employee_data.get("customFieldsError")
+        ),
         "position": job_title,
         "jobCode": job_code,
         "departmentId": department_id,
@@ -472,8 +637,12 @@ def map_paycor_employee(
         "departmentNumber": department_number,
         "workLocationId": work_location_id,
         "workLocationName": work_location_name,
-        "workLocationCountry": (
-            work_location_country
+        "personId": employee_data.get("personId"),
+        "primaryAddress": employee_data.get(
+            "primaryAddress"
+        ),
+        "personAddressError": employee_data.get(
+            "personAddressError"
         ),
         "managerEmployeeId": (
             manager_employee_id
@@ -488,6 +657,7 @@ def map_paycor_employee_to_maconomy(
     employee_data: dict[str, Any],
     *,
     include_name_components: bool = False,
+    require_address: bool = True,
 ) -> dict[str, Any]:
     """Map normalized Paycor employee data to Maconomy fields."""
 
@@ -506,39 +676,62 @@ def map_paycor_employee_to_maconomy(
         employee_data.get("legalEntityId")
     )
 
-    work_location_country = (
-        _normalize_required_string(
-            employee_data.get(
-                "workLocationCountry"
-            ),
-            "country",
-        )
-    )
-
-    paycor_country = (
-        work_location_country.upper()
-    )
-
-    maconomy_country = (
-        PAYCOR_TO_MACONOMY_COUNTRY.get(
-            paycor_country
-        )
-    )
-
-    if maconomy_country is None:
-        raise ValueError(
-            "Unsupported Paycor country: "
-            f"{work_location_country}"
-        )
-
     # These are the only values always submitted.
     maconomy_data: dict[str, Any] = {
         "employeenumber": employee_number,
-        "country": maconomy_country,
 
         # Paycor employee UUID remains stored in remark5.
         "remark5": paycor_employee_id,
     }
+
+    maconomy_address = employee_data.get(
+        "maconomyAddress"
+    )
+
+    if not isinstance(maconomy_address, dict):
+        if require_address:
+            raise ValueError(
+                "Resolved Paycor Primary address is required"
+            )
+    else:
+        maconomy_country = _normalize_optional_string(
+            maconomy_address.get("country")
+        )
+
+        if maconomy_country is None and require_address:
+            raise ValueError(
+                "Resolved Maconomy country is required"
+            )
+
+        if maconomy_country is not None:
+            maconomy_data["country"] = maconomy_country
+
+        for field_name in (
+            "name2",
+            "name3",
+            "postaldistrict",
+            "zipcode",
+        ):
+            value = _normalize_optional_string(
+                maconomy_address.get(field_name)
+            )
+
+            if value is not None:
+                maconomy_data[field_name] = value
+
+        if "name5" in maconomy_address:
+            maconomy_data["name5"] = ""
+
+    fixed_working_time = employee_data.get(
+        "maconomyFixedWorkingTime"
+    )
+
+    if isinstance(fixed_working_time, dict):
+        for field_name in FIXED_WORKING_TIME_FIELDS:
+            if field_name in fixed_working_time:
+                maconomy_data[field_name] = (
+                    fixed_working_time[field_name]
+                )
 
     # Optional string fields. Blank values are omitted.
     optional_field_mapping = {
@@ -552,6 +745,11 @@ def map_paycor_employee_to_maconomy(
         ),
         "prefix": "personaltitle",
         "suffix": "text10",
+        "maconomyEmployeeType": "employeetype",
+        "billRateDescription": (
+            "primaryemployeecategorynumber"
+        ),
+        "skillLevel": "jobpricegroupnumber",
         "maconomyEntityName": "entityname",
     }
     if include_name_components:
@@ -636,8 +834,15 @@ MACONOMY_EMPLOYEE_UPDATE_FIELDS = (
     "specification4name",
     "personaltitle",
     "text10",
+    "employeetype",
     "remark5",
     "superioremployee",
+    "name2",
+    "name3",
+    "name5",
+    "postaldistrict",
+    "zipcode",
+    *FIXED_WORKING_TIME_FIELDS,
 )
 
 
@@ -648,7 +853,8 @@ def map_paycor_employee_to_maconomy_update(
 
     mapped_payload = map_paycor_employee_to_maconomy(
         employee_data,
-        include_name_components=True
+        include_name_components=True,
+        require_address=False,
     )
 
    
