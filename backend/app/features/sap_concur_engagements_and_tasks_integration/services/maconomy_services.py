@@ -192,10 +192,7 @@ class MaconomyService:
         restriction = (
             f"({or_clause}) "
             "and approved=true "
-            "and approvaldate>="
-            f"date({start_date.year},{start_date.month},{start_date.day}) "
-            "and approvaldate<="
-            f"date({current_date.year},{current_date.month},{current_date.day})"
+            
         )
         payload: dict[str, Any] = {
             "restriction": restriction,

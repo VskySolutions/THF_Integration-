@@ -77,7 +77,7 @@ _PARTIAL_STATUS = "PARTIAL_SUCCESS"
 
 
 class SyncEngagementsAndTasksRequest(BaseModel):
-    limit: int = Field(default=DEFAULT_JOBS_LIMIT, ge=1, le=1000)
+    limit: int = Field(default=DEFAULT_JOBS_LIMIT, ge=1, le=2000)
     offset: int = Field(default=0, ge=0)
 
 
@@ -179,7 +179,6 @@ async def sync_engagements_and_tasks(
             ) from exc
 
     engagements = build_engagements_payload(jobs, tasks)["engagements"]
-    # return {"engagements": engagements, "count": len(engagements)}
 
     # --- Step 2: pre-check against the mapping table. Engagement pair is
     # (jobnumber, ""); task pair is (jobnumber, tasknumber). ---
