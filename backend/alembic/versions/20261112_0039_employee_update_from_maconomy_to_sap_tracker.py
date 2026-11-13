@@ -1,7 +1,7 @@
 """Employee update from maconomy to SAP tracker and sync logging.
 
-Revision ID: 20261112_0037
-Revises: 20261111_0034
+Revision ID: 20261112_0039
+Revises: 20261111_0038
 Create Date: 2026-11-12 18:50:00.000000
 """
 
@@ -12,8 +12,8 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 
-revision: str = "20261112_0037"
-down_revision: Union[str, None] = "20261111_0034"
+revision: str = "20261112_0039"
+down_revision: Union[str, None] = "20261111_0038"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
