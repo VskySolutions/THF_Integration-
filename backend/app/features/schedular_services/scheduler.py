@@ -1,4 +1,5 @@
 import asyncio
+import logging
 
 import httpx
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -7,7 +8,6 @@ from app.core.config import Settings
 from app.features.schedular_services.constants import (
     HUBSPOT_CONTACT_CONSOLIDATED_SYNC_JOB_ID,
     HUBSPOT_SYNC_JOB_ID,
-    MACONOMY_CASEWARE_SYNC_JOB_ID,
     MACONOMY_CCH_SYNC_JOB_ID,
     SAP_CONCUR_EMPLOYEE_SYNC_JOB_ID,
     SAP_CONCUR_ENGAGEMENTS_TASKS_SYNC_JOB_ID,
@@ -26,13 +26,14 @@ from app.features.schedular_services.services import (
 )
 
 
+logger = logging.getLogger(__name__)
+
+
 class SchedulerService:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
         self._client: httpx.AsyncClient | None = None
         self._scheduler: AsyncIOScheduler | None = None
-        self._cch_completed = asyncio.Event()
-        self._cch_succeeded = False
         self._integration_lock = asyncio.Lock()
 
     async def start(self) -> None:
@@ -50,24 +51,12 @@ class SchedulerService:
         )
         scheduler = AsyncIOScheduler(timezone="UTC")
         scheduler.add_job(
-            self._run_cch_sync,
+            self._run_cch_caseware_sync,
             trigger="interval",
             minutes=self._settings.scheduler_cch_interval_minutes,
             args=[client],
             id=MACONOMY_CCH_SYNC_JOB_ID,
-            name="Maconomy to CCH/XCM client-scoped sync",
-            replace_existing=True,
-            max_instances=1,
-            coalesce=True,
-            misfire_grace_time=60,
-        )
-        scheduler.add_job(
-            self._run_caseware_sync,
-            trigger="interval",
-            minutes=self._settings.scheduler_caseware_interval_minutes,
-            args=[client],
-            id=MACONOMY_CASEWARE_SYNC_JOB_ID,
-            name="Maconomy to CaseWare Cloud sync after CCH",
+            name="Maconomy to CCH/XCM then CaseWare Cloud sync",
             replace_existing=True,
             max_instances=1,
             coalesce=True,
@@ -170,27 +159,12 @@ class SchedulerService:
         self._scheduler = None
         self._client = None
 
-    async def _run_cch_sync(self, client: httpx.AsyncClient) -> None:
-        self._cch_completed.clear()
+    async def _run_cch_caseware_sync(self, client: httpx.AsyncClient) -> None:
         async with self._integration_lock:
-            self._cch_succeeded = await run_maconomy_cch_sync(client)
-            self._cch_completed.set()
-
-    async def _run_caseware_sync(self, client: httpx.AsyncClient) -> None:
-        try:
-            await asyncio.wait_for(
-                self._cch_completed.wait(),
-                timeout=self._settings.scheduler_request_timeout_seconds + 60,
-            )
-        except asyncio.TimeoutError:
-            return
-
-        async with self._integration_lock:
-            if not self._cch_completed.is_set():
-                return
-            self._cch_completed.clear()
-            if not self._cch_succeeded:
-                return
+            try:
+                await run_maconomy_cch_sync(client)
+            except Exception:
+                logger.exception("CCH sync failed; continuing with CaseWare sync")
             await run_maconomy_caseware_sync(client)
 
     async def _run_sap_concur_expense_sync(self, client: httpx.AsyncClient) -> None:
