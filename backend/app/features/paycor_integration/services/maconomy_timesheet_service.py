@@ -58,6 +58,8 @@ TIMESHEET_FIELDS = [
 
 TIMESHEET_PAGE_SIZE = 500
 MAX_TIMESHEET_FILTER_PAGES = 100
+EMPLOYEE_PAGE_SIZE = 500
+MAX_EMPLOYEE_FILTER_PAGES = 100
 
 
 class MaconomyTimesheetServiceError(Exception):
@@ -95,6 +97,18 @@ class MaconomyTimesheetService:
             f"{shortname}/timesheetlines"
         )
 
+        self.entities_url = (
+            f"{settings.maconomy_url}"
+            f"/maconomy-api/containers/"
+            f"{shortname}/entities"
+        )
+
+        self.employees_url = (
+            f"{settings.maconomy_url}"
+            f"/maconomy-api/containers/"
+            f"{shortname}/employees"
+        )
+
     async def get_approved_timesheet_lines(
         self,
         *,
@@ -114,6 +128,194 @@ class MaconomyTimesheetService:
                 period_start_from=period_start_from,
                 period_start_to=period_start_to,
             )
+        )
+
+    async def get_entity_descriptions_by_code(
+        self,
+    ) -> dict[str, str]:
+        """Return active Maconomy Entity descriptions by code."""
+
+        response = await self._post(
+            "/filter",
+            {
+                "fields": [
+                    "entityname",
+                    "description",
+                    "blocked",
+                ],
+                "offset": 0,
+                "limit": 1000,
+            },
+            base_url=self.entities_url,
+        )
+
+        try:
+            records = response.json()["panes"][
+                "filter"
+            ]["records"]
+        except (KeyError, TypeError, ValueError) as exc:
+            raise MaconomyTimesheetServiceError(
+                "Invalid Maconomy Entity filter response"
+            ) from exc
+
+        if not isinstance(records, list):
+            raise MaconomyTimesheetServiceError(
+                "Invalid Maconomy Entity filter response"
+            )
+
+        descriptions_by_code: dict[str, str] = {}
+
+        for record in records:
+            if not isinstance(record, dict):
+                raise MaconomyTimesheetServiceError(
+                    "Invalid Maconomy Entity record"
+                )
+
+            data = record.get("data")
+
+            if not isinstance(data, dict):
+                raise MaconomyTimesheetServiceError(
+                    "Invalid Maconomy Entity record"
+                )
+
+            if data.get("blocked") is True:
+                continue
+
+            entity_code = str(
+                data.get("entityname") or ""
+            ).strip()
+            description = " ".join(
+                str(
+                    data.get("description") or ""
+                ).split()
+            )
+
+            if not entity_code or not description:
+                continue
+
+            existing_description = (
+                descriptions_by_code.get(entity_code)
+            )
+
+            if (
+                existing_description is not None
+                and existing_description.casefold()
+                != description.casefold()
+            ):
+                raise MaconomyTimesheetServiceError(
+                    "Multiple Maconomy Entity descriptions "
+                    f"were returned for code {entity_code}"
+                )
+
+            descriptions_by_code[
+                entity_code
+            ] = description
+
+        if not descriptions_by_code:
+            raise MaconomyTimesheetServiceError(
+                "Maconomy returned no usable Entities"
+            )
+
+        return descriptions_by_code
+
+    async def get_employee_classifications(
+        self,
+    ) -> dict[str, str]:
+        """Return Maconomy employee types indexed by employee number."""
+
+        classifications: dict[str, str] = {}
+        offset = 0
+
+        for _ in range(MAX_EMPLOYEE_FILTER_PAGES):
+            response = await self._post(
+                "/filter",
+                {
+                    "fields": [
+                        "employeenumber",
+                        "employeetype",
+                    ],
+                    "offset": offset,
+                    "limit": EMPLOYEE_PAGE_SIZE,
+                },
+                base_url=self.employees_url,
+            )
+            (
+                records,
+                row_count,
+                row_offset,
+                row_total_count,
+            ) = self._parse_filter_page(response)
+
+            if row_offset != offset:
+                raise MaconomyTimesheetServiceError(
+                    "Maconomy employee filter returned "
+                    f"offset {row_offset}; expected {offset}"
+                )
+
+            for record in records:
+                employee_number = str(
+                    record.get("employeenumber") or ""
+                ).strip()
+                employee_type = " ".join(
+                    str(
+                        record.get("employeetype") or ""
+                    ).split()
+                )
+
+                if not employee_number or not employee_type:
+                    continue
+
+                employee_key = employee_number.casefold()
+                existing_type = classifications.get(
+                    employee_key
+                )
+
+                if (
+                    existing_type is not None
+                    and existing_type.casefold()
+                    != employee_type.casefold()
+                ):
+                    raise MaconomyTimesheetServiceError(
+                        "Maconomy returned conflicting employee "
+                        "types for employee "
+                        f"{employee_number}"
+                    )
+
+                classifications[employee_key] = employee_type
+
+            next_offset = row_offset + row_count
+
+            if (
+                row_total_count is not None
+                and next_offset >= row_total_count
+            ):
+                return classifications
+
+            if row_count == 0:
+                if row_total_count is None:
+                    return classifications
+
+                raise MaconomyTimesheetServiceError(
+                    "Maconomy employee filter ended before "
+                    "all records were returned"
+                )
+
+            if (
+                row_total_count is None
+                and row_count < EMPLOYEE_PAGE_SIZE
+            ):
+                return classifications
+
+            if next_offset <= offset:
+                raise MaconomyTimesheetServiceError(
+                    "Maconomy employee filter pagination "
+                    "did not advance"
+                )
+
+            offset = next_offset
+
+        raise MaconomyTimesheetServiceError(
+            "Maconomy employee filter exceeded the maximum page limit"
         )
 
     async def _headers(
@@ -281,13 +483,15 @@ class MaconomyTimesheetService:
         self,
         path: str,
         payload: dict[str, Any],
+        *,
+        base_url: str | None = None,
     ) -> httpx.Response:
         headers = await self._headers()
+        request_url = f"{base_url or self.timesheet_lines_url}{path}"
 
         try:
             response = await self.client.post(
-                f"{self.timesheet_lines_url}"
-                f"{path}",
+                request_url,
                 headers=headers,
                 json=payload,
             )
@@ -304,8 +508,7 @@ class MaconomyTimesheetService:
                 headers = await self._headers()
 
                 response = await self.client.post(
-                    f"{self.timesheet_lines_url}"
-                    f"{path}",
+                    request_url,
                     headers=headers,
                     json=payload,
                 )

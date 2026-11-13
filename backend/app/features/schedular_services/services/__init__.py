@@ -18,6 +18,9 @@ from app.features.schedular_services.services.sap_concur_expense_sync import (
 from app.features.schedular_services.services.paycor_payroll_sync import (
     run_paycor_payroll_sync,
 )
+from app.features.schedular_services.services.paycor_timesheet_sync import (
+    run_paycor_timesheet_sync,
+)
 
 __all__ = [
     "run_maconomy_caseware_sync",
@@ -28,4 +31,5 @@ __all__ = [
     "run_paycor_update_sync",
     "run_sap_concur_expense_sync",
     "run_paycor_payroll_sync",
+    "run_paycor_timesheet_sync",
 ]

@@ -66,25 +66,26 @@ async def create_submitting_log(
         )
 
     if (
-        submission_mode
-        == TimesheetSubmissionMode.APPEND
-        and batch.accepted_process_id is not None
+        process_id != batch.process_id
     ):
         await session.rollback()
         raise TimesheetSubmissionBlockedError(
-            "An accepted Paycor timesheet batch "
-            "cannot be appended again"
+            "Paycor timesheet submissions must reuse "
+            "the persisted batch process ID"
         )
 
     if (
         submission_mode
-        == TimesheetSubmissionMode.REPLACE
-        and batch.accepted_process_id is None
+        == TimesheetSubmissionMode.APPEND
+        and (
+            latest_log is not None
+            or batch.accepted_process_id is not None
+        )
     ):
         await session.rollback()
         raise TimesheetSubmissionBlockedError(
-            "A Paycor timesheet batch must be accepted "
-            "before it can be replaced"
+            "An existing Paycor timesheet batch "
+            "cannot be appended again"
         )
 
     integration_log = PaycorTimesheetIntegrationLog(

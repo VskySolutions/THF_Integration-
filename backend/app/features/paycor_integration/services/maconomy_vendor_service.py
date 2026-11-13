@@ -26,28 +26,35 @@ CONTAINER_CONTENT_TYPE = (
 # Fields requested from the vendorcard instance (Req FR-2).
 VENDOR_CARD_FIELDS = (
     "controlaccountcode",
+    "country",
     "currency",
     "deliverymode",
     "deliveryterms",
     "departmentnumber",
+    "electronicmailaddress",
     "employeenamevar",
     "employeenumber",
     "inventorynumber",
     "language",
     "linkingrulename",
     "name1",
+    "name2",
+    "name3",
+    "name5",
     "name1var",
     "parentvendor",
     "parentvendorname1",
     "paymentmode",
     "paymentterms",
     "paymentvendor",
+    "postaldistrict",
     "responsible",
     "responsiblenamevar",
     "subordinaterelationnamevar",
     "timeregistrationunit",
     "vendorgroup",
     "vendornumber",
+    "zipcode",
 )
 
 
@@ -68,6 +75,7 @@ class MaconomyVendorService:
         *,
         employee_number: str,
         employee_name: str,
+        employee_data: dict[str, Any],
     ) -> dict[str, Any]:
         """Create one employee vendor (E-{employeenumber}) in vendorcard."""
 
@@ -111,6 +119,7 @@ class MaconomyVendorService:
                     **self._build_vendor_payload(
                         normalized_employee_number,
                         employee_name,
+                        employee_data,
                     ),
                 }
 
@@ -147,10 +156,11 @@ class MaconomyVendorService:
     def _build_vendor_payload(
         employee_number: str,
         employee_name: str,
+        employee_data: dict[str, Any],
     ) -> dict[str, str]:
         """Build the vendor card fields per Req FR-3/FR-4/FR-6."""
 
-        return {
+        vendor_payload = {
             "vendornumber": f"E-{employee_number}",
             "name1": employee_name,
             "paymentvendor": "",
@@ -170,6 +180,26 @@ class MaconomyVendorService:
             "employeenumber": employee_number,
             "timeregistrationunit": "hours",
         }
+
+        for field_name in (
+            "country",
+            "electronicmailaddress",
+            "name2",
+            "name3",
+            "name5",
+            "postaldistrict",
+            "zipcode",
+        ):
+            field_value = employee_data.get(field_name)
+
+            if field_value is None:
+                continue
+
+            vendor_payload[field_name] = str(
+                field_value
+            ).strip()
+
+        return vendor_payload
 
     def _vendorcard_url(self) -> str:
         shortname = quote(

@@ -253,9 +253,11 @@ class PaycorTimesheetService:
         if submission_mode == "append":
             submission_params = {
                 "appendData": "true",
+                "replaceData": "false",
             }
         elif submission_mode == "replace":
             submission_params = {
+                "appendData": "false",
                 "replaceData": "true",
             }
         else:
@@ -846,6 +848,30 @@ class PaycorTimesheetService:
                 normalized_code
             ] = earning_code
 
+            description = " ".join(
+                str(
+                    earning.get("description")
+                    or ""
+                ).split()
+            ).casefold()
+
+            if description == "straight time":
+                existing_st_code = (
+                    earning_codes.get("ST")
+                )
+
+                if (
+                    existing_st_code is not None
+                    and existing_st_code
+                    != earning_code
+                ):
+                    raise PaycorTimesheetServiceError(
+                        "Multiple Paycor earnings match "
+                        "Straight Time"
+                    )
+
+                earning_codes["ST"] = earning_code
+
         if not earning_codes:
             raise PaycorTimesheetServiceError(
                 "Paycor returned no usable earnings"
@@ -898,7 +924,9 @@ class PaycorTimesheetService:
                     continue
 
                 normalized_alias = (
-                    alias.casefold()
+                    " ".join(
+                        alias.split()
+                    ).casefold()
                 )
 
                 if (
@@ -957,8 +985,17 @@ class PaycorTimesheetService:
                 or ""
             ).strip()
 
+            position_data = employee.get(
+                "positionData"
+            )
+
             pay_group_id = str(
-                employee.get("payGroupId")
+                (
+                    position_data.get("payGroupId")
+                    if isinstance(position_data, dict)
+                    else None
+                )
+                or employee.get("payGroupId")
                 or ""
             ).strip()
 
@@ -1021,13 +1058,13 @@ class PaycorTimesheetService:
 
             pay_period_start = (
                 cls._parse_pay_schedule_date(
-                    schedule.get("payPeriodStart"),
+                    schedule.get("periodStartDate"),
                     "payPeriodStart",
                 )
             )
             pay_period_end = (
                 cls._parse_pay_schedule_date(
-                    schedule.get("payPeriodEnd"),
+                    schedule.get("periodEndDate"),
                     "payPeriodEnd",
                 )
             )

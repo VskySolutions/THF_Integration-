@@ -16,8 +16,6 @@ async def get_batch(
     session: AsyncSession,
     *,
     legal_entity_id: int,
-    source_start_date: date,
-    source_end_date: date,
     pay_group_id: str,
     pay_period_start: date,
     pay_period_end: date,
@@ -27,10 +25,6 @@ async def get_batch(
     ).where(
         PaycorTimesheetBatch.paycor_legal_entity_id
         == legal_entity_id,
-        PaycorTimesheetBatch.source_start_date
-        == source_start_date,
-        PaycorTimesheetBatch.source_end_date
-        == source_end_date,
         PaycorTimesheetBatch.pay_group_id
         == pay_group_id,
         PaycorTimesheetBatch.pay_period_start
@@ -55,8 +49,6 @@ async def get_or_create_batch(
     existing_batch = await get_batch(
         session,
         legal_entity_id=legal_entity_id,
-        source_start_date=source_start_date,
-        source_end_date=source_end_date,
         pay_group_id=pay_group_id,
         pay_period_start=pay_period_start,
         pay_period_end=pay_period_end,
@@ -82,8 +74,6 @@ async def get_or_create_batch(
         existing_batch = await get_batch(
             session,
             legal_entity_id=legal_entity_id,
-            source_start_date=source_start_date,
-            source_end_date=source_end_date,
             pay_group_id=pay_group_id,
             pay_period_start=pay_period_start,
             pay_period_end=pay_period_end,

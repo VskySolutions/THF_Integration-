@@ -16,6 +16,7 @@ from app.features.sap_concur_integration.routers.create_maconomy_expense_sheet i
 from app.features.exception_logs import install_exception_logging
 from app.features.schedular_services import (
     PaycorSchedulerService,
+    PaycorTimesheetSchedulerService,
     SchedulerService,
 )
 from app.features.xcm_cch_axcess_integration.routers import (
@@ -52,6 +53,11 @@ async def lifespan(_: FastAPI):
     scheduler_settings = get_settings()
     scheduler = SchedulerService(scheduler_settings)
     paycor_scheduler = PaycorSchedulerService(scheduler_settings)
+    paycor_timesheet_scheduler = (
+        PaycorTimesheetSchedulerService(
+            scheduler_settings
+        )
+    )
     await scheduler.start()
     try:
         await paycor_scheduler.start()
@@ -59,8 +65,15 @@ async def lifespan(_: FastAPI):
         await scheduler.shutdown()
         raise
     try:
+        await paycor_timesheet_scheduler.start()
+    except Exception:
+        await paycor_scheduler.shutdown()
+        await scheduler.shutdown()
+        raise
+    try:
         yield
     finally:
+        await paycor_timesheet_scheduler.shutdown()
         await paycor_scheduler.shutdown()
         await scheduler.shutdown()
         await engine.dispose()
