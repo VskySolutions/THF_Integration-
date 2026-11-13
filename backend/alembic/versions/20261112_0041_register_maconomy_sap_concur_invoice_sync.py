@@ -1,7 +1,7 @@
 """Register the Maconomy to SAP Concur invoice sync service.
 
-Revision ID: 20261112_0037
-Revises: 20261111_0035
+Revision ID: 20261112_0041
+Revises: 20261111_0040
 """
 
 from collections.abc import Sequence

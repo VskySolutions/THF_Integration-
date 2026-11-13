@@ -1,7 +1,7 @@
 """Persist an idempotent process ID for each Paycor timesheet batch.
 
-Revision ID: 20261110_0032
-Revises: 20261102_0031
+Revision ID: 20261110_0035
+Revises: 20261110_0034
 Create Date: 2026-11-10
 """
 
@@ -102,7 +102,7 @@ def upgrade() -> None:
         raise RuntimeError(
             "Duplicate Paycor timesheet batches exist for the same "
             "legal entity, pay group, and pay period. Reconcile their "
-            "process IDs before applying revision 20261110_0032."
+            "process IDs before applying revision 20261110_0035."
         )
 
     op.alter_column(

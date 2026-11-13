@@ -1,7 +1,7 @@
 """Add is_spec5_created and maconomy_spec5_name to paycor_employee_mapping_log.
 
 Revision ID: 20261110_0036
-Revises: 20261102_0035
+Revises: 20261110_0035
 Create Date: 2026-11-10 17:58:00.000000
 """
 
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 revision: str = "20261110_0036"
-down_revision: Union[str, None] = "20261102_0035"
+down_revision: Union[str, None] = "20261110_0035"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

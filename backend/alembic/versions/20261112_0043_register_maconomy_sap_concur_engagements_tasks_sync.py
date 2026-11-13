@@ -1,7 +1,7 @@
 """Register the Maconomy to SAP Concur engagements & tasks sync service.
 
-Revision ID: 20261112_0039
-Revises: 20261112_0038
+Revision ID: 20261112_0043
+Revises: 20261112_0042
 """
 
 from collections.abc import Sequence

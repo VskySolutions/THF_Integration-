@@ -1,7 +1,7 @@
 """create sap concur invoice mapping and logs
 
-Revision ID: 20261111_0032
-Revises: 20261102_0031
+Revision ID: 20261111_0040
+Revises: 20261112_0039
 Create Date: 2026-11-11
 """
 
