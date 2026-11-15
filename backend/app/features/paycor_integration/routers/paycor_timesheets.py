@@ -215,6 +215,7 @@ def _set_warning_header(
     temporary_mappings: set[
         tuple[str, str]
     ],
+    excluded_salary_exempt_employees: set[str] | None = None,
 ) -> None:
     """Add one combined processing-warning header."""
 
@@ -249,6 +250,15 @@ def _set_warning_header(
         warnings.append(
             "Temporary earning mappings "
             f"applied: {mappings}"
+        )
+
+    if excluded_salary_exempt_employees:
+        employee_numbers = ", ".join(
+            sorted(excluded_salary_exempt_employees)
+        )
+        warnings.append(
+            "Salary Exempt employees excluded: "
+            f"{employee_numbers}"
         )
 
     if warnings:
@@ -293,6 +303,12 @@ def _set_grouped_warning_header(
         ),
         temporary_mappings=(
             temporary_mappings
+        ),
+        excluded_salary_exempt_employees=set(
+            warnings.get(
+                "excludedSalaryExemptEmployees",
+                [],
+            )
         ),
     )
 
@@ -434,11 +450,15 @@ async def get_paygrid_payload(
                 ),
             )
 
+        excluded_salary_exempt_employees: set[str] = set()
         calculated_entries = (
             calculate_all_weekly_earnings(
                 daily_entries,
                 employee_classifications_by_number=(
                     employee_classifications_by_number
+                ),
+                excluded_salary_exempt_employee_numbers=(
+                    excluded_salary_exempt_employees
                 ),
             )
         )
@@ -452,7 +472,7 @@ async def get_paygrid_payload(
             earning_codes,
         )
 
-        if not calculated_entries:
+        if not calculated_entries and skipped_earnings:
             earnings = (
                 ", ".join(
                     sorted(skipped_earnings)
@@ -488,6 +508,9 @@ async def get_paygrid_payload(
             ),
             temporary_mappings=(
                 temporary_mappings
+            ),
+            excluded_salary_exempt_employees=(
+                excluded_salary_exempt_employees
             ),
         )
 
@@ -544,6 +567,14 @@ async def submit_paycor_paygrid(
         start_date=start_date,
         end_date=end_date,
     )
+
+    if not payload.get("importEmployees"):
+        return {
+            "status": "SKIPPED",
+            "message": (
+                "No timesheet hours require submission to Paycor"
+            ),
+        }
 
     try:
         return await (

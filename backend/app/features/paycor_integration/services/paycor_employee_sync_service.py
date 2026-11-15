@@ -90,8 +90,8 @@ FIXED_WORKING_TIME_UPDATE_FIELDS = frozenset(
 PAYCOR_FLSA_TO_MACONOMY_EMPLOYEE_TYPE = {
     "salaryexempt": "salary_exempt",
     "salarynonexempt": "salary_non-exempt",
-    "hourlyexempt": "hourly_exempt",
     "hourlynonexempt": "hourly_non-exempt",
+    "subcontractor": "subcontractor",
 }
 
 

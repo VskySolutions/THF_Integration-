@@ -17,19 +17,10 @@ PAID_LEAVE_EARNING_CODES = {
     "OC",
 }
 
-EXEMPT_EMPLOYEE_CLASSIFICATIONS = {
-    "salaryexempt",
-    "hourlyexempt",
-}
-
-NON_EXEMPT_EMPLOYEE_CLASSIFICATIONS = {
-    "salarynonexempt",
-    "hourlynonexempt",
-}
-
-UNSUPPORTED_EMPLOYEE_CLASSIFICATIONS = {
-    "stakeholder",
-}
+SALARY_EXEMPT_CLASSIFICATION = "salaryexempt"
+SALARY_NON_EXEMPT_CLASSIFICATION = "salarynonexempt"
+HOURLY_NON_EXEMPT_CLASSIFICATION = "hourlynonexempt"
+SUBCONTRACTOR_CLASSIFICATION = "subcontractor"
 
 
 class TimesheetCalculationError(ValueError):
@@ -81,16 +72,22 @@ def calculate_weekly_earnings(
         entries[0].get("employeeNumber") or "<missing>"
     ).strip()
 
-    if classification in EXEMPT_EMPLOYEE_CLASSIFICATIONS:
-        return entries
+    if classification == SALARY_EXEMPT_CLASSIFICATION:
+        return []
 
-    if classification in UNSUPPORTED_EMPLOYEE_CLASSIFICATIONS:
-        raise TimesheetCalculationError(
-            "Stakeholder timesheet calculation rules are not "
-            f"configured for employee {employee_number}"
-        )
+    if classification == SUBCONTRACTOR_CLASSIFICATION:
+        return [
+            {
+                **entry,
+                "earningCode": "REG",
+            }
+            for entry in entries
+        ]
 
-    if classification not in NON_EXEMPT_EMPLOYEE_CLASSIFICATIONS:
+    if classification not in {
+        SALARY_NON_EXEMPT_CLASSIFICATION,
+        HOURLY_NON_EXEMPT_CLASSIFICATION,
+    }:
         raise TimesheetCalculationError(
             "Unsupported Maconomy employee classification "
             f"{employee_classification!r} for employee "
@@ -188,13 +185,26 @@ def calculate_weekly_earnings(
                 "Unable to allocate all worked hours"
             )
 
+    if classification == SALARY_NON_EXEMPT_CLASSIFICATION:
+        return [
+            entry
+            for entry in calculated_entries
+            if entry["earningCode"] in {"ST", "OT", "PTO"}
+        ]
+
     return calculated_entries
 
 
 def calculate_all_weekly_earnings(
     daily_entries: list[dict[str, Any]],
     *,
-    employee_classifications_by_number: dict[str, str],
+    employee_classifications_by_number: dict[
+        str,
+        str,
+    ],
+    excluded_salary_exempt_employee_numbers: set[
+        str
+    ] | None = None,
 ) -> list[dict[str, Any]]:
     """Calculate earnings for every employee and week."""
 
@@ -235,6 +245,17 @@ def calculate_all_weekly_earnings(
             raise TimesheetCalculationError(
                 "Maconomy employee classification is missing for "
                 f"employee {employee_number or '<missing>'}"
+            )
+
+        if (
+            excluded_salary_exempt_employee_numbers is not None
+            and _normalize_classification(
+                employee_classification
+            )
+            == SALARY_EXEMPT_CLASSIFICATION
+        ):
+            excluded_salary_exempt_employee_numbers.add(
+                employee_number
             )
 
         calculated_entries.extend(

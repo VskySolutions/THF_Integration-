@@ -147,11 +147,15 @@ class PaycorTimesheetSyncService:
                 f"Skipped tasks: {tasks}"
             )
 
+        excluded_salary_exempt_employees: set[str] = set()
         calculated_entries = (
             calculate_all_weekly_earnings(
                 daily_entries,
                 employee_classifications_by_number=(
                     employee_classifications_by_number
+                ),
+                excluded_salary_exempt_employee_numbers=(
+                    excluded_salary_exempt_employees
                 ),
             )
         )
@@ -165,7 +169,26 @@ class PaycorTimesheetSyncService:
             earning_codes,
         )
 
-        if not calculated_entries:
+        warnings = {
+            "skippedTasks": skipped_tasks,
+            "skippedEarnings": sorted(
+                skipped_earnings
+            ),
+            "temporaryMappings": [
+                {
+                    "source": source,
+                    "target": target,
+                }
+                for source, target in sorted(
+                    temporary_mappings
+                )
+            ],
+            "excludedSalaryExemptEmployees": sorted(
+                excluded_salary_exempt_employees
+            ),
+        }
+
+        if not calculated_entries and skipped_earnings:
             earnings = (
                 ", ".join(
                     sorted(skipped_earnings)
@@ -177,6 +200,15 @@ class PaycorTimesheetSyncService:
                 "remain after Paycor earning "
                 f"validation: {earnings}"
             )
+
+        if not calculated_entries:
+            return {
+                "periodStartFrom": start_date.isoformat(),
+                "periodStartTo": end_date.isoformat(),
+                "batchCount": 0,
+                "batches": [],
+                "warnings": warnings,
+            }
 
         calculated_entries = (
             assign_employee_paygroups(
@@ -300,21 +332,7 @@ class PaycorTimesheetSyncService:
             "periodStartTo": end_date.isoformat(),
             "batchCount": len(batches),
             "batches": batches,
-            "warnings": {
-                "skippedTasks": skipped_tasks,
-                "skippedEarnings": sorted(
-                    skipped_earnings
-                ),
-                "temporaryMappings": [
-                    {
-                        "source": source,
-                        "target": target,
-                    }
-                    for source, target in sorted(
-                        temporary_mappings
-                    )
-                ],
-            },
+            "warnings": warnings,
         }
 
     async def submit_new_groups(
