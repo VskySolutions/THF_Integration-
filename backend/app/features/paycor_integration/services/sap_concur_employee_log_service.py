@@ -55,7 +55,7 @@ class SAPConcurEmployeeLogService:
             paycor_employee_id=paycor_employee_id,
             paycor_employee_number=paycor_employee_number,
             instance=str(legal_entity_id),
-            base_url=settings.sap_concur_api_base_url,
+            base_url = str(settings.sap_concur_api_base_url),
             status=integration_status,
             action=IntegrationAction.CREATE,
             message=message,

@@ -33,7 +33,7 @@ EMPLOYEE_FIELDS = [
     "blocked",
     "companyname",
     "country",
-    "dateemployed",
+    # "dateemployed",
     "dateendemployment",
     "electronicmailaddress",
     "employeenumber",
@@ -55,8 +55,8 @@ EMPLOYEE_FIELDS = [
     "specification4name",
     "firstname",
     "lastname",
-    "middlename",
-    "phone"
+    "middlename"
+    # "phone"
 ]
 FILTER_LIMIT = 100
 MAX_PAGES = 100

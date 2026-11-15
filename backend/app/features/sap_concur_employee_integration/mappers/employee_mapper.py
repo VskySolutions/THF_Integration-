@@ -30,15 +30,14 @@ DEFAULT_PREFERRED_LANGUAGE = "en-US"  # English (United States)
 DEFAULT_LOCALE = "en-US"  # English (United States)
 DEFAULT_LEDGER_CODE = "DELTEK"
 DEFAULT_REIMBURSEMENT_CURRENCY = "USD"  # "US, Dollar"
-DEFAULT_REIMBURSEMENT_TYPE = "Expense Pay By Concur"
+DEFAULT_REIMBURSEMENT_TYPE = "CONCUR_PAY"
 DEFAULT_STATE_PROVINCE = ""
 
-DEFAULT_ENTITLEMENTS = ("Expense", "Travel")
+DEFAULT_ENTITLEMENTS = ("Expense",)
 DEFAULT_RULE_CLASS_ID = ""
 DEFAULT_TRAVEL_GROUP_IDS = ""
 
-# Still pending confirmation (Req[#25] Q-5): omitted while empty.
-DEFAULT_COMPANY_ID = ""
+DEFAULT_COMPANY_ID = "f7255b65-38e0-458f-ab3d-40856e011c0b"
 
 BULK_MAX_OPERATIONS = 100
 DEFAULT_FAIL_ON_ERRORS = 1
@@ -146,7 +145,7 @@ def _format_scim_datetime(value: Any) -> str | None:
 
     return (
         f"{parsed.year:04d}-{parsed.month:02d}-{parsed.day:02d}"
-        f"T{parsed.hour:02d}:{parsed.minute:02d}:{parsed.second:02d}.000"
+        f"T{parsed.hour:02d}:{parsed.minute:02d}:{parsed.second:02d}Z"
     )
 
 
@@ -317,17 +316,25 @@ def _build_approver_extension(
 
 def _build_travel_extension(
     employee: dict[str, Any],
-) -> dict[str, Any]:
-    extension: dict[str, Any] = {
-        "ruleClass": {"id": DEFAULT_RULE_CLASS_ID},
-        "groups": list(DEFAULT_TRAVEL_GROUP_IDS),
-    }
+) -> dict[str, Any] | None:
+    extension: dict[str, Any] = {}
+
+    if DEFAULT_RULE_CLASS_ID:
+        try:
+            extension["ruleClass"] = {"id": int(DEFAULT_RULE_CLASS_ID)}
+        except (ValueError, TypeError):
+            extension["ruleClass"] = {"name": str(DEFAULT_RULE_CLASS_ID)}
+
+    if DEFAULT_TRAVEL_GROUP_IDS:
+        extension["groups"] = [
+            int(g) for g in DEFAULT_TRAVEL_GROUP_IDS if str(g).isdigit()
+        ]
 
     manager = _clean_str(employee.get("superioremployee"))
     if manager is not None:
         extension["manager"] = {"employeeNumber": manager}
 
-    return extension
+    return extension if extension else None
 
 
 def map_maconomy_employee_to_scim_user(
@@ -349,6 +356,11 @@ def map_maconomy_employee_to_scim_user(
         employee.get("country")
     )
 
+    travel_extension = _build_travel_extension(employee)
+    entitlements = list(DEFAULT_ENTITLEMENTS)
+    if travel_extension and "Travel" not in entitlements:
+        entitlements.append("Travel")
+
     user: dict[str, Any] = {
         "schemas": [SCIM_USER_SCHEMA],
         "userName": user_name,
@@ -356,14 +368,16 @@ def map_maconomy_employee_to_scim_user(
         "name": _build_name(employee),
         "preferredLanguage": DEFAULT_PREFERRED_LANGUAGE,
         "emails": [{"type": "work", "value": user_name}],
-        "entitlements": list(DEFAULT_ENTITLEMENTS),
+        "entitlements": entitlements,
         ENTERPRISE_USER_SCHEMA: _build_enterprise_extension(
             employee_number,
             employee,
         ),
         SPEND_USER_SCHEMA: _build_spend_extension(country_iso2),
-        TRAVEL_USER_SCHEMA: _build_travel_extension(employee),
     }
+
+    if travel_extension:
+        user[TRAVEL_USER_SCHEMA] = travel_extension
 
     title = _clean_str(employee.get("position"))
     if title is not None:

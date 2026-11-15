@@ -1800,7 +1800,6 @@ class PaycorEmployeeSyncService:
         # SAP Concur user creation. Runs only for freshly created
         # employees; a failure must never fail the already-created employee record.
         try:
-            print("In create SAP Concur user")
             concur_result = (
                 await self.sap_concur_service.create_employee(
                     created_employee
