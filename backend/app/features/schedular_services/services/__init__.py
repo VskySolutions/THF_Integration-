@@ -27,6 +27,9 @@ from app.features.schedular_services.services.sap_concur_invoice_sync import (
 from app.features.schedular_services.services.sap_concur_engagements_tasks_sync import (
     run_sap_concur_engagements_tasks_sync,
 )
+from app.features.schedular_services.services.sap_concur_vendor_sync import (
+    run_sap_concur_vendor_sync,
+)
 from app.features.schedular_services.services.paycor_timesheet_sync import (
     run_paycor_timesheet_sync,
 )
@@ -40,6 +43,7 @@ __all__ = [
     "run_sap_concur_expense_sync",
     "run_sap_concur_invoice_sync",
     "run_sap_concur_engagements_tasks_sync",
+    "run_sap_concur_vendor_sync",
     "run_paycor_payroll_sync",
     "run_paycor_timesheet_sync",
     "run_maconomy_concur_employee_sync",
