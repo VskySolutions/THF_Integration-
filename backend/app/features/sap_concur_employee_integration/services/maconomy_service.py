@@ -8,6 +8,7 @@ headers mirror the existing `sap_concur_integration` Maconomy service.
 import base64
 from typing import Any
 from urllib.parse import quote
+from datetime import date, timedelta
 
 import httpx
 
@@ -29,6 +30,7 @@ EMPLOYEE_RESTRICTION = (
     "DateEmployed le currentDate() and (DateEndEmployment gt currentDate() "
     "or DateEndEmployment = date(nulldate))"
 )
+
 EMPLOYEE_FIELDS = [
     "blocked",
     "companyname",
@@ -156,8 +158,9 @@ class MaconomyEmployeeService:
         offset: int,
     ) -> list[dict[str, Any]]:
         """Fetch one page of employees from the showemployeeshr container."""
+        yesterday = (date.today() - timedelta(days=1)).strftime("%Y-%m-%d")
         payload = {
-            "restriction": EMPLOYEE_RESTRICTION,
+            "restriction": f"(DateEmployed le currentDate() and (DateEndEmployment gt currentDate() or DateEndEmployment = date(nulldate))) and (changeddate >= date({yesterday}))",
             "fields": EMPLOYEE_FIELDS,
             "limit": FILTER_LIMIT,
             "offset": offset,
