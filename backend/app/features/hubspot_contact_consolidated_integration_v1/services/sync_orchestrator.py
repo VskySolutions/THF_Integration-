@@ -1,4 +1,4 @@
-"""Discover Maconomy customers and upsert them as HubSpot Companies."""
+"""Sync Companies, then resolve and sync master Contacts."""
 
 import logging
 import uuid
@@ -14,6 +14,9 @@ from app.features.hubspot_contact_consolidated_integration_v1.exceptions import 
 )
 from app.features.hubspot_contact_consolidated_integration_v1.mappers.company_mapper import (
     CompanyMapper,
+)
+from app.features.hubspot_contact_consolidated_integration_v1.services.contact_sync_service import (
+    ContactSyncService,
 )
 from app.features.hubspot_contact_consolidated_integration_v1.services.hubspot_service import (
     HubSpotService,
@@ -155,6 +158,18 @@ class ConsolidatedSyncService:
                     "upstream_message": exc.upstream_message,
                 }
 
+            contact_sync_result = await ContactSyncService(
+                maconomy, HubSpotService(client)
+            ).run(
+                classified_contacts,
+                [
+                    str(customer.get("customernumber") or "").strip()
+                    for customer in classified["new_customers"]
+                    if str(customer.get("customernumber") or "").strip()
+                ],
+                request_id,
+            )
+
         errors_by_source = {
             error["source_id"]: error
             for error in upsert_result["batch_errors"]
@@ -210,6 +225,9 @@ class ConsolidatedSyncService:
                     or writeback_errors
                     or contact_discovery_error
                     or classified_contacts["skipped"]
+                    or contact_sync_result["skipped"]
+                    or contact_sync_result["errors"]
+                    or contact_sync_result["batch_errors"]
                 )
                 else "success"
             ),
@@ -234,8 +252,16 @@ class ConsolidatedSyncService:
                 "updated_contact_persons": classified_contacts[
                     "updated_contact_persons"
                 ],
-                "skipped": classified_contacts["skipped"],
+                "skipped": [
+                    *classified_contacts["skipped"],
+                    *contact_sync_result["skipped"],
+                ],
                 "discovery_error": contact_discovery_error,
+                **{
+                    key: value
+                    for key, value in contact_sync_result.items()
+                    if key != "skipped"
+                },
             },
             "skipped": company_payload["skipped"],
         }

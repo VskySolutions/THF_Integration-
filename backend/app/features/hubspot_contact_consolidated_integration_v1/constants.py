@@ -4,6 +4,7 @@ SYNC_WINDOW_DAYS = 1
 CUSTOMER_SYNCED_VERSION_FIELD = "customerremark26"
 CUSTOMER_NUMBER_FIELD = "customernumber"
 CONTACT_SYNCED_VERSION_FIELD = "remark5"
+CONTACT_MASTER_FIELD = "remark4"
 CONTACT_PERSON_NUMBER_FIELD = "contactpersonnumber"
 VERSION_FIELD = "versionnumber"
 
@@ -42,6 +43,7 @@ CONTACT_PERSON_FIELDS = [
     "mobilephone",
     "name1",
     "name2",
+    "name3",
     "position",
     "remark1",
     "remark4",

@@ -39,8 +39,15 @@ After the Company phase, the bulk route reads `/contactpersons/filter` using
 the same reconnect token. It selects contact persons with a company number and
 email that were created or changed yesterday or today, then uses `remark5` and
 `versionnumber` to return new and updated contacts under `contact_persons`.
-This step only discovers contacts; it does not upsert or write them back.
-Contact discovery failures are reported alongside the completed Company result.
+It also reads contacts of newly created customers and back-queries full email
+groups without a date restriction. A consistent existing `remark4` selects the
+master; otherwise v1 elects the lowest Contact Person number. Conflicting
+nonempty `remark4` values leave a group unresolved so existing stamps are not
+overwritten. Only selected masters are upserted to HubSpot. After a confirmed
+master upsert, v1 stamps empty `remark4` fields on children in that group;
+groups with an unchanged known master can stamp empty children without another
+HubSpot upsert. Contact `remark5` writeback and Company associations are not
+implemented yet. Contact errors are reported alongside the Company result.
 
 Maconomy and HubSpot failures carry stage or reason, upstream HTTP status, and
 safe context for troubleshooting. The API returns a safe 502 message for a

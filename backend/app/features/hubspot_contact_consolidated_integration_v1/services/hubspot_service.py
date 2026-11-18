@@ -12,6 +12,7 @@ from app.features.hubspot_contact_consolidated_integration_v1.exceptions import 
 )
 
 COMPANY_UPSERT_PATH = "/crm/objects/2026-09/companies/batch/upsert"
+CONTACT_UPSERT_PATH = "/crm/objects/2026-09/contacts/batch/upsert"
 HUBSPOT_BATCH_SIZE = 100
 MAX_REQUEST_ATTEMPTS = 3
 DEFAULT_RETRY_AFTER_SECONDS = 2.0
@@ -19,7 +20,7 @@ MAX_RETRY_AFTER_SECONDS = 60.0
 
 
 class HubSpotService:
-    """Send Company batch upserts and retain confirmed HubSpot IDs."""
+    """Send Company or Contact batch upserts and retain confirmed IDs."""
 
     def __init__(
         self,
@@ -78,9 +79,12 @@ class HubSpotService:
         self,
         inputs: list[dict[str, Any]],
         batch_number: int,
+        *,
+        path: str,
+        object_label: str,
     ) -> dict[str, Any]:
         headers = self._authorized_headers()
-        url = f"{self.settings.hubspot_api_url}{COMPANY_UPSERT_PATH}"
+        url = f"{self.settings.hubspot_api_url}{path}"
 
         for attempt in range(1, MAX_REQUEST_ATTEMPTS + 1):
             try:
@@ -91,7 +95,7 @@ class HubSpotService:
                 )
             except httpx.HTTPError as exc:
                 raise HubSpotError(
-                    "HubSpot Company upsert request failed",
+                    f"HubSpot {object_label} upsert request failed",
                     reason=(
                         "timeout"
                         if isinstance(exc, httpx.TimeoutException)
@@ -107,7 +111,7 @@ class HubSpotService:
             if response.status_code not in (200, 201, 207):
                 context = self._error_context(response)
                 raise HubSpotError(
-                    "HubSpot Company upsert was rejected",
+                    f"HubSpot {object_label} upsert was rejected",
                     reason=(
                         "authentication_failed"
                         if response.status_code == 401
@@ -124,7 +128,7 @@ class HubSpotService:
                 payload = response.json()
             except ValueError as exc:
                 raise HubSpotError(
-                    "Invalid HubSpot Company upsert response",
+                    f"Invalid HubSpot {object_label} upsert response",
                     reason="invalid_json",
                     upstream_status=response.status_code,
                     batch_number=batch_number,
@@ -135,7 +139,7 @@ class HubSpotService:
                 or not isinstance(payload.get("errors", []), list)
             ):
                 raise HubSpotError(
-                    "Invalid HubSpot Company upsert response",
+                    f"Invalid HubSpot {object_label} upsert response",
                     reason="invalid_response",
                     upstream_status=response.status_code,
                     batch_number=batch_number,
@@ -143,23 +147,27 @@ class HubSpotService:
             return payload
 
         raise HubSpotError(
-            "HubSpot Company upsert retry limit was reached",
+            f"HubSpot {object_label} upsert retry limit was reached",
             reason="retry_limit_reached",
             batch_number=batch_number,
         )
 
     @staticmethod
-    def _source_id(result: dict[str, Any]) -> str:
+    def _source_id(
+        result: dict[str, Any], trace_prefix: str, property_name: str
+    ) -> str:
         trace_id = str(result.get("objectWriteTraceId") or "").strip()
-        if trace_id.startswith("company-"):
-            return trace_id[len("company-") :].strip()
+        if trace_id.startswith(trace_prefix):
+            return trace_id[len(trace_prefix) :].strip()
         properties = result.get("properties")
         if isinstance(properties, dict):
-            return str(properties.get("maconomy_customer_number") or "").strip()
+            return str(properties.get(property_name) or "").strip()
         return ""
 
     @staticmethod
-    def _batch_error_summary(error: dict[str, Any], batch_number: int) -> dict[str, Any]:
+    def _batch_error_summary(
+        error: dict[str, Any], batch_number: int, trace_prefix: str
+    ) -> dict[str, Any]:
         context = error.get("context")
         trace_id = str(error.get("objectWriteTraceId") or "").strip()
         if not trace_id and isinstance(context, dict):
@@ -193,8 +201,8 @@ class HubSpotService:
         return {
             "batch_number": batch_number,
             "source_id": (
-                trace_id[len("company-") :]
-                if trace_id.startswith("company-")
+                trace_id[len(trace_prefix) :]
+                if trace_id.startswith(trace_prefix)
                 else None
             ),
             "category": str(error.get("category") or "").strip() or None,
@@ -208,7 +216,36 @@ class HubSpotService:
         self,
         inputs: list[dict[str, Any]],
     ) -> dict[str, Any]:
-        """Return only Company IDs confirmed in HubSpot batch results."""
+        return await self._upsert_objects(
+            inputs,
+            path=COMPANY_UPSERT_PATH,
+            object_label="Company",
+            trace_prefix="company-",
+            property_name="maconomy_customer_number",
+        )
+
+    async def upsert_contacts(
+        self,
+        inputs: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        return await self._upsert_objects(
+            inputs,
+            path=CONTACT_UPSERT_PATH,
+            object_label="Contact",
+            trace_prefix="contact-",
+            property_name="maconomy__contact_person_number",
+        )
+
+    async def _upsert_objects(
+        self,
+        inputs: list[dict[str, Any]],
+        *,
+        path: str,
+        object_label: str,
+        trace_prefix: str,
+        property_name: str,
+    ) -> dict[str, Any]:
+        """Return only object IDs confirmed in HubSpot batch results."""
         requested_ids = {str(item["id"]) for item in inputs}
         confirmed_ids: dict[str, str] = {}
         batch_errors: list[dict[str, Any]] = []
@@ -218,17 +255,21 @@ class HubSpotService:
             payload = await self._upsert_batch(
                 inputs[offset : offset + HUBSPOT_BATCH_SIZE],
                 batch_number,
+                path=path,
+                object_label=object_label,
             )
             for result in payload.get("results", []):
                 if not isinstance(result, dict):
                     continue
-                source_id = self._source_id(result)
-                company_id = str(result.get("id") or "").strip()
-                if source_id in requested_ids and company_id:
-                    confirmed_ids[source_id] = company_id
+                source_id = self._source_id(result, trace_prefix, property_name)
+                object_id = str(result.get("id") or "").strip()
+                if source_id in requested_ids and object_id:
+                    confirmed_ids[source_id] = object_id
             for error in payload.get("errors", []):
                 if isinstance(error, dict):
-                    batch_errors.append(self._batch_error_summary(error, batch_number))
+                    batch_errors.append(
+                        self._batch_error_summary(error, batch_number, trace_prefix)
+                    )
 
         return {
             "requested": len(inputs),

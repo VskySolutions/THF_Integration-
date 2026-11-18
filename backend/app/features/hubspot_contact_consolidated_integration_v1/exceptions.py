@@ -21,7 +21,7 @@ class MaconomyError(Exception):
 
 
 class HubSpotError(Exception):
-    """HubSpot Company upsert failure without request credentials or payload."""
+    """HubSpot upsert failure without request credentials or payload."""
 
     def __init__(
         self,

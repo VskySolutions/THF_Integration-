@@ -1,4 +1,4 @@
-"""Authenticate with Maconomy and read recently changed customer cards."""
+"""Read and write Maconomy customer and Contact Person records."""
 
 import asyncio
 import base64
@@ -10,12 +10,13 @@ import httpx
 
 from app.core.config import Settings, get_settings
 from app.features.hubspot_contact_consolidated_integration_v1.constants import (
-    CUSTOMER_CARD_FIELDS,
-    CUSTOMER_NUMBER_FIELD,
-    CUSTOMER_SYNCED_VERSION_FIELD,
+    CONTACT_MASTER_FIELD,
     CONTACT_PERSON_FIELDS,
     CONTACT_PERSON_NUMBER_FIELD,
     CONTACT_SYNCED_VERSION_FIELD,
+    CUSTOMER_CARD_FIELDS,
+    CUSTOMER_NUMBER_FIELD,
+    CUSTOMER_SYNCED_VERSION_FIELD,
     SPECIFICATION1_FIELDS,
     SPECIFICATION6_FIELDS,
     SYNC_WINDOW_DAYS,
@@ -151,6 +152,68 @@ class MaconomyService:
             stage="contact_discovery",
         )
 
+    async def get_contacts_for_customers(
+        self, customer_numbers: list[str]
+    ) -> list[dict[str, Any]]:
+        """Read all contact persons of newly created customers."""
+        by_number: dict[str, dict[str, Any]] = {}
+        for offset in range(0, len(customer_numbers), 50):
+            batch = customer_numbers[offset : offset + 50]
+            clauses = [
+                "(contactcompanynumber = '"
+                + number.replace("'", "''")
+                + "')"
+                for number in batch
+            ]
+            records = await self._filter_records(
+                container="contactpersons",
+                restriction=" or ".join(clauses),
+                fields=CONTACT_PERSON_FIELDS,
+                limit=5000,
+                stage="new_customer_contacts_lookup",
+            )
+            for record in records:
+                number = str(record.get(CONTACT_PERSON_NUMBER_FIELD) or "").strip()
+                if number:
+                    by_number[number] = record
+        return list(by_number.values())
+
+    async def get_contact_persons_by_emails(
+        self, emails: list[str]
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Back-query full email groups without a date restriction."""
+        unique_emails = list(dict.fromkeys(email.strip().lower() for email in emails))
+        batches = [unique_emails[i : i + 5] for i in range(0, len(unique_emails), 5)]
+        semaphore = asyncio.Semaphore(10)
+
+        async def fetch_batch(batch: list[str]) -> list[dict[str, Any]]:
+            clauses = [
+                "(electronicmailaddress like '"
+                + email.replace("'", "''")
+                + "')"
+                for email in batch
+            ]
+            async with semaphore:
+                return await self._filter_records(
+                    container="contactpersons",
+                    restriction=" or ".join(clauses),
+                    fields=CONTACT_PERSON_FIELDS,
+                    limit=5000,
+                    stage="contact_master_back_query",
+                )
+
+        results = await asyncio.gather(*(fetch_batch(batch) for batch in batches))
+        by_email: dict[str, list[dict[str, Any]]] = {}
+        seen: set[str] = set()
+        for records in results:
+            for record in records:
+                number = str(record.get(CONTACT_PERSON_NUMBER_FIELD) or "").strip()
+                email = str(record.get("electronicmailaddress") or "").strip().lower()
+                if number and number not in seen and email in unique_emails:
+                    seen.add(number)
+                    by_email.setdefault(email, []).append(record)
+        return by_email
+
     async def get_specification1_descriptions(self) -> dict[str, str]:
         """Read Specification 1 descriptions using the cached reconnect token."""
         records = await self._filter_records(
@@ -279,6 +342,181 @@ class MaconomyService:
             reason="version_conflict",
         )
 
+    async def write_contact_master_stamp(
+        self, contact_person_number: str, master_number: str
+    ) -> dict[str, Any]:
+        """Write remark4 only when the current Contact Person has no stamp."""
+        source_id = str(contact_person_number).strip()
+        master = str(master_number).strip()
+        if not source_id or not master:
+            raise MaconomyError(
+                "Contact master stamp needs contact and master numbers",
+                stage="contact_master_stamp",
+                reason="missing_contact_or_master_number",
+            )
+        shortname = quote(self.settings.maconomy_shortname, safe="")
+        container_url = (
+            f"{self.settings.maconomy_url}/maconomy-api/containers/"
+            f"{shortname}/contactpersons"
+        )
+        reconnect_token = await self.authenticate()
+        headers = {
+            "Accept": CONTAINER_ACCEPT,
+            "Content-Type": CONTAINER_CONTENT_TYPE,
+            "Authorization": f"X-Reconnect {reconnect_token}",
+        }
+
+        for attempt in range(2):
+            record, instance_id, bound_token = await self._bind_contact_for_stamp(
+                container_url, headers, source_id
+            )
+            current_master = str(record.get(CONTACT_MASTER_FIELD) or "").strip()
+            if current_master:
+                if current_master != master:
+                    raise MaconomyError(
+                        f"Contact {source_id} already points to master {current_master}",
+                        stage="contact_master_stamp",
+                        reason="existing_master_conflict",
+                    )
+                return {"source_id": source_id, "master_number": master, "written": False}
+
+            response = await self._checkpoint_post(
+                f"{container_url}/instances/{instance_id}/data/panes/card/0",
+                headers={**headers, "Maconomy-Concurrency-Control": bound_token},
+                payload={
+                    "data": {CONTACT_MASTER_FIELD: master},
+                    "offset": 0,
+                    "limit": 100,
+                },
+                source_id=source_id,
+                operation="update",
+                entity="contact",
+            )
+            if response.status_code in (409, 412) and attempt == 0:
+                continue
+            if not response.is_success:
+                raise self._checkpoint_status_error(
+                    response, source_id, "update", entity="contact"
+                )
+
+            saved, _, _ = await self._bind_contact_for_stamp(
+                container_url, headers, source_id
+            )
+            if str(saved.get(CONTACT_MASTER_FIELD) or "").strip() != master:
+                raise MaconomyError(
+                    f"Contact {source_id} remark4 stamp could not be verified",
+                    stage="contact_master_stamp",
+                    reason="verification_failed",
+                )
+            return {
+                "source_id": source_id,
+                "master_number": master,
+                "written": True,
+                "conflict_retried": attempt > 0,
+            }
+
+        raise MaconomyError(
+            f"Contact {source_id} master stamp conflict persisted",
+            stage="contact_master_stamp",
+            reason="version_conflict",
+        )
+
+    async def _bind_contact_for_stamp(
+        self,
+        container_url: str,
+        headers: dict[str, str],
+        source_id: str,
+    ) -> tuple[dict[str, Any], str, str]:
+        response = await self._checkpoint_post(
+            f"{container_url}/instances",
+            headers=headers,
+            payload={
+                "panes": {
+                    "card": {
+                        "fields": [
+                            CONTACT_PERSON_NUMBER_FIELD,
+                            CONTACT_MASTER_FIELD,
+                            VERSION_FIELD,
+                        ]
+                    }
+                }
+            },
+            source_id=source_id,
+            operation="instance",
+            entity="contact",
+        )
+        if not response.is_success:
+            raise self._checkpoint_status_error(
+                response, source_id, "instance", entity="contact"
+            )
+        try:
+            instance_id = str(response.json()["meta"]["containerInstanceId"]).strip()
+        except (KeyError, TypeError, ValueError) as exc:
+            raise MaconomyError(
+                f"Invalid Contact {source_id} instance response",
+                stage="contact_master_stamp",
+                reason="invalid_instance_response",
+            ) from exc
+        token = (response.headers.get("Maconomy-Concurrency-Control") or "").strip()
+        if not instance_id or not token:
+            raise MaconomyError(
+                f"Contact {source_id} instance token is missing",
+                stage="contact_master_stamp",
+                reason="missing_instance_token",
+            )
+
+        response = await self._checkpoint_post(
+            f"{container_url}/instances/{instance_id}/data;"
+            f"{CONTACT_PERSON_NUMBER_FIELD}={quote(source_id, safe='')}",
+            headers={**headers, "Maconomy-Concurrency-Control": token},
+            payload={},
+            source_id=source_id,
+            operation="bind",
+            entity="contact",
+        )
+        if not response.is_success:
+            raise self._checkpoint_status_error(
+                response, source_id, "bind", entity="contact"
+            )
+        bound_token = (
+            response.headers.get("Maconomy-Concurrency-Control") or ""
+        ).strip()
+        if not bound_token:
+            raise MaconomyError(
+                f"Contact {source_id} bind token is missing",
+                stage="contact_master_stamp",
+                reason="missing_bind_token",
+            )
+        try:
+            records = response.json()["panes"]["card"]["records"]
+        except (KeyError, TypeError, ValueError) as exc:
+            raise MaconomyError(
+                f"Invalid Contact {source_id} bind response",
+                stage="contact_master_stamp",
+                reason="invalid_bind_response",
+            ) from exc
+        if not isinstance(records, list):
+            raise MaconomyError(
+                f"Invalid Contact {source_id} bind records",
+                stage="contact_master_stamp",
+                reason="invalid_bind_records",
+            )
+        matching = [
+            item["data"]
+            for item in records
+            if isinstance(item, dict)
+            and isinstance(item.get("data"), dict)
+            and str(item["data"].get(CONTACT_PERSON_NUMBER_FIELD) or "").strip()
+            == source_id
+        ]
+        if len(matching) != 1:
+            raise MaconomyError(
+                f"Contact {source_id} was not uniquely found for master stamp",
+                stage="contact_master_stamp",
+                reason="contact_not_found",
+            )
+        return matching[0], instance_id, bound_token
+
     async def _bind_customer_for_checkpoint(
         self,
         container_url: str,
@@ -382,13 +620,18 @@ class MaconomyService:
         payload: dict[str, Any],
         source_id: str,
         operation: str,
+        entity: str = "customer",
     ) -> httpx.Response:
         try:
             return await self.client.post(url, headers=headers, json=payload)
         except httpx.HTTPError as exc:
             raise MaconomyError(
-                f"Maconomy customer {source_id} checkpoint {operation} request failed",
-                stage="customer_checkpoint",
+                f"Maconomy {entity} {source_id} {operation} request failed",
+                stage=(
+                    "customer_checkpoint"
+                    if entity == "customer"
+                    else "contact_master_stamp"
+                ),
                 reason=(
                     "timeout" if isinstance(exc, httpx.TimeoutException) else "request_error"
                 ),
@@ -399,6 +642,8 @@ class MaconomyService:
         response: httpx.Response,
         source_id: str,
         operation: str,
+        *,
+        entity: str = "customer",
     ) -> MaconomyError:
         try:
             payload = response.json()
@@ -410,8 +655,12 @@ class MaconomyService:
                 payload.get("message") or payload.get("error") or ""
             ).strip()[:1000] or None
         return MaconomyError(
-            f"Maconomy customer {source_id} checkpoint {operation} was rejected",
-            stage="customer_checkpoint",
+            f"Maconomy {entity} {source_id} {operation} was rejected",
+            stage=(
+                "customer_checkpoint"
+                if entity == "customer"
+                else "contact_master_stamp"
+            ),
             reason=(
                 "version_conflict"
                 if response.status_code in (409, 412)
