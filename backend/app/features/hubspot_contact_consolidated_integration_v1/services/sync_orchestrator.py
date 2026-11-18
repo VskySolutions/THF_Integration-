@@ -52,6 +52,14 @@ class ConsolidatedSyncService:
                     )
                     else {}
                 )
+                specification6_descriptions = (
+                    await maconomy.get_specification6_descriptions()
+                    if any(
+                        str(customer.get("specification6name") or "").strip()
+                        for customer in selected_customers
+                    )
+                    else {}
+                )
             except MaconomyError as exc:
                 logger.exception(
                     "v1 Maconomy bulk read failed: request_id=%s stage=%s "
@@ -66,6 +74,7 @@ class ConsolidatedSyncService:
             company_payload = CompanyMapper.build_upsert_payload(
                 selected_customers,
                 specification1_descriptions,
+                specification6_descriptions,
             )
             try:
                 upsert_result = await HubSpotService(client).upsert_companies(

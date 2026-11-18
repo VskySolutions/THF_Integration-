@@ -29,3 +29,4 @@ CUSTOMER_CARD_FIELDS = [
 ]
 
 SPECIFICATION1_FIELDS = ["specification1name", "description"]
+SPECIFICATION6_FIELDS = ["specification6name", "description"]

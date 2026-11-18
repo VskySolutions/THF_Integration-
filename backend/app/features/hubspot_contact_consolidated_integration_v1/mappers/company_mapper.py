@@ -25,6 +25,7 @@ class CompanyMapper:
     def build_upsert_payload(
         customers: list[dict[str, Any]],
         specification1_descriptions: dict[str, str],
+        specification6_descriptions: dict[str, str],
     ) -> dict[str, Any]:
         inputs: list[dict[str, Any]] = []
         skipped: list[dict[str, str | None]] = []
@@ -70,6 +71,15 @@ class CompanyMapper:
             )
             if industry is not None:
                 properties["industry"] = industry
+
+            specification6_name = str(
+                customer.get("specification6name") or ""
+            ).strip()
+            line_of_business = str(
+                specification6_descriptions.get(specification6_name) or ""
+            ).strip()
+            if line_of_business:
+                properties["line_of_business"] = line_of_business
 
             properties["maconomy_customer_number"] = customer_number
             inputs.append(

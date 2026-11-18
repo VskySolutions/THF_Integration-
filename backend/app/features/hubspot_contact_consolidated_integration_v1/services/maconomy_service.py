@@ -14,6 +14,7 @@ from app.features.hubspot_contact_consolidated_integration_v1.constants import (
     CUSTOMER_NUMBER_FIELD,
     CUSTOMER_SYNCED_VERSION_FIELD,
     SPECIFICATION1_FIELDS,
+    SPECIFICATION6_FIELDS,
     SYNC_WINDOW_DAYS,
     VERSION_FIELD,
 )
@@ -143,6 +144,25 @@ class MaconomyService:
             ).strip()
             for record in records
             if str(record.get("specification1name") or "").strip()
+            and str(record.get("description") or "").strip()
+        }
+
+    async def get_specification6_descriptions(self) -> dict[str, str]:
+        """Read Specification 6 descriptions using the cached reconnect token."""
+        records = await self._filter_records(
+            container="specification6",
+            restriction="",
+            fields=SPECIFICATION6_FIELDS,
+            limit=1000,
+            offset=0,
+            stage="specification6_lookup",
+        )
+        return {
+            str(record.get("specification6name") or "").strip(): str(
+                record.get("description") or ""
+            ).strip()
+            for record in records
+            if str(record.get("specification6name") or "").strip()
             and str(record.get("description") or "").strip()
         }
 

@@ -13,17 +13,19 @@ The bulk route authenticates with Maconomy once per request, caches its
 X-Reconnect token, and reads active customer cards created or changed yesterday
 or today. It classifies new and updated customers with `customerremark26` and
 `versionnumber`. The Maconomy customer filter requests at most 5,000 records,
-matching v0. It also loads Specification 1 descriptions when selected customers
-have a Specification 1 name.
+matching v0. It loads Specification 1 and Specification 6 descriptions when
+selected customers have the corresponding names.
 
 The v1 Company mapper creates batch upsert inputs keyed by
 `maconomy_customer_number`. It retains the Specification 1 description lookup,
 but the HubSpot `industry` mapping currently resolves to `None` until verified
 option values are supplied. Unmapped `industry` is omitted from the upsert
-payload. The HubSpot service sends batches of 100 using the configured service
-key, retries HTTP 429 up to three attempts, and returns only confirmed Company
-IDs. The bulk response includes the selected Maconomy customers, confirmed
-Company IDs, and per-record or batch errors. HubSpot validation messages,
+payload. The mapper sends the Specification 6 description directly as
+`line_of_business` when one is available. The HubSpot service sends batches of
+100 using the configured service key, retries HTTP 429 up to three attempts, and
+returns only confirmed Company IDs. The bulk response includes the selected
+Maconomy customers, confirmed Company IDs, and per-record or batch errors.
+HubSpot validation messages,
 nested error codes, and property names are kept (with messages capped at 1,000
 characters) to make partial failures diagnosable.
 No Maconomy checkpoint write-back or database run logging occurs yet.
