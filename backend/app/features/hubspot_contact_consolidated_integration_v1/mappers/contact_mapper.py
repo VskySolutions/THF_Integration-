@@ -49,8 +49,7 @@ class ContactMapper:
             for maconomy_field, hubspot_property in CONTACT_FIELD_MAPPING.items():
                 value = master.get(maconomy_field)
                 text = str(value).strip() if value is not None else ""
-                if text:
-                    properties[hubspot_property] = text
+                properties[hubspot_property] = text
             inputs.append(
                 {
                     "idProperty": "maconomy__contact_person_number",
