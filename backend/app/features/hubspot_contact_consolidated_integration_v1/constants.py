@@ -27,3 +27,5 @@ CUSTOMER_CARD_FIELDS = [
     "versionnumber",
     "zipcode",
 ]
+
+SPECIFICATION1_FIELDS = ["specification1name", "description"]

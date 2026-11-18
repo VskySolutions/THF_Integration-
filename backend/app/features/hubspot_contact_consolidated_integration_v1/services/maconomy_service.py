@@ -13,6 +13,7 @@ from app.features.hubspot_contact_consolidated_integration_v1.constants import (
     CUSTOMER_CARD_FIELDS,
     CUSTOMER_NUMBER_FIELD,
     CUSTOMER_SYNCED_VERSION_FIELD,
+    SPECIFICATION1_FIELDS,
     SYNC_WINDOW_DAYS,
     VERSION_FIELD,
 )
@@ -112,18 +113,62 @@ class MaconomyService:
 
     async def discover_customers(self) -> list[dict[str, Any]]:
         """Read active customer cards created or changed since yesterday."""
-        reconnect_token = await self.authenticate()
         window_start = date.today() - timedelta(days=SYNC_WINDOW_DAYS)
         restriction = ACTIVE_CUSTOMERS_RESTRICTION_TEMPLATE.format(
             window_start=(
                 f"date({window_start.year},{window_start.month},{window_start.day})"
             )
         )
+        return await self._filter_records(
+            container="customercard",
+            restriction=restriction,
+            fields=CUSTOMER_CARD_FIELDS,
+            limit=5000,
+            stage="customer_discovery",
+        )
+
+    async def get_specification1_descriptions(self) -> dict[str, str]:
+        """Read Specification 1 descriptions using the cached reconnect token."""
+        records = await self._filter_records(
+            container="specification1",
+            restriction="",
+            fields=SPECIFICATION1_FIELDS,
+            limit=1000,
+            offset=0,
+            stage="specification1_lookup",
+        )
+        return {
+            str(record.get("specification1name") or "").strip(): str(
+                record.get("description") or ""
+            ).strip()
+            for record in records
+            if str(record.get("specification1name") or "").strip()
+            and str(record.get("description") or "").strip()
+        }
+
+    async def _filter_records(
+        self,
+        *,
+        container: str,
+        restriction: str,
+        fields: list[str],
+        limit: int,
+        stage: str,
+        offset: int | None = None,
+    ) -> list[dict[str, Any]]:
+        reconnect_token = await self.authenticate()
         shortname = quote(self.settings.maconomy_shortname, safe="")
         url = (
             f"{self.settings.maconomy_url}/maconomy-api/containers/"
-            f"{shortname}/customercard/filter"
+            f"{shortname}/{container}/filter"
         )
+        payload: dict[str, Any] = {
+            "restriction": restriction,
+            "fields": fields,
+            "limit": limit,
+        }
+        if offset is not None:
+            payload["offset"] = offset
         try:
             response = await self.client.post(
                 url,
@@ -132,17 +177,13 @@ class MaconomyService:
                     "Content-Type": CONTAINER_CONTENT_TYPE,
                     "Authorization": f"X-Reconnect {reconnect_token}",
                 },
-                json={
-                    "restriction": restriction,
-                    "fields": CUSTOMER_CARD_FIELDS,
-                    "limit": 5000,
-                },
+                json=payload,
             )
             response.raise_for_status()
         except httpx.HTTPError as exc:
             raise MaconomyError(
-                "Maconomy customer card request failed",
-                stage="customer_discovery",
+                f"Maconomy {container} request failed",
+                stage=stage,
                 reason=(
                     "http_status"
                     if isinstance(exc, httpx.HTTPStatusError)
@@ -159,15 +200,15 @@ class MaconomyService:
             records = response.json()["panes"]["filter"]["records"]
         except (KeyError, TypeError, ValueError) as exc:
             raise MaconomyError(
-                "Invalid Maconomy customer card response",
-                stage="customer_discovery",
+                f"Invalid Maconomy {container} response",
+                stage=stage,
                 reason="invalid_response",
                 upstream_status=response.status_code,
             ) from exc
         if not isinstance(records, list):
             raise MaconomyError(
-                "Invalid Maconomy customer card response",
-                stage="customer_discovery",
+                f"Invalid Maconomy {container} response",
+                stage=stage,
                 reason="invalid_records",
                 upstream_status=response.status_code,
             )

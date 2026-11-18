@@ -9,16 +9,28 @@ integration service checks as v0:
 - `POST /api/v1/hubspot-consolidated/companies/{maconomy_customer_number}/sync`
 - `POST /api/v1/hubspot-consolidated/contacts/{maconomy_contact_person_number}/sync`
 
-The bulk route now authenticates with Maconomy once per request, caches its
-X-Reconnect token for later calls in that run, and reads active customer cards
-created or changed yesterday or today. It returns only the customer records
-classified as new or updated by `customerremark26` and `versionnumber`, grouped
-under `new_customers` and `updated_customers`. The Maconomy filter currently
-requests at most 5,000 records, matching v0. No HubSpot writes or run logging
-occur in this discovery step.
-Maconomy failures carry a stage, reason, and upstream HTTP status in the v1
-exception and are logged with the request ID and chained traceback. The API
-returns a safe 502 message without credentials or token details.
+The bulk route authenticates with Maconomy once per request, caches its
+X-Reconnect token, and reads active customer cards created or changed yesterday
+or today. It classifies new and updated customers with `customerremark26` and
+`versionnumber`. The Maconomy customer filter requests at most 5,000 records,
+matching v0. It also loads Specification 1 descriptions when selected customers
+have a Specification 1 name.
+
+The v1 Company mapper creates batch upsert inputs keyed by
+`maconomy_customer_number`. It retains the Specification 1 description lookup,
+but the HubSpot `industry` mapping currently resolves to `None` until verified
+option values are supplied. Unmapped `industry` is omitted from the upsert
+payload. The HubSpot service sends batches of 100 using the configured service
+key, retries HTTP 429 up to three attempts, and returns only confirmed Company
+IDs. The bulk response includes the selected Maconomy customers, confirmed
+Company IDs, and per-record or batch errors. HubSpot validation messages,
+nested error codes, and property names are kept (with messages capped at 1,000
+characters) to make partial failures diagnosable.
+No Maconomy checkpoint write-back or database run logging occurs yet.
+
+Maconomy and HubSpot failures carry stage or reason, upstream HTTP status, and
+safe context for troubleshooting. The API returns a safe 502 message for a
+failed request without credentials or token details.
 
 Company and contact routes still return 501. The scheduler retains the
 unversioned bulk path. The existing routes use `/hubspot-consolidated_v0`.
