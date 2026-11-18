@@ -44,3 +44,11 @@ class TimesheetSubmissionStatus(str, Enum):
     ACCEPTED = "ACCEPTED"
     FAILED = "FAILED"
     UNKNOWN = "UNKNOWN"
+
+
+class TimesheetScheduleStatus(str, Enum):
+    PENDING = "PENDING"
+    PROCESSING = "PROCESSING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    MISSED = "MISSED"

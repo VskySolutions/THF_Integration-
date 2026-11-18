@@ -1,9 +1,10 @@
 import logging
+import uuid
 
 import httpx
 
 from app.features.schedular_services.constants import (
-    PAYCOR_TIMESHEET_SYNC_PATH,
+    PAYCOR_TIMESHEET_SCHEDULED_SYNC_PATH,
 )
 
 
@@ -12,12 +13,13 @@ LOGGER = logging.getLogger(__name__)
 
 async def run_paycor_timesheet_sync(
     client: httpx.AsyncClient,
+    schedule_id: uuid.UUID,
 ) -> None:
-    """Call the weekly Maconomy-to-Paycor timesheet sync endpoint."""
+    """Call one scheduled Maconomy-to-Paycor timesheet sync."""
 
     try:
         response = await client.post(
-            PAYCOR_TIMESHEET_SYNC_PATH
+            f"{PAYCOR_TIMESHEET_SCHEDULED_SYNC_PATH}/{schedule_id}"
         )
         response.raise_for_status()
     except httpx.HTTPError as exc:

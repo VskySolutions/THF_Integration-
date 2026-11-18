@@ -142,9 +142,8 @@ class Settings(BaseSettings):
         ge=0,
         le=23,
     )
-    scheduler_paycor_timesheet_day_of_week: str = "tue"
     scheduler_paycor_timesheet_hour_et: int = Field(
-        default=11,
+        default=6,
         ge=0,
         le=23,
     )

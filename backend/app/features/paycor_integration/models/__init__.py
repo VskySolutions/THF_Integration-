@@ -4,6 +4,7 @@ from .timesheet_batch import PaycorTimesheetBatch
 from .timesheet_integration_log import (
     PaycorTimesheetIntegrationLog,
 )
+from .timesheet_schedule import PaycorTimesheetSchedule
 
 
 __all__ = [
@@ -11,4 +12,5 @@ __all__ = [
     "PaycorIntegrationLog",
     "PaycorTimesheetBatch",
     "PaycorTimesheetIntegrationLog",
+    "PaycorTimesheetSchedule",
 ]

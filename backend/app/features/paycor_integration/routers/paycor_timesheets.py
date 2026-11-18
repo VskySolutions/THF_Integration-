@@ -9,7 +9,7 @@ from datetime import (
     timedelta,
 )
 from typing import Annotated, Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -50,6 +50,13 @@ from app.features.paycor_integration.services.timesheet_integration_log_service 
 )
 from app.features.paycor_integration.services.timesheet_calculation_service import (
     calculate_all_weekly_earnings,
+)
+from app.features.paycor_integration.services.timesheet_schedule_service import (
+    TimesheetScheduleNotDueError,
+    TimesheetScheduleNotFoundError,
+    claim_due_schedule,
+    mark_schedule_completed,
+    mark_schedule_failed,
 )
 
 
@@ -106,23 +113,28 @@ def _validate_date_range(
         )
 
 
-def _validate_week_date_range(
+def _validate_complete_week_date_range(
     start_date: date,
     end_date: date,
 ) -> None:
-    """Validate one complete Monday-through-Sunday week."""
+    """Validate one to three complete Monday-through-Sunday weeks."""
 
     _validate_date_range(
         start_date,
         end_date,
     )
 
-    if end_date - start_date != timedelta(days=6):
+    inclusive_days = (end_date - start_date).days + 1
+
+    if (
+        inclusive_days % 7 != 0
+        or inclusive_days > 21
+    ):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
-                "The date range must contain exactly "
-                "seven days"
+                "The date range must contain one to three "
+                "complete weeks"
             ),
         )
 
@@ -683,6 +695,135 @@ async def sync_previous_week_to_paycor(
 
 
 @router.post(
+    "/sync/scheduled/{schedule_id}",
+    response_model=dict[str, Any],
+)
+async def sync_scheduled_timesheets_to_paycor(
+    schedule_id: UUID,
+    response: Response,
+    maconomy_service: MaconomyServiceDependency,
+    session: DatabaseSession,
+) -> dict[str, Any]:
+    """Submit the workweeks assigned to one database schedule."""
+
+    current_eastern_date = datetime.now(
+        ZoneInfo("America/New_York")
+    ).date()
+
+    try:
+        schedule = await claim_due_schedule(
+            session,
+            schedule_id=schedule_id,
+            current_eastern_date=current_eastern_date,
+        )
+    except TimesheetScheduleNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    except TimesheetScheduleNotDueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+
+    sync_service = PaycorTimesheetSyncService(
+        maconomy_service=maconomy_service,
+        paycor_service=PaycorTimesheetService(),
+    )
+
+    try:
+        result = await sync_service.submit_new_groups(
+            session,
+            start_date=schedule.workweek_start,
+            end_date=schedule.workweek_end,
+        )
+    except NoApprovedTimesheetsError as exc:
+        await mark_schedule_failed(
+            session,
+            schedule_id=schedule_id,
+            error=str(exc),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    except (
+        TimesheetReconciliationRequiredError,
+        TimesheetSubmissionBlockedError,
+    ) as exc:
+        await mark_schedule_failed(
+            session,
+            schedule_id=schedule_id,
+            error=str(exc),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+    except (
+        MaconomyTimesheetServiceError,
+        PaycorTimesheetServiceError,
+    ) as exc:
+        await mark_schedule_failed(
+            session,
+            schedule_id=schedule_id,
+            error=str(exc),
+        )
+        LOGGER.exception(
+            "Scheduled Paycor timesheet synchronization failed: %s",
+            exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(exc),
+        ) from exc
+    except ValueError as exc:
+        await mark_schedule_failed(
+            session,
+            schedule_id=schedule_id,
+            error=str(exc),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    except Exception as exc:
+        await mark_schedule_failed(
+            session,
+            schedule_id=schedule_id,
+            error=str(exc),
+        )
+        LOGGER.exception(
+            "Unexpected scheduled Paycor timesheet failure: %s",
+            exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Scheduled Paycor timesheet synchronization failed",
+        ) from exc
+
+    await mark_schedule_completed(
+        session,
+        schedule_id=schedule_id,
+    )
+    _set_grouped_warning_header(
+        response=response,
+        warnings=result["warnings"],
+    )
+    return {
+        "scheduleId": str(schedule_id),
+        "importFromMaconomyDate": (
+            schedule.import_from_maconomy_date.isoformat()
+        ),
+        "workweekStart": schedule.workweek_start.isoformat(),
+        "workweekEnd": schedule.workweek_end.isoformat(),
+        "status": "COMPLETED",
+        "sync": result,
+    }
+
+
+@router.post(
     "/paygrid-by-daterange",
     response_model=dict[str, Any],
 )
@@ -693,9 +834,9 @@ async def retry_paygrid_by_date_range(
     start_date: date = Query(...),
     end_date: date = Query(...),
 ) -> dict[str, Any]:
-    """Append or replace grouped batches for one source week."""
+    """Append or replace grouped batches for complete source weeks."""
 
-    _validate_week_date_range(
+    _validate_complete_week_date_range(
         start_date,
         end_date,
     )
