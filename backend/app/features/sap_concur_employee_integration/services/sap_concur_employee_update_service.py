@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import Settings, get_settings
 from app.features.sap_concur_employee_integration.mappers.employee_mapper import (
     ENTERPRISE_USER_SCHEMA,
+    map_maconomy_employee_to_scim_patch,
     map_maconomy_employee_to_scim_user,
 )
 from app.features.sap_concur_employee_integration.models.employee_sync_tracking import (
@@ -256,19 +257,19 @@ class SAPConcurEmployeeUpdateService:
         sap_concur_user_id: str,
         maconomy_employee: dict[str, Any],
     ) -> dict[str, Any]:
-        """Update existing user in SAP Concur via SCIM 2.0 PUT /profile/v4/Users/{userId}."""
+        """Update existing user in SAP Concur via SCIM 2.0 PATCH /profile/v4/Users/{userId}."""
         base_url = str(self.settings.sap_concur_api_base_url).rstrip("/")
         update_url = f"{base_url}/profile/v4/Users/{sap_concur_user_id.strip()}"
-        payload = self._prepare_scim_payload(maconomy_employee)
+        payload = map_maconomy_employee_to_scim_patch(maconomy_employee)
 
         if self.client is not None:
             resp = await self.concur_base_service._request_with_auth(
-                self.client, "PUT", update_url, json=payload
+                self.client, "PATCH", update_url, json=payload
             )
         else:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 resp = await self.concur_base_service._request_with_auth(
-                    client, "PUT", update_url, json=payload
+                    client, "PATCH", update_url, json=payload
                 )
 
         if resp.status_code in (200, 202, 204):
@@ -310,12 +311,12 @@ class SAPConcurEmployeeUpdateService:
             return {"action": "SKIPPED", "reason": "Missing employeenumber"}
 
         emp_number = str(emp_number).strip()
+        # Priority: versionnumber is the canonical Maconomy version field.
+        # Do NOT fall back to instancekey or changeddate — they are not version numbers.
         live_version = (
-            maconomy_employee.get("rowVersion")
-            or maconomy_employee.get("versionnumber")
+            maconomy_employee.get("versionnumber")
+            or maconomy_employee.get("rowVersion")
             or maconomy_employee.get("version_number")
-            or maconomy_employee.get("instancekey")
-            or maconomy_employee.get("changeddate")
         )
 
         tracking = await self.get_tracking(emp_number)
@@ -326,18 +327,20 @@ class SAPConcurEmployeeUpdateService:
         if tracking is not None:
             stored_version = tracking.maconomy_version
 
-            # Check if unchanged
-            if (
-                live_version is not None
-                and stored_version is not None
-                and str(live_version).strip() == str(stored_version).strip()
-                and tracking.sync_status == "SUCCESS"
-            ):
-                return {
-                    "action": "SKIPPED",
-                    "employee_number": emp_number,
-                    "reason": f"Version unchanged ({stored_version})",
-                }
+            # Integer version comparison — prevents wrong skips like "9" > "10" in string
+            if live_version is not None and stored_version is not None and tracking.sync_status == "SUCCESS":
+                try:
+                    live_v = int(str(live_version).strip())
+                    stored_v = int(str(stored_version).strip())
+                except (ValueError, TypeError):
+                    live_v = str(live_version).strip()
+                    stored_v = str(stored_version).strip()
+                if live_v <= stored_v:
+                    return {
+                        "action": "SKIPPED",
+                        "employee_number": emp_number,
+                        "reason": f"Version not newer (Maconomy: {live_v}, DB: {stored_v})",
+                    }
 
             # Version changed or previous failure -> Trigger Concur Update
             concur_id = tracking.sap_concur_user_id

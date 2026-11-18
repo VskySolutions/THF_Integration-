@@ -122,6 +122,7 @@ class Settings(BaseSettings):
     scheduler_cch_interval_minutes: int = Field(default=5, ge=1)
     scheduler_sap_concur_interval_minutes: int = Field(default=5, ge=1)
     scheduler_sap_concur_invoice_interval_minutes: int = Field(default=5, ge=1)
+    scheduler_sap_concur_employee_interval_minutes: int = Field(default=5, ge=1)
     scheduler_sap_concur_engagements_tasks_interval_minutes: int = Field(
         default=5,
         ge=1,

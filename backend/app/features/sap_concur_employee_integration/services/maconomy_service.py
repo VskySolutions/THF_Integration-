@@ -32,33 +32,26 @@ EMPLOYEE_RESTRICTION = (
 )
 
 EMPLOYEE_FIELDS = [
-    "blocked",
-    "companyname",
-    "country",
-    # "dateemployed",
-    "dateendemployment",
-    "electronicmailaddress",
     "employeenumber",
-    "initials",
-    "instancekey",
+    "electronicmailaddress",
+    "firstname",
+    "middlename",
+    "lastname",
     "name1",
+    "blocked",
     "position",
-    "profileimage",
-    # "superioremployee",
-    "vendornumber",
     "name2",
     "name3",
-    "zipcode",
     "postaldistrict",
-    "dateemployed",
-    "superioremployee",
-    # "superioremployeename",
+    "zipcode",
+    "country",
+    "telephone",
     "entityname",
     "specification4name",
-    "firstname",
-    "lastname",
-    "middlename"
-    # "phone"
+    "dateemployed",
+    "superioremployee",
+    "changeddate",
+    "versionnumber",
 ]
 FILTER_LIMIT = 100
 MAX_PAGES = 100
@@ -158,9 +151,10 @@ class MaconomyEmployeeService:
         offset: int,
     ) -> list[dict[str, Any]]:
         """Fetch one page of employees from the showemployeeshr container."""
-        yesterday = (date.today() - timedelta(days=1)).strftime("%Y-%m-%d")
+        # Filter employees updated within the last 2 days
+        days_ago = (date.today() - timedelta(days=2)).strftime("%Y-%m-%d")
         payload = {
-            "restriction": f"(DateEmployed le currentDate() and (DateEndEmployment gt currentDate() or DateEndEmployment = date(nulldate))) and (changeddate >= date({yesterday}))",
+            "restriction": f"(DateEmployed le currentDate() and (DateEndEmployment gt currentDate() or DateEndEmployment = date(nulldate))) and (changeddate >= date({days_ago}))",
             "fields": EMPLOYEE_FIELDS,
             "limit": FILTER_LIMIT,
             "offset": offset,
