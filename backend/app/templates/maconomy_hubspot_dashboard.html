@@ -424,13 +424,8 @@
                 <div class="modal-body">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                     <p class="text-secondary small">
-                        {% if is_consolidated %}
                         Synchronize one Maconomy Customer as a Company, or synchronize
                         the master Contact Person selected for an email group.
-                        {% else %}
-                        Synchronize one Maconomy Customer with all its Contact Persons,
-                        or one Contact Person under its existing HubSpot Company.
-                        {% endif %}
                     </p>
                     <label for="hubspotRecordType" class="form-label">Record type</label>
                     <select class="form-select mb-3" id="hubspotRecordType" name="record_type" required>

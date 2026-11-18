@@ -19,7 +19,6 @@ class IntegrationServiceIdentifier(str, Enum):
     )
 
     # HubSpot constants
-    MACONOMY_HUBSPOT_SYNC = "MACONOMY_HUBSPOT_SYNC"
     MACONOMY_HUBSPOT_CONTACT_CONSOLIDATED_SYNC = (
         "MACONOMY_HUBSPOT_CONTACT_CONSOLIDATED_SYNC"
     )

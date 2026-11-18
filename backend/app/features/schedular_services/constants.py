@@ -27,8 +27,6 @@ SAP_CONCUR_ENGAGEMENTS_TASKS_SYNC_PATH = (
     "/api/v1/sap-concur-engagements-and-tasks/sync-engagements-and-tasks"
 )
 SAP_CONCUR_ENGAGEMENTS_TASKS_SYNC_JOB_ID = "sap_concur_engagements_tasks_sync"
-HUBSPOT_SYNC_PATH = "/api/v1/hubspot/sync/customers"
-HUBSPOT_SYNC_JOB_ID = "maconomy_hubspot_sync"
 HUBSPOT_CONTACT_CONSOLIDATED_SYNC_PATH = (
     "/api/v1/hubspot-consolidated/sync/customers"
 )

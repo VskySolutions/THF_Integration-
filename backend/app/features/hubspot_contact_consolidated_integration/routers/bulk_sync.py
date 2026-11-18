@@ -15,8 +15,8 @@ from app.features.integration_services import (
 )
 
 router = APIRouter(
-    prefix="/hubspot-consolidated",
-    tags=["hubspot-consolidated-integration"],
+    prefix="/hubspot-consolidated_v0",
+    tags=["hubspot-consolidated-integration-v0"],
     dependencies=[Depends(require_api_key)],
 )
 DatabaseSession = Annotated[AsyncSession, Depends(get_db)]

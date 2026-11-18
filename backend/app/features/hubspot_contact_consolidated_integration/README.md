@@ -1,6 +1,6 @@
 # HubSpot Contact Consolidated Integration (Maconomy -> HubSpot)
 
-Separate parallel feature to `hubspot_integration`. The old integration is not touched; this one implements the **consolidated contact** scope plan (see `backend/documentation/HubSpotIntegration/proposed_scope_hubspot.md`):
+This feature implements the **consolidated contact** scope plan (see `backend/documentation/HubSpotIntegration/proposed_scope_hubspot.md`):
 
 - Parallel discovery of Customers and Contact Persons from Maconomy (barrier before processing)
 - Parallel Company sync ∥ Contact sync branches (both joined before association)
@@ -13,9 +13,9 @@ Separate parallel feature to `hubspot_integration`. The old integration is not t
 
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/api/v1/hubspot-consolidated/sync/customers` | Scheduler / bulk sync (header `X-Integration-Trigger: SCHEDULER` records trigger type) |
-| POST | `/api/v1/hubspot-consolidated/companies/{maconomy_customer_number}/sync` | Manual sync one Customer -> Company |
-| POST | `/api/v1/hubspot-consolidated/contacts/{maconomy_contact_person_number}/sync` | Manual sync one Contact Person (resolves MASTER; 422 if routed to another master) |
+| POST | `/api/v1/hubspot-consolidated_v0/sync/customers` | v0 bulk sync (header `X-Integration-Trigger: SCHEDULER` records trigger type) |
+| POST | `/api/v1/hubspot-consolidated_v0/companies/{maconomy_customer_number}/sync` | Manual sync one Customer -> Company |
+| POST | `/api/v1/hubspot-consolidated_v0/contacts/{maconomy_contact_person_number}/sync` | Manual sync one Contact Person (resolves MASTER; 422 if routed to another master) |
 
 Auth: `X-API-KEY` header + integration service
 `MACONOMY_HUBSPOT_CONTACT_CONSOLIDATED_SYNC` must be active. This switch is
@@ -25,7 +25,7 @@ independent of the legacy HubSpot integration.
 
 ```mermaid
 flowchart TD
-    A["POST /hubspot-consolidated/sync/customers<br/>X-Integration-Trigger: SCHEDULER / API"] --> B["Start run log<br/>operation=CONSOLIDATED_BULK_SYNC<br/>trigger_type=SCHEDULER / API"]
+    A["POST /hubspot-consolidated_v0/sync/customers<br/>X-Integration-Trigger: SCHEDULER / API"] --> B["Start run log<br/>operation=CONSOLIDATED_BULK_SYNC<br/>trigger_type=SCHEDULER / API"]
 
     B --> C["PARALLEL Maconomy discovery (barrier)<br/>authenticate ONCE, reuse X-Reconnect token"]
     C --> C1["MaconomyService.discover_customers<br/>filter: ActiveStatus=Active<br/>AND createddate/changeddate within 2 days"]
@@ -278,7 +278,7 @@ Table `hubspot_contact_consolidation_run_logs` (see alembic `20261109_0032`; man
 
 ## Scheduler
 
-Independent job `maconomy_hubspot_contact_consolidated_sync` posts the bulk endpoint with `X-Integration-Trigger: SCHEDULER`. Controlled by settings `SCHEDULER_HUBSPOT_CONSOLIDATED_ENABLED` (default OFF, so the old integration is unaffected until explicitly enabled) and `SCHEDULER_HUBSPOT_CONSOLIDATED_INTERVAL_MINUTES`.
+Independent job `maconomy_hubspot_contact_consolidated_sync` posts the unversioned v1 bulk endpoint with `X-Integration-Trigger: SCHEDULER`. That endpoint returns 501 until the v1 batch flow is implemented. Controlled by settings `SCHEDULER_HUBSPOT_CONSOLIDATED_ENABLED` (default OFF) and `SCHEDULER_HUBSPOT_CONSOLIDATED_INTERVAL_MINUTES`.
 
 ## Monitoring
 
