@@ -95,7 +95,36 @@ class ConsolidatedSyncService:
                 )
                 raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-        confirmed_ids = upsert_result["confirmed_ids"]
+            confirmed_ids = upsert_result["confirmed_ids"]
+            checkpoints_written: list[dict[str, Any]] = []
+            writeback_errors: list[dict[str, Any]] = []
+            for source_id in confirmed_ids:
+                try:
+                    checkpoint = await maconomy.update_customer_sync_version(source_id)
+                    checkpoints_written.append(checkpoint)
+                except MaconomyError as exc:
+                    logger.exception(
+                        "v1 Maconomy customer writeback failed: request_id=%s "
+                        "source_id=%s stage=%s reason=%s upstream_status=%s "
+                        "upstream_message=%s",
+                        request_id,
+                        source_id,
+                        exc.stage,
+                        exc.reason,
+                        exc.upstream_status,
+                        exc.upstream_message,
+                    )
+                    writeback_errors.append(
+                        {
+                            "source_id": source_id,
+                            "stage": exc.stage,
+                            "reason": exc.reason,
+                            "upstream_status": exc.upstream_status,
+                            "message": str(exc),
+                            "upstream_message": exc.upstream_message,
+                        }
+                    )
+
         errors_by_source = {
             error["source_id"]: error
             for error in upsert_result["batch_errors"]
@@ -119,15 +148,18 @@ class ConsolidatedSyncService:
                 }
             )
 
-        if failed_customers or upsert_result["batch_errors"]:
+        if failed_customers or upsert_result["batch_errors"] or writeback_errors:
             logger.warning(
-                "v1 HubSpot Company upsert was partial: request_id=%s "
-                "requested=%s confirmed=%s failed=%s batch_errors=%s",
+                "v1 Company sync was partial: request_id=%s "
+                "requested=%s confirmed=%s hubspot_failed=%s "
+                "writeback_failed=%s batch_errors=%s writeback_errors=%s",
                 request_id,
                 upsert_result["requested"],
                 len(confirmed_ids),
                 len(failed_customers),
+                len(writeback_errors),
                 upsert_result["batch_errors"],
+                writeback_errors,
             )
 
         return {
@@ -137,6 +169,7 @@ class ConsolidatedSyncService:
                     failed_customers
                     or company_payload["skipped"]
                     or upsert_result["batch_errors"]
+                    or writeback_errors
                 )
                 else "success"
             ),
@@ -148,6 +181,12 @@ class ConsolidatedSyncService:
                 "company_ids": confirmed_ids,
                 "failed_customers": failed_customers,
                 "batch_errors": upsert_result["batch_errors"],
+            },
+            "maconomy": {
+                "checkpoints_requested": len(confirmed_ids),
+                "checkpoints_written": len(checkpoints_written),
+                "checkpoints": checkpoints_written,
+                "writeback_errors": writeback_errors,
             },
             "skipped": company_payload["skipped"],
         }

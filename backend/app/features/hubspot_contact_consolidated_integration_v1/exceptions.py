@@ -11,11 +11,13 @@ class MaconomyError(Exception):
         stage: str,
         reason: str,
         upstream_status: int | None = None,
+        upstream_message: str | None = None,
     ) -> None:
         super().__init__(message)
         self.stage = stage
         self.reason = reason
         self.upstream_status = upstream_status
+        self.upstream_message = upstream_message
 
 
 class HubSpotError(Exception):

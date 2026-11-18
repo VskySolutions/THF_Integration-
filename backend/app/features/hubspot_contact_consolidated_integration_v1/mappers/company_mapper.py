@@ -11,7 +11,7 @@ COMPANY_FIELD_MAPPING: dict[str, str] = {
     "zipcode": "zip",
     "name2": "address",
     "postaldistrict": "city",
-    "name3": "street_address_2",
+    "name3": "address2",
     "theaccountmanagername": "cse",
 }
 

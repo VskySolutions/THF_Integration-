@@ -28,7 +28,12 @@ Maconomy customers, confirmed Company IDs, and per-record or batch errors.
 HubSpot validation messages,
 nested error codes, and property names are kept (with messages capped at 1,000
 characters) to make partial failures diagnosable.
-No Maconomy checkpoint write-back or database run logging occurs yet.
+For each confirmed HubSpot Company, v1 binds the Maconomy customer card, writes
+`customerremark26` to the bound `versionnumber + 1`, and reads the card back to
+verify the checkpoint. A version conflict is rebound and retried once.
+Writeback failures are reported per customer under `maconomy.writeback_errors`
+without stopping other confirmed customers. Database run logging is not yet
+implemented.
 
 Maconomy and HubSpot failures carry stage or reason, upstream HTTP status, and
 safe context for troubleshooting. The API returns a safe 502 message for a

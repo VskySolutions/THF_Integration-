@@ -166,6 +166,238 @@ class MaconomyService:
             and str(record.get("description") or "").strip()
         }
 
+    async def update_customer_sync_version(self, customer_number: str) -> dict[str, Any]:
+        """Write customerremark26 from the freshly bound versionnumber + 1."""
+        source_id = str(customer_number).strip()
+        if not source_id:
+            raise MaconomyError(
+                "Maconomy customer checkpoint needs a customer number",
+                stage="customer_checkpoint",
+                reason="missing_customer_number",
+            )
+
+        shortname = quote(self.settings.maconomy_shortname, safe="")
+        container_url = (
+            f"{self.settings.maconomy_url}/maconomy-api/containers/"
+            f"{shortname}/customercard"
+        )
+        reconnect_token = await self.authenticate()
+        headers = {
+            "Accept": CONTAINER_ACCEPT,
+            "Content-Type": CONTAINER_CONTENT_TYPE,
+            "Authorization": f"X-Reconnect {reconnect_token}",
+        }
+
+        for attempt in range(2):
+            record, instance_id, bound_token = await self._bind_customer_for_checkpoint(
+                container_url, headers, source_id
+            )
+            try:
+                bound_version = int(record[VERSION_FIELD])
+            except (KeyError, TypeError, ValueError) as exc:
+                raise MaconomyError(
+                    f"Invalid Maconomy version for customer {source_id}",
+                    stage="customer_checkpoint",
+                    reason="invalid_bound_version",
+                ) from exc
+
+            checkpoint_value = str(bound_version + 1)
+            response = await self._checkpoint_post(
+                f"{container_url}/instances/{instance_id}/data/panes/card/0",
+                headers={
+                    **headers,
+                    "Maconomy-Concurrency-Control": bound_token,
+                },
+                payload={
+                    "data": {CUSTOMER_SYNCED_VERSION_FIELD: checkpoint_value},
+                    "offset": 0,
+                    "limit": 100,
+                },
+                source_id=source_id,
+                operation="update",
+            )
+            if response.status_code in (409, 412) and attempt == 0:
+                continue
+            if not response.is_success:
+                raise self._checkpoint_status_error(response, source_id, "update")
+
+            saved_record, _, _ = await self._bind_customer_for_checkpoint(
+                container_url, headers, source_id
+            )
+            try:
+                saved_version = int(saved_record[VERSION_FIELD])
+            except (KeyError, TypeError, ValueError) as exc:
+                raise MaconomyError(
+                    f"Invalid saved Maconomy version for customer {source_id}",
+                    stage="customer_checkpoint",
+                    reason="invalid_saved_version",
+                ) from exc
+            if (
+                saved_version != bound_version + 1
+                or str(saved_record.get(CUSTOMER_SYNCED_VERSION_FIELD) or "").strip()
+                != checkpoint_value
+            ):
+                raise MaconomyError(
+                    f"Maconomy customer {source_id} checkpoint verification failed",
+                    stage="customer_checkpoint",
+                    reason="verification_failed",
+                )
+            return {
+                "source_id": source_id,
+                "checkpoint_field": CUSTOMER_SYNCED_VERSION_FIELD,
+                "checkpoint_value": checkpoint_value,
+                "versionnumber": saved_version,
+                "conflict_retried": attempt > 0,
+            }
+
+        raise MaconomyError(
+            f"Maconomy customer {source_id} checkpoint conflict persisted",
+            stage="customer_checkpoint",
+            reason="version_conflict",
+        )
+
+    async def _bind_customer_for_checkpoint(
+        self,
+        container_url: str,
+        headers: dict[str, str],
+        source_id: str,
+    ) -> tuple[dict[str, Any], str, str]:
+        response = await self._checkpoint_post(
+            f"{container_url}/instances",
+            headers=headers,
+            payload={
+                "panes": {
+                    "card": {
+                        "fields": [
+                            CUSTOMER_NUMBER_FIELD,
+                            CUSTOMER_SYNCED_VERSION_FIELD,
+                            VERSION_FIELD,
+                        ]
+                    }
+                }
+            },
+            source_id=source_id,
+            operation="instance",
+        )
+        if not response.is_success:
+            raise self._checkpoint_status_error(response, source_id, "instance")
+        try:
+            instance_id = str(response.json()["meta"]["containerInstanceId"]).strip()
+        except (KeyError, TypeError, ValueError) as exc:
+            raise MaconomyError(
+                f"Invalid Maconomy customer {source_id} instance response",
+                stage="customer_checkpoint",
+                reason="invalid_instance_response",
+            ) from exc
+        concurrency_token = (
+            response.headers.get("Maconomy-Concurrency-Control") or ""
+        ).strip()
+        if not instance_id or not concurrency_token:
+            raise MaconomyError(
+                f"Maconomy customer {source_id} instance token is missing",
+                stage="customer_checkpoint",
+                reason="missing_instance_token",
+            )
+
+        response = await self._checkpoint_post(
+            f"{container_url}/instances/{instance_id}/data;"
+            f"{CUSTOMER_NUMBER_FIELD}={quote(source_id, safe='')}",
+            headers={
+                **headers,
+                "Maconomy-Concurrency-Control": concurrency_token,
+            },
+            payload={},
+            source_id=source_id,
+            operation="bind",
+        )
+        if not response.is_success:
+            raise self._checkpoint_status_error(response, source_id, "bind")
+        bound_token = (
+            response.headers.get("Maconomy-Concurrency-Control") or ""
+        ).strip()
+        if not bound_token:
+            raise MaconomyError(
+                f"Maconomy customer {source_id} bind token is missing",
+                stage="customer_checkpoint",
+                reason="missing_bind_token",
+            )
+        try:
+            records = response.json()["panes"]["card"]["records"]
+        except (KeyError, TypeError, ValueError) as exc:
+            raise MaconomyError(
+                f"Invalid Maconomy customer {source_id} bind response",
+                stage="customer_checkpoint",
+                reason="invalid_bind_response",
+            ) from exc
+        if not isinstance(records, list):
+            raise MaconomyError(
+                f"Invalid Maconomy customer {source_id} bind records",
+                stage="customer_checkpoint",
+                reason="invalid_bind_records",
+            )
+        matching = [
+            item["data"]
+            for item in records
+            if isinstance(item, dict)
+            and isinstance(item.get("data"), dict)
+            and str(item["data"].get(CUSTOMER_NUMBER_FIELD) or "").strip()
+            == source_id
+        ]
+        if len(matching) != 1:
+            raise MaconomyError(
+                f"Maconomy customer {source_id} was not uniquely found for writeback",
+                stage="customer_checkpoint",
+                reason="customer_not_found",
+            )
+        return matching[0], instance_id, bound_token
+
+    async def _checkpoint_post(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str],
+        payload: dict[str, Any],
+        source_id: str,
+        operation: str,
+    ) -> httpx.Response:
+        try:
+            return await self.client.post(url, headers=headers, json=payload)
+        except httpx.HTTPError as exc:
+            raise MaconomyError(
+                f"Maconomy customer {source_id} checkpoint {operation} request failed",
+                stage="customer_checkpoint",
+                reason=(
+                    "timeout" if isinstance(exc, httpx.TimeoutException) else "request_error"
+                ),
+            ) from exc
+
+    @staticmethod
+    def _checkpoint_status_error(
+        response: httpx.Response,
+        source_id: str,
+        operation: str,
+    ) -> MaconomyError:
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = None
+        upstream_message = None
+        if isinstance(payload, dict):
+            upstream_message = str(
+                payload.get("message") or payload.get("error") or ""
+            ).strip()[:1000] or None
+        return MaconomyError(
+            f"Maconomy customer {source_id} checkpoint {operation} was rejected",
+            stage="customer_checkpoint",
+            reason=(
+                "version_conflict"
+                if response.status_code in (409, 412)
+                else f"{operation}_http_status"
+            ),
+            upstream_status=response.status_code,
+            upstream_message=upstream_message,
+        )
+
     async def _filter_records(
         self,
         *,
