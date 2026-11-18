@@ -25,12 +25,11 @@ class ContactGroup:
     action: str = "unresolved"
     error: str | None = None
 
-    def unstamped_children(self) -> list[dict[str, Any]]:
+    def unstamped_members(self) -> list[dict[str, Any]]:
         return [
             member
             for member in self.members
-            if _number(member) != self.master_number
-            and not _text(member.get("remark4"))
+            if not _text(member.get("remark4"))
         ]
 
     def summary(self) -> dict[str, Any]:

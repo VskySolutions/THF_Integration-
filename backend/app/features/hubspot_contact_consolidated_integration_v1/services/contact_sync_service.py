@@ -201,21 +201,26 @@ class ContactSyncService:
             )
         ]
         stamps: list[dict[str, Any]] = []
+        stamped_numbers: set[str] = set()
+        stamp_failed: set[str] = set()
         for group in stampable:
-            for child in group.unstamped_children():
-                child_number = str(child.get("contactpersonnumber") or "").strip()
+            for member in group.unstamped_members():
+                member_number = str(member.get("contactpersonnumber") or "").strip()
                 try:
                     stamp = await self.maconomy.write_contact_master_stamp(
-                        child_number, group.master_number or ""
+                        member_number, group.master_number or ""
                     )
                     stamps.append(stamp)
+                    if stamp["written"]:
+                        stamped_numbers.add(member_number)
                 except MaconomyError as exc:
+                    stamp_failed.add(member_number)
                     logger.exception(
                         "v1 Contact master stamp failed: request_id=%s "
                         "source_id=%s master=%s stage=%s reason=%s "
                         "upstream_status=%s upstream_message=%s",
                         request_id,
-                        child_number,
+                        member_number,
                         group.master_number,
                         exc.stage,
                         exc.reason,
@@ -224,22 +229,84 @@ class ContactSyncService:
                     )
                     errors.append(
                         {
-                            "source_id": child_number,
+                            "source_id": member_number,
                             "master_number": group.master_number,
                             **_maconomy_error(exc),
                         }
                     )
 
+        checkpoints: list[dict[str, Any]] = []
+        for group in stampable:
+            member_numbers = {
+                str(member.get("contactpersonnumber") or "").strip()
+                for member in group.members
+            }
+            checkpoint_targets = member_numbers & (changed_numbers | stamped_numbers)
+            if group.action == "sync_master" and group.master_number in confirmed_ids:
+                checkpoint_targets.add(group.master_number or "")
+            for member_number in sorted(checkpoint_targets - stamp_failed):
+                if not member_number:
+                    continue
+                try:
+                    checkpoint = await self.maconomy.write_contact_sync_checkpoint(
+                        member_number, group.master_number or ""
+                    )
+                    checkpoints.append(
+                        {**checkpoint, "master_number": group.master_number}
+                    )
+                except MaconomyError as exc:
+                    logger.exception(
+                        "v1 Contact remark5 writeback failed: request_id=%s "
+                        "source_id=%s master=%s stage=%s reason=%s "
+                        "upstream_status=%s upstream_message=%s",
+                        request_id,
+                        member_number,
+                        group.master_number,
+                        exc.stage,
+                        exc.reason,
+                        exc.upstream_status,
+                        exc.upstream_message,
+                    )
+                    errors.append(
+                        {
+                            "source_id": member_number,
+                            "master_number": group.master_number,
+                            **_maconomy_error(exc),
+                        }
+                    )
+
+        children_stamped = sum(
+            1
+            for stamp in stamps
+            if stamp["written"] and stamp["source_id"] != stamp["master_number"]
+        )
+        masters_stamped = sum(
+            1
+            for stamp in stamps
+            if stamp["written"] and stamp["source_id"] == stamp["master_number"]
+        )
+        new_numbers = {
+            str(item.get("contactpersonnumber") or "").strip()
+            for item in selected["new_contact_persons"]
+        }
+        new_master_contact_ids = {
+            number: hubspot_id
+            for number, hubspot_id in confirmed_ids.items()
+            if number in new_numbers
+        }
+
         if errors or selected["skipped"] or upsert_result["batch_errors"]:
             logger.warning(
                 "v1 Contact sync was partial: request_id=%s groups=%s "
                 "masters_requested=%s masters_confirmed=%s children_stamped=%s "
+                "checkpoints_written=%s "
                 "errors=%s skipped=%s batch_errors=%s",
                 request_id,
                 len(groups),
                 upsert_result["requested"],
                 len(confirmed_ids),
-                len([stamp for stamp in stamps if stamp["written"]]),
+                children_stamped,
+                len(checkpoints),
                 errors,
                 selected["skipped"],
                 upsert_result["batch_errors"],
@@ -250,9 +317,13 @@ class ContactSyncService:
             "masters_requested": upsert_result["requested"],
             "masters_upserted": len(confirmed_ids),
             "master_contact_ids": confirmed_ids,
+            "new_master_contact_ids": new_master_contact_ids,
             "batch_errors": upsert_result["batch_errors"],
-            "children_stamped": len([stamp for stamp in stamps if stamp["written"]]),
+            "children_stamped": children_stamped,
+            "masters_stamped": masters_stamped,
             "stamps": stamps,
+            "checkpoints_written": len(checkpoints),
+            "checkpoints": checkpoints,
             "skipped": selected["skipped"],
             "errors": errors,
         }

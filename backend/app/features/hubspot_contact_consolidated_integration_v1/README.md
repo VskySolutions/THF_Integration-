@@ -43,11 +43,18 @@ It also reads contacts of newly created customers and back-queries full email
 groups without a date restriction. A consistent existing `remark4` selects the
 master; otherwise v1 elects the lowest Contact Person number. Conflicting
 nonempty `remark4` values leave a group unresolved so existing stamps are not
-overwritten. Only selected masters are upserted to HubSpot. After a confirmed
-master upsert, v1 stamps empty `remark4` fields on children in that group;
-groups with an unchanged known master can stamp empty children without another
-HubSpot upsert. Contact `remark5` writeback and Company associations are not
-implemented yet. Contact errors are reported alongside the Company result.
+overwritten. Only selected masters are upserted to HubSpot. The Contact payload
+maps `whos_pd` from available initials in last, middle, first order; without a
+last name it uses first, middle order (`Prasad R` becomes `PR`). After a
+confirmed master upsert, v1 stamps empty `remark4` fields on the master and
+children in that group. Groups with an unchanged known master can stamp empty
+members without another HubSpot upsert. It then writes `remark5` as the freshly
+bound `versionnumber + 1` for the confirmed master and for children that were
+changed or stamped. Stamp or checkpoint failures remain per-record errors.
+Company associations are not implemented yet. Contact errors are reported
+alongside the Company result. `new_master_contact_ids` identifies confirmed
+masters whose Maconomy `remark5` was empty before this run; this does not prove
+HubSpot created a new Contact. The response is not yet persisted for mapping.
 
 Maconomy and HubSpot failures carry stage or reason, upstream HTTP status, and
 safe context for troubleshooting. The API returns a safe 502 message for a

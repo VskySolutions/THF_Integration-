@@ -39,6 +39,7 @@ CONTACT_PERSON_FIELDS = [
     "country",
     "electronicmailaddress",
     "firstname",
+    "middlename",
     "lastname",
     "mobilephone",
     "name1",
@@ -52,6 +53,8 @@ CONTACT_PERSON_FIELDS = [
     "telephone2",
     "personaltitle",
     "versionnumber",
+    "postaldistrict",
+    "zipcode"
 ]
 
 SPECIFICATION1_FIELDS = ["specification1name", "description"]

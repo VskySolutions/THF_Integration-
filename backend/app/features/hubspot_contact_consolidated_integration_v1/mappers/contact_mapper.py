@@ -16,11 +16,28 @@ CONTACT_FIELD_MAPPING: dict[str, str] = {
     "mobilephone": "mobilephone",
     "country": "country",
     "personaltitle": "name_prefix",
+    "postaldistrict":"city",
+    "zipcode":"zip"
 }
 
 
 class ContactMapper:
     """Build one batch upsert input per selected master."""
+
+    @staticmethod
+    def _whos_pd(master: dict[str, Any]) -> str:
+        initials: dict[str, str] = {}
+        for field in ("lastname", "middlename", "firstname"):
+            value = master.get(field)
+            name = str(value).strip() if value is not None else ""
+            if name and name.lower() != "null":
+                initials[field] = name[0].upper()
+        order = (
+            ("lastname", "middlename", "firstname")
+            if "lastname" in initials
+            else ("firstname", "middlename")
+        )
+        return "".join(initials.get(field, "") for field in order)
 
     @staticmethod
     def build_upsert_payload(masters: list[dict[str, Any]]) -> dict[str, Any]:
@@ -50,6 +67,9 @@ class ContactMapper:
                 value = master.get(maconomy_field)
                 text = str(value).strip() if value is not None else ""
                 properties[hubspot_property] = text
+            whos_pd = ContactMapper._whos_pd(master)
+            if whos_pd:
+                properties["whos_pd"] = whos_pd
             inputs.append(
                 {
                     "idProperty": "maconomy__contact_person_number",
