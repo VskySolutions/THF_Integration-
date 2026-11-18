@@ -3,6 +3,8 @@
 SYNC_WINDOW_DAYS = 1
 CUSTOMER_SYNCED_VERSION_FIELD = "customerremark26"
 CUSTOMER_NUMBER_FIELD = "customernumber"
+CONTACT_SYNCED_VERSION_FIELD = "remark5"
+CONTACT_PERSON_NUMBER_FIELD = "contactpersonnumber"
 VERSION_FIELD = "versionnumber"
 
 CUSTOMER_CARD_FIELDS = [
@@ -26,6 +28,28 @@ CUSTOMER_CARD_FIELDS = [
     "theaccountmanagername",
     "versionnumber",
     "zipcode",
+]
+
+CONTACT_PERSON_FIELDS = [
+    "changeddate",
+    "contactcompanynumber",
+    "contactpersonnumber",
+    "createddate",
+    "country",
+    "electronicmailaddress",
+    "firstname",
+    "lastname",
+    "mobilephone",
+    "name1",
+    "name2",
+    "position",
+    "remark1",
+    "remark4",
+    "remark5",
+    "telephone",
+    "telephone2",
+    "personaltitle",
+    "versionnumber",
 ]
 
 SPECIFICATION1_FIELDS = ["specification1name", "description"]

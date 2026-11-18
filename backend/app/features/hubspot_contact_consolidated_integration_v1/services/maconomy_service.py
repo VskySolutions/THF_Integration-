@@ -13,6 +13,9 @@ from app.features.hubspot_contact_consolidated_integration_v1.constants import (
     CUSTOMER_CARD_FIELDS,
     CUSTOMER_NUMBER_FIELD,
     CUSTOMER_SYNCED_VERSION_FIELD,
+    CONTACT_PERSON_FIELDS,
+    CONTACT_PERSON_NUMBER_FIELD,
+    CONTACT_SYNCED_VERSION_FIELD,
     SPECIFICATION1_FIELDS,
     SPECIFICATION6_FIELDS,
     SYNC_WINDOW_DAYS,
@@ -33,6 +36,10 @@ CONTAINER_CONTENT_TYPE = (
 )
 ACTIVE_CUSTOMERS_RESTRICTION_TEMPLATE = (
     "(ActiveStatus = ActiveType'Active) and "
+    "(createddate>={window_start} or changeddate>={window_start})"
+)
+ACTIVE_CONTACTS_RESTRICTION_TEMPLATE = (
+    "(contactcompanynumber!='null' and electronicmailaddress!='null') and "
     "(createddate>={window_start} or changeddate>={window_start})"
 )
 
@@ -126,6 +133,22 @@ class MaconomyService:
             fields=CUSTOMER_CARD_FIELDS,
             limit=5000,
             stage="customer_discovery",
+        )
+
+    async def discover_contact_persons(self) -> list[dict[str, Any]]:
+        """Read contact persons with a company and email changed since yesterday."""
+        window_start = date.today() - timedelta(days=SYNC_WINDOW_DAYS)
+        restriction = ACTIVE_CONTACTS_RESTRICTION_TEMPLATE.format(
+            window_start=(
+                f"date({window_start.year},{window_start.month},{window_start.day})"
+            )
+        )
+        return await self._filter_records(
+            container="contactpersons",
+            restriction=restriction,
+            fields=CONTACT_PERSON_FIELDS,
+            limit=5000,
+            stage="contact_discovery",
         )
 
     async def get_specification1_descriptions(self) -> dict[str, str]:
@@ -398,6 +421,21 @@ class MaconomyService:
             upstream_message=upstream_message,
         )
 
+    @staticmethod
+    def _filter_response_message(response: httpx.Response) -> str | None:
+        """Keep a short Maconomy error message without logging the full body."""
+        try:
+            payload = response.json()
+        except ValueError:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        for field in ("message", "errorMessage", "error", "detail"):
+            value = payload.get(field)
+            if isinstance(value, str) and value.strip():
+                return value.strip()[:1000]
+        return None
+
     async def _filter_records(
         self,
         *,
@@ -434,15 +472,22 @@ class MaconomyService:
             response.raise_for_status()
         except httpx.HTTPError as exc:
             raise MaconomyError(
-                f"Maconomy {container} request failed",
+                f"Maconomy {container} filter request failed",
                 stage=stage,
                 reason=(
                     "http_status"
                     if isinstance(exc, httpx.HTTPStatusError)
+                    else "timeout"
+                    if isinstance(exc, httpx.TimeoutException)
                     else "request_error"
                 ),
                 upstream_status=(
                     exc.response.status_code
+                    if isinstance(exc, httpx.HTTPStatusError)
+                    else None
+                ),
+                upstream_message=(
+                    self._filter_response_message(exc.response)
                     if isinstance(exc, httpx.HTTPStatusError)
                     else None
                 ),
@@ -452,14 +497,14 @@ class MaconomyService:
             records = response.json()["panes"]["filter"]["records"]
         except (KeyError, TypeError, ValueError) as exc:
             raise MaconomyError(
-                f"Invalid Maconomy {container} response",
+                f"Invalid Maconomy {container} filter response: missing records",
                 stage=stage,
                 reason="invalid_response",
                 upstream_status=response.status_code,
             ) from exc
         if not isinstance(records, list):
             raise MaconomyError(
-                f"Invalid Maconomy {container} response",
+                f"Invalid Maconomy {container} filter response: records is not a list",
                 stage=stage,
                 reason="invalid_records",
                 upstream_status=response.status_code,
@@ -505,4 +550,70 @@ class MaconomyService:
         return {
             "new_customers": new_customers,
             "updated_customers": updated_customers,
+        }
+
+    @staticmethod
+    def classify_contact_persons(
+        contacts: list[dict[str, Any]],
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Keep contacts whose versionnumber is newer than remark5."""
+        new_contacts: list[dict[str, Any]] = []
+        updated_contacts: list[dict[str, Any]] = []
+        skipped: list[dict[str, Any]] = []
+        seen_numbers: set[str] = set()
+
+        for contact in contacts:
+            contact_number = str(
+                contact.get(CONTACT_PERSON_NUMBER_FIELD) or ""
+            ).strip()
+            if not contact_number:
+                skipped.append(
+                    {"source_id": None, "reason": "missing contactpersonnumber"}
+                )
+                continue
+            if contact_number in seen_numbers:
+                skipped.append(
+                    {"source_id": contact_number, "reason": "duplicate contactpersonnumber"}
+                )
+                continue
+            seen_numbers.add(contact_number)
+
+            version = contact.get(VERSION_FIELD)
+            version_text = str(version).strip() if version is not None else ""
+            try:
+                current_version = int(version_text)
+            except ValueError:
+                skipped.append(
+                    {"source_id": contact_number, "reason": "invalid versionnumber"}
+                )
+                continue
+
+            synced_version = contact.get(CONTACT_SYNCED_VERSION_FIELD)
+            synced_text = (
+                str(synced_version).strip() if synced_version is not None else ""
+            )
+            if not synced_text:
+                new_contacts.append({**contact, "action": "create"})
+                continue
+            try:
+                previous_version = int(synced_text)
+            except ValueError:
+                skipped.append(
+                    {"source_id": contact_number, "reason": "invalid remark5"}
+                )
+                continue
+            if current_version > previous_version:
+                updated_contacts.append({**contact, "action": "update"})
+            elif current_version < previous_version:
+                skipped.append(
+                    {
+                        "source_id": contact_number,
+                        "reason": "remark5 exceeds versionnumber",
+                    }
+                )
+
+        return {
+            "new_contact_persons": new_contacts,
+            "updated_contact_persons": updated_contacts,
+            "skipped": skipped,
         }

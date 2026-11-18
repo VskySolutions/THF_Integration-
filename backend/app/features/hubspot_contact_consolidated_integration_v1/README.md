@@ -35,6 +35,13 @@ Writeback failures are reported per customer under `maconomy.writeback_errors`
 without stopping other confirmed customers. Database run logging is not yet
 implemented.
 
+After the Company phase, the bulk route reads `/contactpersons/filter` using
+the same reconnect token. It selects contact persons with a company number and
+email that were created or changed yesterday or today, then uses `remark5` and
+`versionnumber` to return new and updated contacts under `contact_persons`.
+This step only discovers contacts; it does not upsert or write them back.
+Contact discovery failures are reported alongside the completed Company result.
+
 Maconomy and HubSpot failures carry stage or reason, upstream HTTP status, and
 safe context for troubleshooting. The API returns a safe 502 message for a
 failed request without credentials or token details.

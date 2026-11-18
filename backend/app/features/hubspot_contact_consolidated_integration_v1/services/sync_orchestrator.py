@@ -125,6 +125,36 @@ class ConsolidatedSyncService:
                         }
                     )
 
+            contact_discovery_error: dict[str, Any] | None = None
+            try:
+                contact_records = await maconomy.discover_contact_persons()
+                classified_contacts = maconomy.classify_contact_persons(
+                    contact_records
+                )
+            except MaconomyError as exc:
+                logger.exception(
+                    "v1 Maconomy contact discovery failed: request_id=%s "
+                    "stage=%s reason=%s upstream_status=%s upstream_message=%s",
+                    request_id,
+                    exc.stage,
+                    exc.reason,
+                    exc.upstream_status,
+                    exc.upstream_message,
+                )
+                contact_records = []
+                classified_contacts = {
+                    "new_contact_persons": [],
+                    "updated_contact_persons": [],
+                    "skipped": [],
+                }
+                contact_discovery_error = {
+                    "stage": exc.stage,
+                    "reason": exc.reason,
+                    "upstream_status": exc.upstream_status,
+                    "message": str(exc),
+                    "upstream_message": exc.upstream_message,
+                }
+
         errors_by_source = {
             error["source_id"]: error
             for error in upsert_result["batch_errors"]
@@ -161,6 +191,14 @@ class ConsolidatedSyncService:
                 upsert_result["batch_errors"],
                 writeback_errors,
             )
+        if classified_contacts["skipped"]:
+            logger.warning(
+                "v1 Maconomy contact discovery skipped records: request_id=%s "
+                "count=%s skipped=%s",
+                request_id,
+                len(classified_contacts["skipped"]),
+                classified_contacts["skipped"],
+            )
 
         return {
             "status": (
@@ -170,6 +208,8 @@ class ConsolidatedSyncService:
                     or company_payload["skipped"]
                     or upsert_result["batch_errors"]
                     or writeback_errors
+                    or contact_discovery_error
+                    or classified_contacts["skipped"]
                 )
                 else "success"
             ),
@@ -187,6 +227,15 @@ class ConsolidatedSyncService:
                 "checkpoints_written": len(checkpoints_written),
                 "checkpoints": checkpoints_written,
                 "writeback_errors": writeback_errors,
+            },
+            "contact_persons": {
+                "discovered": len(contact_records),
+                "new_contact_persons": classified_contacts["new_contact_persons"],
+                "updated_contact_persons": classified_contacts[
+                    "updated_contact_persons"
+                ],
+                "skipped": classified_contacts["skipped"],
+                "discovery_error": contact_discovery_error,
             },
             "skipped": company_payload["skipped"],
         }
