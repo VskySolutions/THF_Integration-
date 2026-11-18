@@ -51,10 +51,14 @@ children in that group. Groups with an unchanged known master can stamp empty
 members without another HubSpot upsert. It then writes `remark5` as the freshly
 bound `versionnumber + 1` for the confirmed master and for children that were
 changed or stamped. Stamp or checkpoint failures remain per-record errors.
-Company associations are not implemented yet. Contact errors are reported
-alongside the Company result. `new_master_contact_ids` identifies confirmed
+For groups containing a created or updated Maconomy Contact Person, v1 collects
+Company numbers from the MASTER and all children. It resolves the MASTER and Companies
+in HubSpot, reads existing Company links, and adds only missing links. Existing
+HubSpot associations are preserved. If a required link cannot be added, the
+group's `remark5` checkpoint waits so a later run can retry. Contact errors are
+reported alongside the Company result. `new_master_contact_ids` identifies confirmed
 masters whose Maconomy `remark5` was empty before this run; this does not prove
-HubSpot created a new Contact. The response is not yet persisted for mapping.
+HubSpot created a new Contact.
 
 Maconomy and HubSpot failures carry stage or reason, upstream HTTP status, and
 safe context for troubleshooting. The API returns a safe 502 message for a

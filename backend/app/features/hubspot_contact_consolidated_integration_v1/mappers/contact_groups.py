@@ -32,6 +32,13 @@ class ContactGroup:
             if not _text(member.get("remark4"))
         ]
 
+    def parent_companies(self) -> set[str]:
+        return {
+            number
+            for member in self.members
+            if (number := _text(member.get("contactcompanynumber")))
+        }
+
     def summary(self) -> dict[str, Any]:
         return {
             "email": self.email,

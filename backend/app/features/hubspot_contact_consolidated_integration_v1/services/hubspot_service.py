@@ -13,6 +13,9 @@ from app.features.hubspot_contact_consolidated_integration_v1.exceptions import 
 
 COMPANY_UPSERT_PATH = "/crm/objects/2026-09/companies/batch/upsert"
 CONTACT_UPSERT_PATH = "/crm/objects/2026-09/contacts/batch/upsert"
+COMPANY_BATCH_READ_PATH = "/crm/objects/2026-09/companies/batch/read"
+CONTACT_BATCH_READ_PATH = "/crm/objects/2026-09/contacts/batch/read"
+ASSOCIATION_BATCH_READ_PATH = "/crm/associations/2026-09/contacts/companies/batch/read"
 HUBSPOT_BATCH_SIZE = 100
 MAX_REQUEST_ATTEMPTS = 3
 DEFAULT_RETRY_AFTER_SECONDS = 2.0
@@ -74,6 +77,238 @@ class HubSpotService:
             "correlation_id": correlation_id,
             "upstream_message": message,
         }
+
+    async def _association_request(
+        self,
+        method: str,
+        path: str,
+        *,
+        body: dict[str, Any] | None = None,
+        unassociated_contact_ids: set[str] | None = None,
+    ) -> Any:
+        for attempt in range(1, MAX_REQUEST_ATTEMPTS + 1):
+            try:
+                response = await self.client.request(
+                    method,
+                    f"{self.settings.hubspot_api_url}{path}",
+                    headers=self._authorized_headers(),
+                    json=body,
+                )
+            except httpx.HTTPError as exc:
+                raise HubSpotError(
+                    f"HubSpot {method} request failed for {path}",
+                    reason=(
+                        "timeout"
+                        if isinstance(exc, httpx.TimeoutException)
+                        else "request_error"
+                    ),
+                ) from exc
+            if response.status_code == 429 and attempt < MAX_REQUEST_ATTEMPTS:
+                await asyncio.sleep(self._retry_after_seconds(response))
+                continue
+            if response.status_code not in (200, 201, 204, 207):
+                raise HubSpotError(
+                    f"HubSpot {method} request was rejected for {path}",
+                    reason=(
+                        "authentication_failed"
+                        if response.status_code == 401
+                        else "rate_limited"
+                        if response.status_code == 429
+                        else "http_status"
+                    ),
+                    upstream_status=response.status_code,
+                    **self._error_context(response),
+                )
+            if not response.content:
+                return {}
+            try:
+                payload = response.json()
+            except ValueError as exc:
+                raise HubSpotError(
+                    f"Invalid HubSpot {method} response for {path}",
+                    reason="invalid_json",
+                    upstream_status=response.status_code,
+                ) from exc
+            raw_errors = payload.get("errors") if isinstance(payload, dict) else None
+            if isinstance(raw_errors, list) and unassociated_contact_ids is not None:
+                # HubSpot reports an unlinked Contact as a 207 batch read error.
+
+                def is_unassociated_contact(error: Any) -> bool:
+                    if not isinstance(error, dict):
+                        return False
+                    category = str(
+                        error.get("category") or payload.get("category") or ""
+                    ).strip()
+                    message = str(error.get("message") or "").strip()
+                    prefix = "No company is associated with contact "
+                    return (
+                        category == "OBJECT_NOT_FOUND"
+                        and message.startswith(prefix)
+                        and message.endswith(".")
+                        and message[len(prefix) : -1] in unassociated_contact_ids
+                    )
+
+                other_errors = [
+                    error for error in raw_errors if not is_unassociated_contact(error)
+                ]
+                if len(other_errors) < len(raw_errors) and not other_errors:
+                    payload.setdefault("results", [])
+                    return payload
+                raw_errors = other_errors
+            if not isinstance(payload, dict) or raw_errors:
+                first_error = (
+                    raw_errors[0]
+                    if isinstance(raw_errors, list)
+                    and raw_errors
+                    and isinstance(raw_errors[0], dict)
+                    else {}
+                )
+                raise HubSpotError(
+                    f"HubSpot {method} returned an incomplete response for {path}",
+                    reason="partial_response",
+                    upstream_status=response.status_code,
+                    category=(
+                        str(
+                            first_error.get("category")
+                            or payload.get("category")
+                            or ""
+                        ).strip()
+                        or None
+                        if isinstance(payload, dict)
+                        else None
+                    ),
+                    correlation_id=(
+                        str(
+                            first_error.get("correlationId")
+                            or payload.get("correlationId")
+                            or ""
+                        ).strip()
+                        or None
+                        if isinstance(payload, dict)
+                        else None
+                    ),
+                    upstream_message=(
+                        str(
+                            first_error.get("message")
+                            or payload.get("message")
+                            or ""
+                        ).strip()[:1000]
+                        or None
+                        if isinstance(payload, dict)
+                        else None
+                    ),
+                )
+            return payload
+        raise HubSpotError(
+            f"HubSpot {method} retry limit was reached for {path}",
+            reason="retry_limit_reached",
+        )
+
+    async def _lookup_ids(
+        self, numbers: set[str], *, path: str, property_name: str
+    ) -> dict[str, str]:
+        found: dict[str, str] = {}
+        ordered = sorted(numbers)
+        for offset in range(0, len(ordered), HUBSPOT_BATCH_SIZE):
+            payload = await self._association_request(
+                "POST",
+                path,
+                body={
+                    "idProperty": property_name,
+                    "properties": [property_name],
+                    "inputs": [
+                        {"id": number}
+                        for number in ordered[offset : offset + HUBSPOT_BATCH_SIZE]
+                    ],
+                },
+            )
+            results = payload.get("results")
+            if not isinstance(results, list):
+                raise HubSpotError(
+                    f"HubSpot batch read returned no results list for {path}",
+                    reason="invalid_response",
+                )
+            for item in results:
+                if not isinstance(item, dict):
+                    continue
+                properties = item.get("properties")
+                number = (
+                    str(properties.get(property_name) or "").strip()
+                    if isinstance(properties, dict)
+                    else ""
+                )
+                hubspot_id = str(item.get("id") or "").strip()
+                if number in numbers and hubspot_id:
+                    found[number] = hubspot_id
+        return found
+
+    async def lookup_companies(self, numbers: set[str]) -> dict[str, str]:
+        return await self._lookup_ids(
+            numbers, path=COMPANY_BATCH_READ_PATH, property_name="maconomy_customer_number"
+        )
+
+    async def lookup_contacts(self, numbers: set[str]) -> dict[str, str]:
+        found = await self._lookup_ids(
+            numbers, path=CONTACT_BATCH_READ_PATH, property_name="maconomy__contact_person_number"
+        )
+        missing = numbers - set(found)
+        if missing:
+            found.update(
+                await self._lookup_ids(
+                    missing,
+                    path=CONTACT_BATCH_READ_PATH,
+                    property_name="maconomy_contact_person_number",
+                )
+            )
+        return found
+
+    async def read_contact_company_associations(
+        self, contact_ids: set[str]
+    ) -> dict[str, set[str]]:
+        found = {contact_id: set() for contact_id in contact_ids}
+        ordered = sorted(contact_ids)
+        for offset in range(0, len(ordered), HUBSPOT_BATCH_SIZE):
+            chunk = ordered[offset : offset + HUBSPOT_BATCH_SIZE]
+            payload = await self._association_request(
+                "POST",
+                ASSOCIATION_BATCH_READ_PATH,
+                body={
+                    "inputs": [{"id": contact_id} for contact_id in chunk]
+                },
+                unassociated_contact_ids=set(chunk),
+            )
+            results = payload.get("results")
+            if not isinstance(results, list):
+                raise HubSpotError(
+                    "HubSpot Contact-Company association read returned no results list",
+                    reason="invalid_response",
+                )
+            for item in results:
+                if not isinstance(item, dict):
+                    continue
+                source = item.get("from")
+                contact_id = (
+                    str(source.get("id") or "").strip()
+                    if isinstance(source, dict)
+                    else ""
+                )
+                targets = item.get("to")
+                if contact_id not in found or not isinstance(targets, list):
+                    continue
+                found[contact_id].update(
+                    str(target.get("toObjectId") or "").strip()
+                    for target in targets
+                    if isinstance(target, dict) and target.get("toObjectId")
+                )
+        return found
+
+    async def associate_contact_to_company(
+        self, contact_id: str, company_id: str
+    ) -> None:
+        await self._association_request(
+            "PUT",
+            f"/crm/objects/2026-09/contacts/{contact_id}/associations/default/companies/{company_id}",
+        )
 
     async def _upsert_batch(
         self,

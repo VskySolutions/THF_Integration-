@@ -14,6 +14,9 @@ from app.features.hubspot_contact_consolidated_integration_v1.mappers.contact_gr
 from app.features.hubspot_contact_consolidated_integration_v1.mappers.contact_mapper import (
     ContactMapper,
 )
+from app.features.hubspot_contact_consolidated_integration_v1.services.contact_association_service import (
+    ContactAssociationService,
+)
 from app.features.hubspot_contact_consolidated_integration_v1.services.hubspot_service import (
     HubSpotService,
 )
@@ -44,6 +47,7 @@ class ContactSyncService:
         classified_contacts: dict[str, list[dict[str, Any]]],
         new_customer_numbers: list[str],
         request_id: uuid.UUID,
+        company_ids: dict[str, str],
     ) -> dict[str, Any]:
         errors: list[dict[str, Any]] = []
         contacts = [
@@ -191,6 +195,26 @@ class ContactSyncService:
                     }
                 )
 
+        new_numbers = {
+            str(item.get("contactpersonnumber") or "").strip()
+            for item in selected["new_contact_persons"]
+        }
+        association_result = await ContactAssociationService(self.hubspot).run(
+            groups,
+            confirmed_ids,
+            company_ids,
+            request_id,
+        )
+        errors.extend(association_result["errors"])
+        completed_association_emails = association_result.pop("completed_emails")
+        association_candidates = {
+            group.email
+            for group in groups
+            if group.master_number
+            and not group.error
+            and group.action in ("sync_master", "stamp_only")
+        }
+
         stampable = [
             group
             for group in groups
@@ -237,6 +261,11 @@ class ContactSyncService:
 
         checkpoints: list[dict[str, Any]] = []
         for group in stampable:
+            if (
+                group.email in association_candidates
+                and group.email not in completed_association_emails
+            ):
+                continue
             member_numbers = {
                 str(member.get("contactpersonnumber") or "").strip()
                 for member in group.members
@@ -285,10 +314,6 @@ class ContactSyncService:
             for stamp in stamps
             if stamp["written"] and stamp["source_id"] == stamp["master_number"]
         )
-        new_numbers = {
-            str(item.get("contactpersonnumber") or "").strip()
-            for item in selected["new_contact_persons"]
-        }
         new_master_contact_ids = {
             number: hubspot_id
             for number, hubspot_id in confirmed_ids.items()
@@ -318,6 +343,7 @@ class ContactSyncService:
             "masters_upserted": len(confirmed_ids),
             "master_contact_ids": confirmed_ids,
             "new_master_contact_ids": new_master_contact_ids,
+            "associations": association_result,
             "batch_errors": upsert_result["batch_errors"],
             "children_stamped": children_stamped,
             "masters_stamped": masters_stamped,

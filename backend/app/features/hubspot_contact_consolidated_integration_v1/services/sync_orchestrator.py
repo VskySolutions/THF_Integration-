@@ -168,6 +168,7 @@ class ConsolidatedSyncService:
                     if str(customer.get("customernumber") or "").strip()
                 ],
                 request_id,
+                confirmed_ids,
             )
 
         errors_by_source = {
