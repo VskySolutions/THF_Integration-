@@ -21,9 +21,12 @@ def build_vendorcard_instance_payload() -> dict[str, Any]:
                     "currency",
                     "paymentmode",
                     "vatnumber",
+                    "cnrnumber",
+                    "disclosable",
                     "companynumber",
                     "parentvendor",
                     "linkingrulename",
+                    "yourreference"
                 ]
             }
         }
@@ -44,6 +47,7 @@ def map_concur_vendor_to_maconomy_vendor_card(
     last_name = str(sap_vendor.get("ContactLastName") or "").strip()
     attention = " ".join(part for part in (first_name, last_name) if part)
     vat_number = str(sap_vendor.get("TaxID") or "").strip()
+    account_number = str(sap_vendor.get("AccountNumber") or "").strip()
 
     data: dict[str, Any] = {
         "name1": vendor_name,
@@ -61,7 +65,11 @@ def map_concur_vendor_to_maconomy_vendor_card(
         "telephone": str(sap_vendor.get("ContactPhoneNumber") or "").strip(),
         # "companynumber": "100",
         "vatnumber": vat_number,
+        "cnrnumber": vat_number if vat_number else "-",
+        "disclosable": True,
+        "paymentmode": "Centennial  THF Checking - Concur",
         "parentvendor": "TemplateVendor",
-        "linkingrulename": "4"
+        "linkingrulename": "4",
+        "yourreference": account_number
     }
     return {"data": data}

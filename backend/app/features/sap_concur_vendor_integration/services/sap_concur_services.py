@@ -160,7 +160,7 @@ class SAPConcurVendorService:
             "Content-Type": "application/json",
         }
         params = {
-            "vendorCode": "4028-0",
+            # "vendorCode": "4029-0",
             "approved": "true", 
             "limit": 999
         }

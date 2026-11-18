@@ -154,9 +154,7 @@ class MaconomyService:
         headers = self._container_headers()
         headers["Maconomy-Concurrency-Control"] = concurrency_token
         print("=== Submit Vendor Card ===")
-        print("payload:", payload)
         response = await self.client.post(url, headers=headers, json=payload)
-        print("Maconomy response status:", response.status_code, response.text)
         if response.is_error:
             response_text = (
                 response.text.strip() or "<empty Maconomy response body>"
@@ -196,7 +194,6 @@ class MaconomyService:
     ) -> dict[str, Any]:
         try:
             payload = map_concur_vendor_to_maconomy_vendor_card(sap_vendor)
-            print("payload:", payload)
         except ValueError as exc:
             raise MaconomyServiceError(str(exc)) from exc
 
@@ -205,8 +202,7 @@ class MaconomyService:
             instance_id, concurrency_token = (
                 await self._retrieve_vendor_instance()
             )
-            # print("instance_id:", instance_id)
-            # return instance_id
+
             initialized_data, concurrency_token = (
                 await self._initialize_vendor_card(
                     instance_id, concurrency_token
