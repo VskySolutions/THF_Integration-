@@ -136,6 +136,31 @@ class MaconomyService:
             stage="customer_discovery",
         )
 
+    async def get_customers_by_numbers(
+        self, customer_numbers: set[str]
+    ) -> dict[str, dict[str, Any]]:
+        """Read parent Customers outside the discovery window for associations."""
+        found: dict[str, dict[str, Any]] = {}
+        numbers = sorted(number.strip() for number in customer_numbers if number.strip())
+        for offset in range(0, len(numbers), 50):
+            batch = numbers[offset : offset + 50]
+            restriction = " or ".join(
+                f"(customernumber = '{number.replace(chr(39), chr(39) * 2)}')"
+                for number in batch
+            )
+            records = await self._filter_records(
+                container="customercard",
+                restriction=restriction,
+                fields=CUSTOMER_CARD_FIELDS,
+                limit=5000,
+                stage="parent_customer_lookup",
+            )
+            for record in records:
+                number = str(record.get(CUSTOMER_NUMBER_FIELD) or "").strip()
+                if number in batch:
+                    found[number] = record
+        return found
+
     async def discover_contact_persons(self) -> list[dict[str, Any]]:
         """Read contact persons with a company and email changed since yesterday."""
         window_start = date.today() - timedelta(days=SYNC_WINDOW_DAYS)

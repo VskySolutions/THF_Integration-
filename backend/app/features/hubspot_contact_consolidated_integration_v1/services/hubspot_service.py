@@ -85,6 +85,7 @@ class HubSpotService:
         *,
         body: dict[str, Any] | None = None,
         unassociated_contact_ids: set[str] | None = None,
+        allow_missing_objects: bool = False,
     ) -> Any:
         for attempt in range(1, MAX_REQUEST_ATTEMPTS + 1):
             try:
@@ -130,6 +131,21 @@ class HubSpotService:
                     upstream_status=response.status_code,
                 ) from exc
             raw_errors = payload.get("errors") if isinstance(payload, dict) else None
+            if (
+                allow_missing_objects
+                and response.status_code == 207
+                and isinstance(raw_errors, list)
+                and raw_errors
+                and all(
+                    isinstance(error, dict)
+                    and str(
+                        error.get("category") or payload.get("category") or ""
+                    ).strip() == "OBJECT_NOT_FOUND"
+                    for error in raw_errors
+                )
+            ):
+                payload.setdefault("results", [])
+                return payload
             if isinstance(raw_errors, list) and unassociated_contact_ids is not None:
                 # HubSpot reports an unlinked Contact as a 207 batch read error.
 
@@ -210,18 +226,24 @@ class HubSpotService:
         found: dict[str, str] = {}
         ordered = sorted(numbers)
         for offset in range(0, len(ordered), HUBSPOT_BATCH_SIZE):
-            payload = await self._association_request(
-                "POST",
-                path,
-                body={
-                    "idProperty": property_name,
-                    "properties": [property_name],
-                    "inputs": [
-                        {"id": number}
-                        for number in ordered[offset : offset + HUBSPOT_BATCH_SIZE]
-                    ],
-                },
-            )
+            try:
+                payload = await self._association_request(
+                    "POST",
+                    path,
+                    allow_missing_objects=True,
+                    body={
+                        "idProperty": property_name,
+                        "properties": [property_name],
+                        "inputs": [
+                            {"id": number}
+                            for number in ordered[offset : offset + HUBSPOT_BATCH_SIZE]
+                        ],
+                    },
+                )
+            except HubSpotError as exc:
+                if exc.upstream_status == 404 and exc.category == "OBJECT_NOT_FOUND":
+                    continue
+                raise
             results = payload.get("results")
             if not isinstance(results, list):
                 raise HubSpotError(

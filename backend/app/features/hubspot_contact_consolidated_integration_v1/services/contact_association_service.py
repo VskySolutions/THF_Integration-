@@ -14,12 +14,19 @@ from app.features.hubspot_contact_consolidated_integration_v1.mappers.contact_gr
 from app.features.hubspot_contact_consolidated_integration_v1.services.hubspot_service import (
     HubSpotService,
 )
+from app.features.hubspot_contact_consolidated_integration_v1.services.maconomy_service import (
+    MaconomyService,
+)
+from app.features.hubspot_contact_consolidated_integration_v1.services.parent_company_recovery_service import (
+    ParentCompanyRecoveryService,
+)
 
 logger = logging.getLogger(__name__)
 
 
 class ContactAssociationService:
-    def __init__(self, hubspot: HubSpotService) -> None:
+    def __init__(self, maconomy: MaconomyService, hubspot: HubSpotService) -> None:
+        self.maconomy = maconomy
         self.hubspot = hubspot
 
     async def run(
@@ -27,6 +34,8 @@ class ContactAssociationService:
         groups: list[ContactGroup],
         confirmed_master_ids: dict[str, str],
         confirmed_company_ids: dict[str, str],
+        specification1_descriptions: dict[str, str],
+        specification6_descriptions: dict[str, str],
         request_id: uuid.UUID,
     ) -> dict[str, Any]:
         candidates = [
@@ -40,6 +49,13 @@ class ContactAssociationService:
         completed_emails: set[str] = set()
         already_present = 0
         added = 0
+        recovery_result: dict[str, Any] = {
+            "requested": 0,
+            "confirmed_ids": {},
+            "checkpoints": [],
+            "errors": [],
+            "checkpoint_errors": [],
+        }
 
         def failure(
             group: ContactGroup,
@@ -73,6 +89,7 @@ class ContactAssociationService:
                 "already_present": 0,
                 "added": 0,
                 "completed_emails": completed_emails,
+                "parent_company_recovery": recovery_result,
                 "errors": errors,
             }
 
@@ -134,14 +151,48 @@ class ContactAssociationService:
                     if not group.parent_companies() & missing_companies
                 ]
 
+        still_missing = (
+            set().union(*(group.parent_companies() for group in ready)) - set(company_ids)
+            if ready
+            else set()
+        )
+        if still_missing:
+            recovery_result = await ParentCompanyRecoveryService(
+                self.maconomy, self.hubspot
+            ).run(
+                still_missing,
+                specification1_descriptions,
+                specification6_descriptions,
+            )
+            company_ids.update(recovery_result["confirmed_ids"])
+            errors.extend(
+                {"email": None, **error}
+                for error in recovery_result["checkpoint_errors"]
+            )
+
+        recovery_errors = {
+            error["source_id"]: error for error in recovery_result["errors"]
+        }
+
         for group in ready:
             for number in sorted(group.parent_companies()):
                 if number not in company_ids:
-                    failure(
-                        group,
-                        "hubspot_company_lookup",
-                        "Parent Company was not found in HubSpot",
-                        company_number=number,
+                    issue = recovery_errors.get(number, {})
+                    errors.append(
+                        {
+                            "email": group.email,
+                            "master_number": group.master_number,
+                            "company_number": number,
+                            "stage": issue.get("stage") or "parent_company_recovery",
+                            "message": issue.get("message")
+                            or f"Parent Company {number} could not be created in HubSpot",
+                            "reason": issue.get("reason"),
+                            "upstream_status": issue.get("upstream_status"),
+                            "upstream_message": issue.get("upstream_message"),
+                            "category": issue.get("category"),
+                            "correlation_id": issue.get("correlation_id"),
+                            "details": issue.get("details", []),
+                        }
                     )
 
         resolvable = [
@@ -196,5 +247,12 @@ class ContactAssociationService:
             "already_present": already_present,
             "added": added,
             "completed_emails": completed_emails,
+            "parent_company_recovery": {
+                "requested": recovery_result["requested"],
+                "confirmed_ids": recovery_result["confirmed_ids"],
+                "checkpoints": recovery_result["checkpoints"],
+                "errors": recovery_result["errors"],
+                "checkpoint_errors": recovery_result["checkpoint_errors"],
+            },
             "errors": errors,
         }

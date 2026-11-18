@@ -54,8 +54,12 @@ changed or stamped. Stamp or checkpoint failures remain per-record errors.
 For groups containing a created or updated Maconomy Contact Person, v1 collects
 Company numbers from the MASTER and all children. It resolves the MASTER and Companies
 in HubSpot, reads existing Company links, and adds only missing links. Existing
-HubSpot associations are preserved. If a required link cannot be added, the
-group's `remark5` checkpoint waits so a later run can retry. Contact errors are
+HubSpot associations are preserved. If a parent Company is absent from HubSpot,
+v1 fetches its Customer card from Maconomy without the date filter, maps and
+upserts it using the Company flow, and writes `customerremark26` after HubSpot
+confirms the Company. It then adds the Contact association. If a required link
+cannot be added, the group's `remark5` checkpoint waits so a later run can retry.
+Contact errors are
 reported alongside the Company result. `new_master_contact_ids` identifies confirmed
 masters whose Maconomy `remark5` was empty before this run; this does not prove
 HubSpot created a new Contact.

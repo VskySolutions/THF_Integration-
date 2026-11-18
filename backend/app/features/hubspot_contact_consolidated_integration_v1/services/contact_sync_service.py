@@ -48,6 +48,8 @@ class ContactSyncService:
         new_customer_numbers: list[str],
         request_id: uuid.UUID,
         company_ids: dict[str, str],
+        specification1_descriptions: dict[str, str],
+        specification6_descriptions: dict[str, str],
     ) -> dict[str, Any]:
         errors: list[dict[str, Any]] = []
         contacts = [
@@ -199,10 +201,14 @@ class ContactSyncService:
             str(item.get("contactpersonnumber") or "").strip()
             for item in selected["new_contact_persons"]
         }
-        association_result = await ContactAssociationService(self.hubspot).run(
+        association_result = await ContactAssociationService(
+            self.maconomy, self.hubspot
+        ).run(
             groups,
             confirmed_ids,
             company_ids,
+            specification1_descriptions,
+            specification6_descriptions,
             request_id,
         )
         errors.extend(association_result["errors"])

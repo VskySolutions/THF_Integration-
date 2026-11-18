@@ -169,6 +169,8 @@ class ConsolidatedSyncService:
                 ],
                 request_id,
                 confirmed_ids,
+                specification1_descriptions,
+                specification6_descriptions,
             )
 
         errors_by_source = {
