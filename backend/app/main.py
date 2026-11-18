@@ -24,6 +24,7 @@ from app.features.sap_concur_engagements_and_tasks_integration.routers import (
 )
 from app.features.exception_logs import install_exception_logging
 from app.features.schedular_services import (
+    PaycorPayrollSchedulerService,
     PaycorSchedulerService,
     PaycorTimesheetSchedulerService,
     SchedulerService,
@@ -67,6 +68,7 @@ async def lifespan(_: FastAPI):
             scheduler_settings
         )
     )
+    paycor_payroll_scheduler = PaycorPayrollSchedulerService(scheduler_settings)
     await scheduler.start()
     try:
         await paycor_scheduler.start()
@@ -80,8 +82,16 @@ async def lifespan(_: FastAPI):
         await scheduler.shutdown()
         raise
     try:
+        await paycor_payroll_scheduler.start()
+    except Exception:
+        await paycor_timesheet_scheduler.shutdown()
+        await paycor_scheduler.shutdown()
+        await scheduler.shutdown()
+        raise
+    try:
         yield
     finally:
+        await paycor_payroll_scheduler.shutdown()
         await paycor_timesheet_scheduler.shutdown()
         await paycor_scheduler.shutdown()
         await scheduler.shutdown()

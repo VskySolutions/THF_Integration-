@@ -142,7 +142,7 @@ class PaycorPayrollService:
         client = await self._get_client()
         should_close = self._external_client is None
 
-        # Ensure dynamic live default ISO format: YYYY-MM-DDTHH:MM:SS
+        # Ensure dynamic live default ISO format (1st or 16th of current month): YYYY-MM-DDTHH:MM:SS
         formatted_from_date = format_iso_datetime(from_check_date)
 
         try:
@@ -152,39 +152,67 @@ class PaycorPayrollService:
                 f"{legal_entity_id}/payrollProcessing"
             )
 
-            params: dict[str, Any] = {
-                "fromCheckDate": formatted_from_date,
-                "includeOtherPayruns": include_other_payruns or "All",
-            }
-            if to_check_date:
-                params["toCheckDate"] = format_iso_datetime(to_check_date)
-            if continuation_token:
-                params["continuationToken"] = continuation_token
+            all_records: list[dict[str, Any]] = []
+            curr_token = continuation_token
+            max_pages = 20
 
-            headers = {
-                "Accept": "application/json",
-                "Authorization": f"Bearer {access_token}",
-                "Ocp-Apim-Subscription-Key": self.subscription_key,
-            }
+            for _ in range(max_pages):
+                params: dict[str, Any] = {
+                    "fromCheckDate": formatted_from_date,
+                    "includeOtherPayruns": include_other_payruns or "All",
+                }
+                if to_check_date:
+                    params["toCheckDate"] = format_iso_datetime(to_check_date)
+                if curr_token:
+                    params["continuationToken"] = curr_token
 
-            response = await client.get(
-                url,
-                headers=headers,
-                params=params,
-            )
+                headers = {
+                    "Accept": "application/json",
+                    "Authorization": f"Bearer {access_token}",
+                    "Ocp-Apim-Subscription-Key": self.subscription_key,
+                }
 
-            if response.is_error:
-                LOGGER.error(
-                    "Paycor payrollProcessing request failed: %s - %s",
-                    response.status_code,
-                    response.text,
-                )
-                raise PaycorPayrollServiceError(
-                    message=response.text,
-                    status_code=response.status_code,
+                response = await client.get(
+                    url,
+                    headers=headers,
+                    params=params,
                 )
 
-            return response.json()
+                if response.is_error:
+                    LOGGER.error(
+                        "Paycor payrollProcessing request failed: %s - %s",
+                        response.status_code,
+                        response.text,
+                    )
+                    raise PaycorPayrollServiceError(
+                        message=response.text,
+                        status_code=response.status_code,
+                    )
+
+                page_data = response.json()
+                page_records = (
+                    page_data.get("records", [])
+                    if isinstance(page_data, dict) and "records" in page_data
+                    else page_data
+                    if isinstance(page_data, list)
+                    else []
+                )
+                all_records.extend(page_records)
+
+                if isinstance(page_data, dict):
+                    curr_token = page_data.get("continuationToken")
+                    has_more = page_data.get("hasMoreResults", False)
+                    if not curr_token or not has_more:
+                        break
+                else:
+                    break
+
+            return {
+                "records": all_records,
+                "totalRecords": len(all_records),
+                "hasMoreResults": False,
+                "continuationToken": None,
+            }
 
         except httpx.HTTPError as exc:
             LOGGER.error("Paycor payrollProcessing HTTP communication failure: %s", exc)
@@ -218,37 +246,67 @@ class PaycorPayrollService:
                 f"{legal_entity_id}/generalledgerwithemployee"
             )
 
-            params: dict[str, Any] = {
+            all_records: list[dict[str, Any]] = []
+            curr_token = continuation_token
+            max_pages = 50
+
+            for _ in range(max_pages):
+                params: dict[str, Any] = {
+                    "plannerId": planner_id,
+                }
+                if curr_token:
+                    params["continuationToken"] = curr_token
+
+                headers = {
+                    "Accept": "application/json",
+                    "Authorization": f"Bearer {access_token}",
+                    "Ocp-Apim-Subscription-Key": self.subscription_key,
+                }
+
+                response = await http_client.get(
+                    url,
+                    headers=headers,
+                    params=params,
+                )
+
+                if response.is_error:
+                    LOGGER.error(
+                        "Paycor generalLedgerWithEmployee request failed for plannerId %s: %s - %s",
+                        planner_id,
+                        response.status_code,
+                        response.text,
+                    )
+                    raise PaycorPayrollServiceError(
+                        message=response.text,
+                        status_code=response.status_code,
+                    )
+
+                page_data = response.json()
+                page_records = (
+                    page_data.get("records", [])
+                    if isinstance(page_data, dict) and "records" in page_data
+                    else page_data
+                    if isinstance(page_data, list)
+                    else []
+                )
+                all_records.extend(page_records)
+
+                # Check for next page
+                if isinstance(page_data, dict):
+                    curr_token = page_data.get("continuationToken")
+                    has_more = page_data.get("hasMoreResults", False)
+                    if not curr_token or not has_more:
+                        break
+                else:
+                    break
+
+            return {
                 "plannerId": planner_id,
+                "records": all_records,
+                "totalRecords": len(all_records),
+                "hasMoreResults": False,
+                "continuationToken": None,
             }
-            if continuation_token:
-                params["continuationToken"] = continuation_token
-
-            headers = {
-                "Accept": "application/json",
-                "Authorization": f"Bearer {access_token}",
-                "Ocp-Apim-Subscription-Key": self.subscription_key,
-            }
-
-            response = await http_client.get(
-                url,
-                headers=headers,
-                params=params,
-            )
-
-            if response.is_error:
-                LOGGER.error(
-                    "Paycor generalLedgerWithEmployee request failed for plannerId %s: %s - %s",
-                    planner_id,
-                    response.status_code,
-                    response.text,
-                )
-                raise PaycorPayrollServiceError(
-                    message=response.text,
-                    status_code=response.status_code,
-                )
-
-            return response.json()
 
         except httpx.HTTPError as exc:
             LOGGER.error(
