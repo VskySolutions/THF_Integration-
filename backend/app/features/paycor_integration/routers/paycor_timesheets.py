@@ -29,6 +29,7 @@ from app.features.auth.dependencies import (
     require_api_key,
 )
 from app.features.paycor_integration.mappers.timesheet_mapper import (
+    assign_employee_paygroups,
     map_maconomy_timesheets,
     map_timesheets_to_paycor,
 )
@@ -228,6 +229,7 @@ def _set_warning_header(
         tuple[str, str]
     ],
     excluded_salary_exempt_employees: set[str] | None = None,
+    skipped_employees: set[str] | None = None,
 ) -> None:
     """Add one combined processing-warning header."""
 
@@ -273,6 +275,15 @@ def _set_warning_header(
             f"{employee_numbers}"
         )
 
+    if skipped_employees:
+        employee_numbers = ", ".join(
+            sorted(skipped_employees)
+        )
+        warnings.append(
+            "Employees skipped because their Paycor pay group "
+            f"is unavailable: {employee_numbers}"
+        )
+
     if warnings:
         warning_message = "; ".join(warnings)
 
@@ -301,6 +312,19 @@ def _set_grouped_warning_header(
         )
         if isinstance(mapping, dict)
     }
+    skipped_employees = {
+        str(employee.get("employeeNumber") or "").strip()
+        for employee in warnings.get(
+            "skippedEmployees",
+            [],
+        )
+        if (
+            isinstance(employee, dict)
+            and str(
+                employee.get("employeeNumber") or ""
+            ).strip()
+        )
+    }
 
     _set_warning_header(
         response=response,
@@ -322,6 +346,7 @@ def _set_grouped_warning_header(
                 [],
             )
         ),
+        skipped_employees=skipped_employees,
     )
 
 
@@ -503,6 +528,32 @@ async def get_paygrid_payload(
                 ),
             )
 
+        (
+            calculated_entries,
+            skipped_paygroup_employees,
+        ) = assign_employee_paygroups(
+            calculated_entries,
+            paygroup_by_employee=paygroup_by_employee,
+        )
+
+        if (
+            skipped_paygroup_employees
+            and not calculated_entries
+        ):
+            employees = ", ".join(
+                sorted(skipped_paygroup_employees)
+            )
+            raise HTTPException(
+                status_code=(
+                    status.HTTP_422_UNPROCESSABLE_ENTITY
+                ),
+                detail=(
+                    "No timesheet entries remain after excluding "
+                    "employees without Paycor pay groups: "
+                    f"{employees}"
+                ),
+            )
+
         payload = map_timesheets_to_paycor(
             calculated_entries,
             earning_codes=earning_codes,
@@ -523,6 +574,9 @@ async def get_paygrid_payload(
             ),
             excluded_salary_exempt_employees=(
                 excluded_salary_exempt_employees
+            ),
+            skipped_employees=(
+                skipped_paygroup_employees
             ),
         )
 

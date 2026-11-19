@@ -11,7 +11,7 @@ from app.features.paycor_integration.mappers.timesheet_mapper import (
 
 
 def test_entries_are_grouped_by_pay_group_and_period() -> None:
-    entries = assign_employee_paygroups(
+    entries, skipped_employees = assign_employee_paygroups(
         [
             {
                 "employeeNumber": "100",
@@ -26,6 +26,8 @@ def test_entries_are_grouped_by_pay_group_and_period() -> None:
             "100": "weekly-group",
         },
     )
+
+    assert skipped_employees == set()
 
     entries = assign_pay_periods(
         entries,
@@ -61,20 +63,19 @@ def test_entries_are_grouped_by_pay_group_and_period() -> None:
     }
 
 
-def test_missing_employee_pay_group_is_rejected() -> None:
-    with pytest.raises(
-        TimesheetMappingError,
-        match="Paycor pay group is unavailable",
-    ):
-        assign_employee_paygroups(
-            [
-                {
-                    "employeeNumber": "100",
-                    "dateWorked": date(2026, 10, 26),
-                }
-            ],
-            paygroup_by_employee={},
-        )
+def test_missing_employee_pay_group_is_skipped() -> None:
+    entries, skipped_employees = assign_employee_paygroups(
+        [
+            {
+                "employeeNumber": "100",
+                "dateWorked": date(2026, 10, 26),
+            }
+        ],
+        paygroup_by_employee={},
+    )
+
+    assert entries == []
+    assert skipped_employees == {"100"}
 
 
 def test_date_outside_pay_period_is_rejected() -> None:

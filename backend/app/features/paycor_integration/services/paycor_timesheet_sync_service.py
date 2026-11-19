@@ -210,7 +210,10 @@ class PaycorTimesheetSyncService:
                 "warnings": warnings,
             }
 
-        calculated_entries = (
+        (
+            calculated_entries,
+            skipped_paygroup_employees,
+        ) = (
             assign_employee_paygroups(
                 calculated_entries,
                 paygroup_by_employee=(
@@ -218,6 +221,26 @@ class PaycorTimesheetSyncService:
                 ),
             )
         )
+
+        warnings["skippedEmployees"] = [
+            {
+                "employeeNumber": employee_number,
+                "reason": "Paycor pay group unavailable",
+            }
+            for employee_number in sorted(
+                skipped_paygroup_employees
+            )
+        ]
+
+        if not calculated_entries:
+            employees = ", ".join(
+                sorted(skipped_paygroup_employees)
+            )
+            raise PaycorTimesheetSyncServiceError(
+                "No timesheet entries remain after excluding "
+                "employees without Paycor pay groups: "
+                f"{employees or '<none>'}"
+            )
 
         date_worked_values = [
             entry["dateWorked"]
