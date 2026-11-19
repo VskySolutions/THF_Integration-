@@ -37,6 +37,7 @@ class ContactAssociationService:
         specification1_descriptions: dict[str, str],
         specification6_descriptions: dict[str, str],
         request_id: uuid.UUID,
+        company_scope_number: str | None = None,
     ) -> dict[str, Any]:
         candidates = [
             group
@@ -57,6 +58,10 @@ class ContactAssociationService:
             "errors": [],
             "checkpoint_errors": [],
         }
+
+        def parent_companies(group: ContactGroup) -> set[str]:
+            numbers = group.parent_companies()
+            return numbers & {company_scope_number} if company_scope_number else numbers
 
         def failure(
             group: ContactGroup,
@@ -117,7 +122,7 @@ class ContactAssociationService:
 
         ready: list[ContactGroup] = []
         for group in candidates:
-            if not group.parent_companies():
+            if not parent_companies(group):
                 failure(
                     group,
                     "maconomy_parent_companies",
@@ -142,7 +147,7 @@ class ContactAssociationService:
 
         company_ids = dict(confirmed_company_ids)
         missing_companies = (
-            set().union(*(group.parent_companies() for group in ready)) - set(company_ids)
+            set().union(*(parent_companies(group) for group in ready)) - set(company_ids)
             if ready
             else set()
         )
@@ -151,16 +156,16 @@ class ContactAssociationService:
                 company_ids.update(await self.hubspot.lookup_companies(missing_companies))
             except HubSpotError as exc:
                 for group in ready:
-                    if group.parent_companies() & missing_companies:
+                    if parent_companies(group) & missing_companies:
                         failure(group, "hubspot_company_lookup", str(exc), exc)
                 ready = [
                     group
                     for group in ready
-                    if not group.parent_companies() & missing_companies
+                    if not parent_companies(group) & missing_companies
                 ]
 
         still_missing = (
-            set().union(*(group.parent_companies() for group in ready)) - set(company_ids)
+            set().union(*(parent_companies(group) for group in ready)) - set(company_ids)
             if ready
             else set()
         )
@@ -183,7 +188,7 @@ class ContactAssociationService:
         }
 
         for group in ready:
-            for number in sorted(group.parent_companies()):
+            for number in sorted(parent_companies(group)):
                 if number not in company_ids:
                     issue = recovery_errors.get(number, {})
                     errors.append(
@@ -234,7 +239,7 @@ class ContactAssociationService:
         tasks: list[tuple[ContactGroup, str]] = []
         for group in resolvable:
             contact_id = master_ids[group.master_number]
-            for company_number in sorted(group.parent_companies()):
+            for company_number in sorted(parent_companies(group)):
                 if company_ids[company_number] in existing.get(contact_id, set()):
                     already_present += 1
                     pair_results.append({

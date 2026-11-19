@@ -68,11 +68,18 @@ Maconomy and HubSpot failures carry stage or reason, upstream HTTP status, and
 safe context for troubleshooting. The API returns a safe 502 message for a
 failed request without credentials or token details.
 
-Company and contact routes still return 501. The scheduler retains the
+The v1 Company route supports manual retry by Maconomy Customer number. It
+upserts that Customer regardless of the bulk date window or synced version,
+loads all of its Contact Persons, resolves each full email group to its MASTER,
+upserts those masters, adds missing links to the requested Company only, and
+writes back Contact and Customer checkpoints. Contact writebacks are limited to
+the requested Company's Contact Persons and any MASTER upserted by this retry.
+The Contact-only retry route remains unimplemented. The scheduler retains the
 unversioned bulk path. The existing routes use `/hubspot-consolidated_v0`.
 
 The IT monitoring screen reads the shared run-log table. V1 log details contain
 Maconomy record numbers, phase counts, safe error codes and statuses, group
 member numbers, and Contact-to-Company pair outcomes. Names, email addresses,
 phone numbers, addresses, and upstream response messages are not stored in the
-run-log JSON. Record retry remains unavailable on the v1 monitoring screen.
+run-log JSON. The monitoring screen's retry button starts the v1 Company flow;
+Contact-only retry will be added separately.

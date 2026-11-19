@@ -93,11 +93,12 @@
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true"><path d="M10.804 8 5 11.633V4.367z"/><path d="M0 8a8 8 0 1 1 16 0A8 8 0 0 1 0 8m8-7a7 7 0 1 0 0 14A7 7 0 0 0 8 1"/></svg>
                     {% endif %}
                 </button>
-                <button type="button" class="btn btn-outline-secondary dashboard-action-btn" disabled
+                <button type="button" class="btn btn-success dashboard-action-btn"
                         id="openHubspotRetryButton"
+                        data-bs-toggle="modal" data-bs-target="#hubspotRetryModal"
                         data-dashboard-tooltip data-bs-placement="top"
-                        data-bs-title="Record retry will be available with the v1 flow"
-                        aria-label="Record retry is not available yet">
+                        data-bs-title="Retry one Customer, its Contacts, and Company links"
+                        aria-label="Retry one Customer and its Contact Persons">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true"><path d="M8.5 1.5v3a1 1 0 0 0 1 1h3v8a1 1 0 0 1-1 1h-7a1 1 0 0 1-1-1v-12a1 1 0 0 1 1-1h3zm.121-1H4.5a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h7a2 2 0 0 0 2-2V5.379a2 2 0 0 0-.586-1.414l-2.879-2.879A2 2 0 0 0 8.621.5"/><path fill-rule="evenodd" d="M8 12a.5.5 0 0 0 .5-.5V7.707l1.146 1.147a.5.5 0 0 0 .708-.708l-2-2a.5.5 0 0 0-.708 0l-2 2a.5.5 0 1 0 .708.708L7.5 7.707V11.5a.5.5 0 0 0 .5.5"/></svg>
                 </button>
             </div>
@@ -492,6 +493,35 @@
     </div>
 </div>
 
+<div class="modal fade" id="hubspotRetryModal" tabindex="-1"
+     aria-labelledby="hubspotRetryModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered"><div class="modal-content">
+        <form method="post" action="{{ retry_url }}" id="hubspotRetryForm">
+            <div class="modal-header">
+                <h2 class="modal-title fs-5" id="hubspotRetryModalLabel">Retry a Company</h2>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="record_type" value="customer">
+                <p class="text-secondary small">Sync this Customer as a HubSpot Company, its Contact Persons and MASTER Contacts, then add missing links and write back checkpoints.</p>
+                <label for="hubspotCustomerNumber" class="form-label">Maconomy Customer number</label>
+                <input type="text" class="form-control" id="hubspotCustomerNumber"
+                       name="record_number" inputmode="text"
+                       pattern="[A-Za-z0-9_-]*[0-9][A-Za-z0-9_-]*"
+                       maxlength="30" autocomplete="off" required>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="submit" class="btn btn-primary" id="submitHubspotRetry">
+                    <span class="spinner-border spinner-border-sm me-1 d-none" aria-hidden="true"></span>
+                    <span class="hubspot-retry-label">Retry Company</span>
+                </button>
+            </div>
+        </form>
+    </div></div>
+</div>
+
 <div class="modal fade" id="integrationStatusModal" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog modal-dialog-centered"><div class="modal-content">
         <div class="modal-header">
@@ -540,8 +570,19 @@
             new bootstrap.Tooltip(this);
         });
 
-        $('#changeHubspotIntegrationStatusButton').on('click', function () {
+        $('#changeHubspotIntegrationStatusButton, #openHubspotRetryButton').on('click', function () {
             bootstrap.Tooltip.getInstance(this)?.hide();
+        });
+
+        $('#hubspotRetryModal').on('shown.bs.modal', function () {
+            $('#hubspotCustomerNumber').trigger('focus');
+        });
+
+        $('#hubspotRetryForm').on('submit', function () {
+            const submitButton = $('#submitHubspotRetry');
+            submitButton.prop('disabled', true);
+            submitButton.find('.spinner-border').removeClass('d-none');
+            submitButton.find('.hubspot-retry-label').text('Retrying...');
         });
     });
 </script>

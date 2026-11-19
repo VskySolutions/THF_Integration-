@@ -803,7 +803,7 @@ async def retry_hubspot_consolidated_record(
     record_number: Annotated[str, Form(min_length=1, max_length=100)],
     session: Annotated[AsyncSession, Depends(get_db)],
 ) -> RedirectResponse:
-    """Manually retry one consolidated HubSpot Company or Contact sync."""
+    """Manually retry a v1 Company and its Contact Persons."""
     if not valid_csrf_token(request, csrf_token):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -831,15 +831,16 @@ async def retry_hubspot_consolidated_record(
     )
     normalized_type = record_type.strip().lower()
     normalized_number = record_number.strip()
-    path_segments = {
-        "customer": "companies",
-        "contact": "contacts",
-    }
-    path_segment = path_segments.get(normalized_type)
-    if path_segment is None or not normalized_number:
+    if (
+        normalized_type != "customer"
+        or not normalized_number.isascii()
+        or not all(char.isalnum() or char in "_-" for char in normalized_number)
+        or not any(char.isdigit() for char in normalized_number)
+        or len(normalized_number) > 30
+    ):
         _set_flash(
             request,
-            "Select Customer or Contact Person and enter a valid number.",
+            "Enter a valid Maconomy Customer number for Company retry.",
             "danger",
         )
         return redirect
@@ -847,11 +848,12 @@ async def retry_hubspot_consolidated_record(
     settings = get_settings()
     encoded_number = quote(normalized_number, safe="")
     sync_path = (
-        f"{settings.api_v1_prefix.rstrip('/')}/hubspot-consolidated_v0/"
-        f"{path_segment}/{encoded_number}/sync"
+        f"{settings.api_v1_prefix.rstrip('/')}/hubspot-consolidated/"
+        f"companies/{encoded_number}/sync"
     )
     activity_data = {
         "record_type": normalized_type,
+        "record_number": normalized_number,
         "integration_id": str(integration.id),
     }
     try:
@@ -908,17 +910,16 @@ async def retry_hubspot_consolidated_record(
         data=activity_data,
         status="SUCCESS" if retry_status == "success" else "PARTIAL_SUCCESS",
     )
-    record_label = "Customer" if normalized_type == "customer" else "Contact Person"
     if retry_status == "partial_success":
         _set_flash(
             request,
-            f"{record_label} retry completed with synchronization errors.",
+            f"Customer {normalized_number} retry completed with synchronization errors. Check the latest run details.",
             "warning",
         )
     else:
         _set_flash(
             request,
-            f"{record_label} was synchronized by the consolidated flow.",
+            f"Customer {normalized_number}, its Contact Persons, and Company links were synchronized.",
             "success",
         )
     return redirect
@@ -1304,6 +1305,10 @@ async def integration_logs(
                 "csrf_token": ensure_csrf_token(request),
                 "integration": integration,
                 "run_logs": run_logs,
+                "retry_url": request.url_for(
+                    "retry_hubspot_consolidated_record",
+                    integration_id=integration.id,
+                ),
                 "status_badges": {
                     "SUCCESS": "text-bg-success",
                     "PARTIAL_SUCCESS": "text-bg-warning",

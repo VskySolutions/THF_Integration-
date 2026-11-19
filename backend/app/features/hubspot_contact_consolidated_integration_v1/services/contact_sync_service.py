@@ -50,6 +50,7 @@ class ContactSyncService:
         company_ids: dict[str, str],
         specification1_descriptions: dict[str, str],
         specification6_descriptions: dict[str, str],
+        company_scope_number: str | None = None,
     ) -> dict[str, Any]:
         errors: list[dict[str, Any]] = []
         contacts = [
@@ -76,7 +77,37 @@ class ContactSyncService:
 
         consolidator = ContactConsolidator()
         deduplicated = consolidator.deduplicate(contacts)
-        selected = self.maconomy.classify_contact_persons(deduplicated)
+        if company_scope_number:
+            selected = {
+                "new_contact_persons": [],
+                "updated_contact_persons": [],
+                "skipped": [
+                    {"source_id": None, "reason": "missing contactpersonnumber"}
+                    for item in contacts
+                    if not str(item.get("contactpersonnumber") or "").strip()
+                ],
+            }
+            for item in deduplicated:
+                number = str(item.get("contactpersonnumber") or "").strip()
+                try:
+                    int(item.get("versionnumber"))
+                except (TypeError, ValueError):
+                    selected["skipped"].append({
+                        "source_id": number,
+                        "reason": "invalid versionnumber",
+                    })
+                    continue
+                field = (
+                    "new_contact_persons"
+                    if not str(item.get("remark5") or "").strip()
+                    else "updated_contact_persons"
+                )
+                selected[field].append({
+                    **item,
+                    "action": "create" if field == "new_contact_persons" else "update",
+                })
+        else:
+            selected = self.maconomy.classify_contact_persons(deduplicated)
         changed_contacts = [
             *selected["new_contact_persons"],
             *selected["updated_contact_persons"],
@@ -124,6 +155,8 @@ class ContactSyncService:
                     changed_numbers,
                     back_query.get(group.email, []) if needs_back_query else None,
                 )
+                if company_scope_number and not group.error and group.master_record:
+                    group.action = "sync_master"
             if group.error:
                 errors.append(
                     {
@@ -206,6 +239,7 @@ class ContactSyncService:
             specification1_descriptions,
             specification6_descriptions,
             request_id,
+            company_scope_number=company_scope_number,
         )
         errors.extend(association_result["errors"])
         completed_association_emails = association_result.pop("completed_emails")
@@ -229,8 +263,19 @@ class ContactSyncService:
         stamps: list[dict[str, Any]] = []
         stamped_numbers: set[str] = set()
         stamp_failed: set[str] = set()
+
+        def in_writeback_scope(member: dict[str, Any], master_number: str | None) -> bool:
+            return not company_scope_number or (
+                str(member.get("contactcompanynumber") or "").strip()
+                == company_scope_number
+                or str(member.get("contactpersonnumber") or "").strip()
+                == master_number
+            )
+
         for group in stampable:
             for member in group.unstamped_members():
+                if not in_writeback_scope(member, group.master_number):
+                    continue
                 member_number = str(member.get("contactpersonnumber") or "").strip()
                 try:
                     stamp = await self.maconomy.write_contact_master_stamp(
@@ -270,6 +315,7 @@ class ContactSyncService:
             member_numbers = {
                 str(member.get("contactpersonnumber") or "").strip()
                 for member in group.members
+                if in_writeback_scope(member, group.master_number)
             }
             checkpoint_targets = member_numbers & (changed_numbers | stamped_numbers)
             if group.action == "sync_master" and group.master_number in confirmed_ids:
@@ -336,8 +382,21 @@ class ContactSyncService:
                 len(upsert_result["batch_errors"]),
             )
 
+        group_summaries = []
+        for group in groups:
+            summary = group.summary()
+            if company_scope_number:
+                summary["parent_customer_numbers"] = [company_scope_number]
+                summary["member_numbers"] = sorted({
+                    number
+                    for member in group.members
+                    if in_writeback_scope(member, group.master_number)
+                    if (number := str(member.get("contactpersonnumber") or "").strip())
+                })
+            group_summaries.append(summary)
+
         return {
-            "groups": [group.summary() for group in groups],
+            "groups": group_summaries,
             "selected_contact_numbers": sorted(changed_numbers),
             "masters_requested": upsert_result["requested"],
             "masters_upserted": len(confirmed_ids),

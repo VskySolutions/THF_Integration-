@@ -14,7 +14,7 @@ from app.features.hubspot_contact_consolidated_integration.models import (
 )
 
 logger = logging.getLogger(__name__)
-_IDENTIFIER = re.compile(r"[0-9]{1,30}\Z")
+_IDENTIFIER = re.compile(r"(?=.*[0-9])[A-Za-z0-9_-]{1,30}\Z")
 _CODE = re.compile(r"[A-Za-z0-9_:-]{1,100}\Z")
 _SKIP_REASONS = {
     "missing or empty customernumber": "missing_customer_number",
@@ -301,16 +301,22 @@ def _run_details(result: dict[str, Any]) -> dict[str, Any]:
 
 
 class V1ConsolidationRunLogger:
-    """Keep one durable row per v1 bulk execution."""
+    """Keep one durable row per v1 bulk or manual execution."""
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
         self._row: ConsolidationRunLog | None = None
 
-    async def start(self, request_id: uuid.UUID, trigger_type: str, instance: str) -> None:
+    async def start(
+        self,
+        request_id: uuid.UUID,
+        trigger_type: str,
+        instance: str,
+        operation: str = "CONSOLIDATED_BULK_SYNC_V1",
+    ) -> None:
         self._row = ConsolidationRunLog(
             request_id=request_id,
-            operation="CONSOLIDATED_BULK_SYNC_V1",
+            operation=operation,
             trigger_type=trigger_type,
             status="RUNNING",
             maconomy_instance=instance,
@@ -388,6 +394,7 @@ class V1ConsolidationRunLogger:
         stage: str,
         cause: BaseException | None = None,
         progress: dict[str, int] | None = None,
+        source_id: str | None = None,
     ) -> None:
         if self._row is None:
             return
@@ -418,22 +425,27 @@ class V1ConsolidationRunLogger:
         row.failure_stage = safe_stage
         row.error_message = f"{safe_stage.replace('_', ' ')}: {reason.replace('_', ' ')}"
         row.summary_message = f"v1 HubSpot sync failed during {safe_stage.replace('_', ' ')}"
+        safe_error = _safe_error({
+            "source_id": source_id,
+            "stage": safe_stage,
+            "reason": reason,
+            "upstream_status": getattr(cause, "upstream_status", None),
+            "category": getattr(cause, "category", None),
+            "correlation_id": getattr(cause, "correlation_id", None),
+        }, "customer" if source_id else "run")
+        failed_records = [safe_error] if safe_error["source_id"] else []
         row.details = {
             "version": "v1",
             "counts": counts,
             "failure_stage_counts": {safe_stage: 1},
-            "failed_records": [],
+            "failed_records": failed_records,
             "skipped_records": [],
-            "record_results": [],
+            "record_results": [
+                {**safe_error, "status": "FAILED"}
+            ] if failed_records else [],
             "group_summaries": [],
             "association_pairs": [],
-            "run_errors": [_safe_error({
-                "stage": safe_stage,
-                "reason": reason,
-                "upstream_status": getattr(cause, "upstream_status", None),
-                "category": getattr(cause, "category", None),
-                "correlation_id": getattr(cause, "correlation_id", None),
-            }, "run")],
+            "run_errors": [] if failed_records else [safe_error],
         }
         await self._commit()
 
