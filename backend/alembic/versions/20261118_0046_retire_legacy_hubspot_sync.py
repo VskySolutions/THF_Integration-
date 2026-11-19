@@ -1,7 +1,7 @@
 """Retire the deprecated Maconomy to HubSpot integration service.
 
 Revision ID: 20261118_0046
-Revises: 20261112_0043
+Revises: 20261116_0045
 """
 
 from collections.abc import Sequence
@@ -11,7 +11,7 @@ from alembic import op
 
 
 revision: str = "20261118_0046"
-down_revision: str | None = "20261112_0043"
+down_revision: str | None = "20261116_0045"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
