@@ -612,7 +612,7 @@ class SAPConcurService:
             "modifiedDateAfter": yesterday.isoformat(),
             "modifiedDateBefore": tomorrow.isoformat(),
             "approvalStatusCode": "A_APPR",
-            "paymentStatusCode": "P_PROC",
+            "paymentStatusCode": "P_PAID",
             "limit": 100,
         }
 
@@ -645,7 +645,7 @@ class SAPConcurService:
         params = {
             "user": "ALL",
             "approvalStatusCode": "A_APPR",
-            "paymentStatusCode": "P_PROC",
+            "paymentStatusCode": "P_PAID",
             "limit": 100,
         }
 

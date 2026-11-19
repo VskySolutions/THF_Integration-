@@ -50,6 +50,56 @@ def build_vendor_invoice_table_init_payload() -> dict[str, Any]:
     return {"row": "end"}
 
 
+def build_jobtasks_instance_payload() -> dict[str, Any]:
+    """Instance-retrieval payload for the ``jobtasks`` container.
+
+    User 2026-11-18: card fields = ``copyfromjobnamevar`` /
+    ``copyfromjobvar`` + **``jobnumber``** (added so the
+    ``data;jobnumber={engagement}`` retrieval is slice-legal); table
+    fields = the stakeholder list verbatim. Response parsing reads only
+    ``taskname`` + ``description`` from ``panes.table.records``.
+    """
+    return {
+        "panes": {
+            "card": {
+                "fields": [
+                    "copyfromjobnamevar",
+                    "copyfromjobvar",
+                    "jobnumber",
+                ]
+            },
+            "table": {
+                "fields": [
+                    "activitynumber",
+                    "activitytextvar",
+                    "activitytypecosttypevar",
+                    "allowexpenseregistration",
+                    "allowinvoicingonaccount",
+                    "allowmileageregistration",
+                    "allowpurchasing",
+                    "allowtimeregistration",
+                    "approvaldate",
+                    "approved",
+                    "blocked",
+                    "description",
+                    "jobpricegroupnumber",
+                    "linenumber",
+                    "overwriteactivity",
+                    "overwriteproject",
+                    "projectname",
+                    "purposename",
+                    "riskfund",
+                    "taskgroupinfochanged",
+                    "tasklist",
+                    "taskname",
+                    "usedailydescriptions",
+                    "instancekey",
+                ]
+            },
+        }
+    }
+
+
 def build_vendor_invoice_allocation_instance_payload() -> dict[str, Any]:
     """Instance-retrieval payload for the vendorinvoiceallocation container.
 
@@ -226,6 +276,7 @@ def build_vendor_invoice_allocation_instance_payload() -> dict[str, Any]:
                 "projectname",
                 "purchaselinetype",
                 "purposename",
+                "numberof",# "quantity",
                 "reversed",
                 "specification10name",
                 "specification1name",
@@ -302,6 +353,8 @@ def map_concur_invoice_line_to_allocation_row(
     task = _concur_line_value(line_item, "Custom11", "Task")
     department = _concur_line_value(line_item, "Department", "Custom2")
     unit_price_raw = _concur_line_value(line_item, "UnitPrice", "Unit Price")
+    quantity_raw = _concur_line_value(line_item, "Quantity")
+    location = _concur_line_value(line_item, "Custom1") or "-"
     journal_number_value = str(journalnumber or "").strip()
     journal_line_value = (
         "" if journallinenumber is None else str(journallinenumber).strip()
@@ -333,6 +386,16 @@ def map_concur_invoice_line_to_allocation_row(
             f"{unit_price_raw!r}"
         ) from exc
 
+    if quantity_raw:
+        try:
+            quantity: float | int = float(quantity_raw)
+        except ValueError as exc:
+            raise ValueError(
+                f"Unparseable Quantity for quantity: {quantity_raw!r}"
+            ) from exc
+    else:
+        quantity = 1
+
     try:
         journal_line_number: int = int(journal_line_value)
     except ValueError as exc:
@@ -350,8 +413,10 @@ def map_concur_invoice_line_to_allocation_row(
             "taskname": task,
             "entrytext": "",
             "unitpricecurrency": unit_price,
+            "numberof": quantity,
             "financevatcode": "",
             "locationname": "",
+            # "specification4name": location,
             "entityname": department,
         },
         "offset": 0,

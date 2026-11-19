@@ -18,6 +18,7 @@ import httpx
 
 from app.core.config import Settings, get_settings
 from app.features.sap_concur_invoice_integration.mappers import (
+    build_jobtasks_instance_payload,
     build_vendor_invoice_allocation_instance_payload,
     build_vendor_invoice_instance_payload,
     build_vendor_invoice_table_init_payload,
@@ -39,6 +40,32 @@ CONTAINER_CONTENT_TYPE = (
 
 class MaconomyInvoiceServiceError(Exception):
     pass
+
+
+class AllocationLineValidationError(ValueError):
+    """Per-line gate failure carrying a machine-readable ``reason``.
+
+    Subclasses ``ValueError`` so the existing per-line except path
+    still records FAILED entries; the ``reason`` key is copied onto
+    the entry and surfaced in the router's per-invoice log JSONB
+    (user 2026-11-18: one DB row per invoice, reason in the JSONB).
+    """
+
+    def __init__(self, message: str, reason: str) -> None:
+        super().__init__(message)
+        self.reason = reason
+
+
+def _line_value(line_item: Any, *keys: str) -> str:
+    """First non-empty value among ``keys`` (mirrors the line mapper's
+    ``_concur_line_value`` resolution: named key/slot order, stripped)."""
+    if not isinstance(line_item, dict):
+        return ""
+    for key in keys:
+        value = str(line_item.get(key) or "").strip()
+        if value:
+            return value
+    return ""
 
 
 class MaconomyInvoiceService:
@@ -117,6 +144,27 @@ class MaconomyInvoiceService:
         return (
             f"{self.settings.maconomy_url}"
             f"/maconomy-api/containers/{shortname}/showvendorinvoices"
+        )
+
+    def _vendorcard_url(self) -> str:
+        shortname = quote(self.settings.maconomy_shortname, safe="")
+        return (
+            f"{self.settings.maconomy_url}"
+            f"/maconomy-api/containers/{shortname}/vendorcard"
+        )
+
+    def _entities_url(self) -> str:
+        shortname = quote(self.settings.maconomy_shortname, safe="")
+        return (
+            f"{self.settings.maconomy_url}"
+            f"/maconomy-api/containers/{shortname}/entities"
+        )
+
+    def _jobtasks_url(self) -> str:
+        shortname = quote(self.settings.maconomy_shortname, safe="")
+        return (
+            f"{self.settings.maconomy_url}"
+            f"/maconomy-api/containers/{shortname}/jobtasks"
         )
 
     async def _retrieve_vendor_invoice_instance(
@@ -482,6 +530,295 @@ class MaconomyInvoiceService:
         )
         return existing
 
+    # ==================== Reference data (one fetch per run,
+    # user 2026-11-18) ====================
+
+    async def get_all_vendor_numbers(
+        self,
+        client: httpx.AsyncClient,
+        reconnect_token: str,
+    ) -> set[str]:
+        """ALL Maconomy vendor numbers, casefolded — one paginated run.
+
+        Mirrors vendor integration ``get_all_vendors`` (vendorcard
+        ``/filter``, limit 1000, offset paging, 100-page ceiling,
+        rowCount/rowOffset validation). Returns a casefolded set for
+        membership checks; callers casefold the SAP value too.
+        """
+        url = f"{self._vendorcard_url()}/filter"
+        limit = 1000
+        offset = 0
+        pages = 0
+        vendor_numbers: set[str] = set()
+
+        while True:
+            if pages >= 100:
+                raise MaconomyInvoiceServiceError(
+                    "Maconomy vendor reference retrieval exceeded the "
+                    "maximum page ceiling of 100"
+                )
+            payload = {
+                "fields": ["vendornumber"],
+                "limit": limit,
+                "offset": offset,
+            }
+            try:
+                response = await client.post(
+                    url,
+                    headers=self._container_headers(reconnect_token),
+                    json=payload,
+                )
+                response.raise_for_status()
+            except httpx.HTTPError as exc:
+                raise MaconomyInvoiceServiceError(
+                    "Maconomy vendor reference request failed"
+                ) from exc
+            pages += 1
+
+            try:
+                pane = response.json()["panes"]["filter"]
+                meta = pane["meta"]
+                records = pane["records"]
+            except (KeyError, TypeError, ValueError) as exc:
+                raise MaconomyInvoiceServiceError(
+                    "Invalid Maconomy vendor filter response"
+                ) from exc
+            if (
+                not isinstance(meta, dict)
+                or not isinstance(records, list)
+                or not all(isinstance(record, dict) for record in records)
+            ):
+                raise MaconomyInvoiceServiceError(
+                    "Invalid Maconomy vendor filter response"
+                )
+
+            row_count = meta.get("rowCount")
+            row_offset = meta.get("rowOffset")
+            if (
+                isinstance(row_count, bool)
+                or not isinstance(row_count, int)
+                or row_count != len(records)
+                or (row_offset is not None and row_offset != offset)
+            ):
+                raise MaconomyInvoiceServiceError(
+                    "Invalid Maconomy vendor filter response"
+                )
+
+            for record in records:
+                data = record.get("data")
+                if not isinstance(data, dict):
+                    raise MaconomyInvoiceServiceError(
+                        "Invalid Maconomy vendor filter response"
+                    )
+                vendor_number = str(data.get("vendornumber") or "").strip()
+                if vendor_number:
+                    vendor_numbers.add(vendor_number.casefold())
+
+            if len(records) < limit:
+                break
+            offset += limit
+
+        return vendor_numbers
+
+    async def get_all_entity_names(
+        self,
+        client: httpx.AsyncClient,
+        reconnect_token: str,
+    ) -> set[str]:
+        """ALL active Maconomy entity names, casefolded — one paginated run.
+
+        ``entities/filter`` shape mirrors paycor ``_get_reference_lookup``
+        (fields ``entityname``/``description``/``blocked``); blocked and
+        empty-``entityname`` records are skipped. Both fields are
+        retrieved per requirement — the gate matches on ``entityname``.
+        """
+        url = f"{self._entities_url()}/filter"
+        limit = 1000
+        offset = 0
+        pages = 0
+        entity_names: set[str] = set()
+
+        while True:
+            if pages >= 100:
+                raise MaconomyInvoiceServiceError(
+                    "Maconomy entity reference retrieval exceeded the "
+                    "maximum page ceiling of 100"
+                )
+            payload = {
+                "fields": ["entityname", "description", "blocked"],
+                "limit": limit,
+                "offset": offset,
+            }
+            try:
+                response = await client.post(
+                    url,
+                    headers=self._container_headers(reconnect_token),
+                    json=payload,
+                )
+                response.raise_for_status()
+            except httpx.HTTPError as exc:
+                raise MaconomyInvoiceServiceError(
+                    "Maconomy entity reference request failed"
+                ) from exc
+            pages += 1
+
+            try:
+                pane = response.json()["panes"]["filter"]
+                records = pane["records"]
+            except (KeyError, TypeError, ValueError) as exc:
+                raise MaconomyInvoiceServiceError(
+                    "Invalid Maconomy entities filter response"
+                ) from exc
+            if (
+                not isinstance(records, list)
+                or not all(isinstance(record, dict) for record in records)
+            ):
+                raise MaconomyInvoiceServiceError(
+                    "Invalid Maconomy entities filter response"
+                )
+
+            for record in records:
+                data = record.get("data")
+                if not isinstance(data, dict):
+                    raise MaconomyInvoiceServiceError(
+                        "Invalid Maconomy entities filter response"
+                    )
+                if data.get("blocked") is True:
+                    continue
+                entity_name = str(data.get("entityname") or "").strip()
+                if entity_name:
+                    entity_names.add(entity_name.casefold())
+
+            if len(records) < limit:
+                break
+            offset += limit
+
+        return entity_names
+
+    # ==================== Engagement + tasks (jobtasks, user
+    # 2026-11-18) ====================
+
+    async def get_engagement_tasks(
+        self,
+        client: httpx.AsyncClient,
+        reconnect_token: str,
+        engagement: str,
+    ) -> set[str] | None:
+        """Tasks (casefolded ``taskname``) under ONE engagement — jobtasks.
+
+        User 2026-11-18 batch: FRESH instance for every request — first
+        ``POST /jobtasks/instances`` (payload:
+        ``build_jobtasks_instance_payload``), then
+        ``POST .../instances/{id}/data;jobnumber={engagement}`` with
+        body ``{"limit": 100, "offset": 0}``. HTTP **204** on the data
+        call => the engagement does NOT exist in Maconomy -> ``None``;
+        otherwise the casefolded ``taskname`` set of
+        ``panes.table.records[*].data`` (``description`` is sliced but
+        only ``taskname`` is cross-verified). Bad shapes raise
+        ``MaconomyInvoiceServiceError``; httpx errors are wrapped too.
+        """
+        # --- Step 1: fresh instance id for THIS request ---
+        try:
+            response = await client.post(
+                f"{self._jobtasks_url()}/instances",
+                headers=self._container_headers(reconnect_token),
+                json=build_jobtasks_instance_payload(),
+            )
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise MaconomyInvoiceServiceError(
+                "Maconomy jobtasks instance request failed"
+            ) from exc
+
+        try:
+            instance_id = str(
+                uuid.UUID(response.json()["meta"]["containerInstanceId"])
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise MaconomyInvoiceServiceError(
+                "Invalid Maconomy jobtasks instance response"
+            ) from exc
+        concurrency_token = self._get_concurrency_token(response)
+
+        # --- Step 2: data;jobnumber={engagement} on THAT instance ---
+        url = (
+            f"{self._jobtasks_url()}/instances/"
+            f"{instance_id}/data;jobnumber="
+            f"{quote(str(engagement), safe='')}"
+        )
+        headers = self._container_headers(reconnect_token)
+        headers["Maconomy-Concurrency-Control"] = concurrency_token
+        try:
+            response = await client.post(
+                url,
+                headers=headers,
+                json={"limit": 100, "offset": 0},
+            )
+        except httpx.HTTPError as exc:
+            raise MaconomyInvoiceServiceError(
+                "Maconomy jobtasks data request failed"
+            ) from exc
+
+        if response.status_code == 204:
+            # User 2026-11-18: 204 => engagement not in Maconomy.
+            print(
+                f"[jobtasks] engagement {engagement!r}: HTTP 204 - "
+                "engagement does not exist in Maconomy"
+            )
+            return None
+
+        try:
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise MaconomyInvoiceServiceError(
+                "Maconomy jobtasks data request failed"
+            ) from exc
+
+        try:
+            records = response.json()["panes"]["table"]["records"]
+        except (KeyError, TypeError, ValueError) as exc:
+            raise MaconomyInvoiceServiceError(
+                "Invalid Maconomy jobtasks data response"
+            ) from exc
+        if (
+            not isinstance(records, list)
+            or not all(isinstance(record, dict) for record in records)
+        ):
+            raise MaconomyInvoiceServiceError(
+                "Invalid Maconomy jobtasks data response"
+            )
+
+        task_names: set[str] = set()
+        display_names: set[str] = set()
+        for record in records:
+            data = record.get("data")
+            if not isinstance(data, dict):
+                raise MaconomyInvoiceServiceError(
+                    "Invalid Maconomy jobtasks data response"
+                )
+            raw_task_name = str(data.get("taskname") or "").strip()
+            if raw_task_name:
+                task_names.add(raw_task_name.casefold())
+                display_names.add(raw_task_name)
+
+        if len(records) >= 100:
+            # Tripwire (existing pattern): fixed limit 100 offset 0 —
+            # tasks beyond the page would silently fail the gate.
+            print(
+                "WARNING: jobtasks data returned",
+                len(records),
+                "record(s) (== limit) - possible truncation; tasks "
+                "beyond the limit may fail the task gate.",
+            )
+
+        # User request: print the tasks retrieved from jobtasks.
+        print(
+            f"[jobtasks] engagement {engagement!r}: "
+            f"{len(task_names)} task(s) retrieved -> "
+            f"{sorted(display_names)}"
+        )
+        return task_names
+
     async def create_journal_with_invoices(
         self,
         entries: list[dict[str, Any]],
@@ -534,6 +871,22 @@ class MaconomyInvoiceService:
             
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 reconnect_token = await self._get_reconnect_token(client)
+
+                # --- Reference data (user 2026-11-18): fetched ONCE for
+                # the entire run BEFORE any write — a fetch failure
+                # aborts fail-closed (router logs FAILED + HTTP 500, no
+                # orphan journal). Sets are run-scoped in-memory values. ---
+                vendor_numbers = await self.get_all_vendor_numbers(
+                    client, reconnect_token
+                )
+                entity_names = await self.get_all_entity_names(
+                    client, reconnect_token
+                )
+                print(
+                    "========= Reference data loaded: "
+                    f"{len(vendor_numbers)} vendor number(s), "
+                    f"{len(entity_names)} entity name(s) ========="
+                )
 
                 instance_id, concurrency_token = (
                     await self._retrieve_vendor_invoice_instance(
@@ -628,10 +981,27 @@ class MaconomyInvoiceService:
                         row_payload = map_concur_invoice_to_maconomy_invoice_row(
                             invoice
                         )
+
+                        # --- Vendor presence gate (user 2026-11-18):
+                        # SAP vendor code must exist in Maconomy or the
+                        # whole invoice stops (row + its lines) with a
+                        # FAILED entry; next invoice proceeds. Empty
+                        # code already fails in the mapper's required
+                        # check. ---
+                        vendor_code = str(
+                            row_payload["data"].get("vendornumber") or ""
+                        ).strip()
+                        if vendor_code.casefold() not in vendor_numbers:
+                            raise ValueError(
+                                f"Vendor {vendor_code} not found in "
+                                "Maconomy - invoice row creation stopped"
+                            )
+
                         row_headers = self._container_headers(reconnect_token)
                         row_headers["Maconomy-Concurrency-Control"] = (
                             concurrency_token
                         )
+                        print("row_payload:",row_payload)
                         row_response = await client.post(
                             table_url,
                             headers=row_headers,
@@ -726,6 +1096,7 @@ class MaconomyInvoiceService:
                             line_items=line_items,
                             journalnumber=journalnumber,
                             line_offset=len(line_entries),
+                            entity_names=entity_names,
                         )
                     )
 
@@ -895,6 +1266,7 @@ class MaconomyInvoiceService:
         print("======= _create_vendor_invoice_allocation_row =========")
         # Debug: invoice API visibility — POST payload + status/body
         print(f"[invoice-api] POST {url} payload={row_payload}")
+        print("line payload:", row_payload)
         response = await client.post(url, headers=headers, json=row_payload)
         print(
             f"[invoice-api] POST {url} -> "
@@ -926,6 +1298,7 @@ class MaconomyInvoiceService:
         line_items: list[dict[str, Any]],
         journalnumber: str,
         line_offset: int = 0,
+        entity_names: set[str] | None = None,
     ) -> list[dict[str, Any]]:
         """Create ALL allocation lines of ONE invoice on its OWN instance.
 
@@ -1022,9 +1395,73 @@ class MaconomyInvoiceService:
 
         # --- This invoice's lines: sequential, one POST at a time
         # (FR-8), all against the instance above. ---
+        # --- Engagement/task memo (user 2026-11-18): ONE jobtasks
+        # fetch per unique engagement of THIS invoice, shared by its
+        # lines; only definitive results (None = engagement missing /
+        # set = tasks) are cached — fetch errors are NOT cached so the
+        # next line retries. ---
+        engagement_tasks_memo: dict[str, set[str] | None] = {}
+
         attempted = 0
         for line_index, line_item in enumerate(line_items):
             try:
+                # --- Engagement presence gate (user 2026-11-18):
+                # Custom10/Engagement must exist in Maconomy (jobtasks
+                # data;jobnumber=... HTTP 204 => missing) or THIS line
+                # stops; the batch continues with the next line. ---
+                engagement = _line_value(line_item, "Custom10", "Engagement")
+                print("engagement:", engagement)
+                if engagement:
+                    memo_key = engagement.casefold()
+                    if memo_key not in engagement_tasks_memo:
+                        engagement_tasks_memo[memo_key] = (
+                            await self.get_engagement_tasks(
+                                client, reconnect_token, engagement
+                            )
+                        )
+                    print("engagement_tasks_memo:", engagement_tasks_memo)
+                    known_tasks = engagement_tasks_memo[memo_key]
+                    print("known_tasks:", known_tasks)
+                    if known_tasks is None:
+                        raise AllocationLineValidationError(
+                            f"Engagement {engagement} not found in "
+                            "Maconomy - allocation line creation stopped",
+                            "ENGAGEMENT_NOT_FOUND",
+                        )
+                    print("known_tasks:", known_tasks)
+                    # --- Task presence gate: Custom11/Task must be one
+                    # of the engagement's tasknames (casefolded). ---
+                    task = _line_value(line_item, "Custom11", "Task")
+                    if task and task.casefold() not in known_tasks:
+                        raise AllocationLineValidationError(
+                            f"Task {task} not found in Maconomy for "
+                            f"engagement {engagement} - allocation line "
+                            "creation stopped",
+                            "TASK_NOT_FOUND",
+                        )
+
+                # --- Department presence gate (user 2026-11-18): SAP
+                # Department must exist among Maconomy entities or this
+                # line stops with a FAILED entry; the batch continues
+                # with the next line. Empty Department still fails in
+                # the mapper's required check. ---
+                if entity_names is not None:
+                    # Same precedence as the mapper's resolution
+                    # (Department first, Custom2 fallback, both
+                    # stripped before the emptiness check).
+                    department = str(
+                        line_item.get("Department") or ""
+                    ).strip() or str(line_item.get("Custom2") or "").strip()
+                    if (
+                        department
+                        and department.casefold() not in entity_names
+                    ):
+                        raise AllocationLineValidationError(
+                            f"Department {department} not found in "
+                            "Maconomy - allocation line creation stopped",
+                            "DEPARTMENT_NOT_FOUND",
+                        )
+
                 row_payload = map_concur_invoice_line_to_allocation_row(
                     line_item,
                     journalnumber=journalnumber,
@@ -1064,14 +1501,19 @@ class MaconomyInvoiceService:
                     f"(invoice_id={invoice_id}, "
                     f"line_index={line_index}): {exc}"
                 )
-                lines.append(
-                    {
-                        "invoice_id": invoice_id,
-                        "line_index": line_index,
-                        "status": "FAILED",
-                        "message": str(exc),
-                    }
-                )
+                failed_entry: dict[str, Any] = {
+                    "invoice_id": invoice_id,
+                    "line_index": line_index,
+                    "status": "FAILED",
+                    "message": str(exc),
+                }
+                # Gate failures carry a machine-readable reason
+                # (user 2026-11-18) -> router copies it into the
+                # per-invoice log JSONB (one DB row per invoice).
+                reason = getattr(exc, "reason", None)
+                if isinstance(reason, str) and reason:
+                    failed_entry["reason"] = reason
+                lines.append(failed_entry)
             attempted += 1
 
         return lines
