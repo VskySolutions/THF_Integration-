@@ -8,9 +8,11 @@ successful items and per-item integration logs for every outcome.
 
 Flow: jobs/filter -> collect unique tasklists -> api_tasks/filter ->
 build_engagements_payload -> pre-check vs mapping -> (nothing new ->
-400) -> build_bulk_list_payload -> POST /list/v4/lists/{listid}/bulk ->
-write mapping + integration logs. The Concur bulk response
-(SUCCESS / PARTIAL_SUCCESS) is returned verbatim.
+400) -> build_bulk_list_payload -> create_engagements_and_tasks (splits
+the requests into <=250-item chunks for Concur's bulk limit and
+aggregates the chunk responses) -> write mapping + integration logs.
+The aggregated Concur bulk response (SUCCESS / PARTIAL_SUCCESS) is
+returned.
 """
 
 from __future__ import annotations

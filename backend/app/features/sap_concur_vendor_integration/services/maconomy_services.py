@@ -298,3 +298,75 @@ class MaconomyService:
             offset += limit
 
         return vendors
+
+    async def get_vendor_by_code(
+        self, vendor_code: str
+    ) -> dict[str, Any] | None:
+        """Look up ONE vendor in Maconomy by vendornumber.
+
+        Single ``vendorcard/filter`` POST with a ``restriction``
+        predicate (SQL-like ``field='value'`` syntax — same convention
+        as ``showvendorinvoices``/``jobs``/``customercard`` filters
+        elsewhere in this codebase). Returns the stripped
+        ``{"vendornumber", "name1"}`` dict, or None when Maconomy has
+        no vendor for the code. Quote escaping: ``'`` -> ``''``.
+        """
+        await self.authenticate()
+        url = f"{self._vendorcard_url()}/filter"
+        escaped_code = vendor_code.strip().replace("'", "''")
+        payload = {
+            "restriction": f"vendornumber='{escaped_code}'",
+            "fields": ["name1", "vendornumber"],
+            "limit": 1,
+            "offset": 0,
+        }
+        try:
+            response = await self.client.post(
+                url,
+                headers=self._container_headers(),
+                json=payload,
+            )
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise MaconomyServiceError(
+                "Maconomy vendor request failed"
+            ) from exc
+
+        try:
+            pane = response.json()["panes"]["filter"]
+            meta = pane["meta"]
+            records = pane["records"]
+        except (KeyError, TypeError, ValueError) as exc:
+            raise MaconomyServiceError(
+                "Invalid Maconomy vendor filter response"
+            ) from exc
+        if (
+            not isinstance(meta, dict)
+            or not isinstance(records, list)
+            or not all(isinstance(record, dict) for record in records)
+        ):
+            raise MaconomyServiceError(
+                "Invalid Maconomy vendor filter response"
+            )
+
+        row_count = meta.get("rowCount")
+        if (
+            isinstance(row_count, bool)
+            or not isinstance(row_count, int)
+            or row_count != len(records)
+        ):
+            raise MaconomyServiceError(
+                "Invalid Maconomy vendor filter response"
+            )
+
+        if not records:
+            return None
+        data = records[0].get("data")
+        if not isinstance(data, dict):
+            raise MaconomyServiceError(
+                "Invalid Maconomy vendor filter response"
+            )
+        return {
+            "vendornumber": str(data.get("vendornumber") or "").strip(),
+            "name1": str(data.get("name1") or "").strip(),
+        }
