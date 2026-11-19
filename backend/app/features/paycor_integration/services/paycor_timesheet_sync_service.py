@@ -50,10 +50,10 @@ class PaycorTimesheetSyncServiceError(ValueError):
     """Raised when a grouped synchronization cannot be built."""
 
 
-class NoApprovedTimesheetsError(
+class NoTransferredTimesheetsError(
     PaycorTimesheetSyncServiceError
 ):
-    """Raised when Maconomy returns no approved time."""
+    """Raised when Maconomy returns no transferred time."""
 
 
 class TimesheetReconciliationRequiredError(
@@ -93,15 +93,15 @@ class PaycorTimesheetSyncService:
 
         maconomy_records = await (
             self.maconomy_service
-            .get_approved_timesheet_lines(
+            .get_transferred_timesheet_lines(
                 period_start_from=start_date,
                 period_start_to=end_date,
             )
         )
 
         if not maconomy_records:
-            raise NoApprovedTimesheetsError(
-                "No approved Maconomy timesheets were "
+            raise NoTransferredTimesheetsError(
+                "No transferred-for-posting Maconomy timesheets were "
                 "found for the selected dates"
             )
 

@@ -10,6 +10,7 @@ US_COUNTRY_ALIASES = {
     "us",
     "usa",
     "united states",
+    "united states of america",
 }
 
 ADDRESS_FIELD_MAPPING = {
@@ -74,7 +75,8 @@ def _normalize_required_string(
 def map_paycor_primary_address(
     employee_data: dict[str, Any],
     *,
-    countries_by_alias: dict[str, str],
+    us_states_by_name: dict[str, str],
+    non_us_countries_by_alias: dict[str, str],
 ) -> dict[str, str]:
     """Map one matched Paycor Primary address to Maconomy fields."""
 
@@ -110,7 +112,11 @@ def map_paycor_primary_address(
             "Paycor Primary address country is required"
         )
 
-    if paycor_country.casefold() in US_COUNTRY_ALIASES:
+    normalized_paycor_country = " ".join(
+        paycor_country.split()
+    ).casefold()
+
+    if normalized_paycor_country in US_COUNTRY_ALIASES:
         resolved_country = _normalize_optional_string(
             primary_address.get("state")
         )
@@ -119,10 +125,12 @@ def map_paycor_primary_address(
             raise EmployeeAddressMappingError(
                 "Paycor Primary address state is required for a US address"
             )
+        country_lookup = us_states_by_name
     else:
         resolved_country = paycor_country
+        country_lookup = non_us_countries_by_alias
 
-    maconomy_country = countries_by_alias.get(
+    maconomy_country = country_lookup.get(
         " ".join(resolved_country.split()).casefold()
     )
 

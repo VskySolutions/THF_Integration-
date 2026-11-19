@@ -1,4 +1,4 @@
-"""Service for retrieving approved timesheets from Maconomy."""
+"""Service for retrieving transferred timesheets from Maconomy."""
 
 import asyncio
 import base64
@@ -30,7 +30,7 @@ CONTAINER_CONTENT_TYPE = (
 
 TIMESHEET_FIELDS = [
     # "activitynumber",
-    "approvedbysuperior",
+    "transferredforposting",
     "employeenumber",
     "instancekey",
     # "jobnumber",
@@ -67,7 +67,7 @@ class MaconomyTimesheetServiceError(Exception):
 
 
 class MaconomyTimesheetService:
-    """Retrieve approved timesheets from Maconomy."""
+    """Retrieve transferred-for-posting timesheets from Maconomy."""
 
     _cached_reconnect_token: str | None = None
     _token_expires_at: float = 0.0
@@ -109,13 +109,13 @@ class MaconomyTimesheetService:
             f"{shortname}/employees"
         )
 
-    async def get_approved_timesheet_lines(
+    async def get_transferred_timesheet_lines(
         self,
         *,
         period_start_from: date,
         period_start_to: date,
     ) -> list[dict[str, Any]]:
-        """Return approved Maconomy timesheet lines."""
+        """Return transferred-for-posting Maconomy timesheet lines."""
 
         if period_start_to < period_start_from:
             raise MaconomyTimesheetServiceError(
@@ -542,7 +542,7 @@ class MaconomyTimesheetService:
         period_start_to: date,
     ) -> list[dict[str, Any]]:
         restriction = (
-            self._build_approved_restriction(
+            self._build_transferred_for_posting_restriction(
                 period_start_from,
                 period_start_to,
             )
@@ -749,7 +749,7 @@ class MaconomyTimesheetService:
         )
 
     @staticmethod
-    def _build_approved_restriction(
+    def _build_transferred_for_posting_restriction(
         period_start_from: date,
         period_start_to: date,
     ) -> str:
@@ -770,7 +770,7 @@ class MaconomyTimesheetService:
         )
 
         return (
-            "approvedbysuperior "
+            "transferredforposting "
             f"and periodstart>={start_date} "
             f"and periodstart<={end_date}"
         )

@@ -33,6 +33,7 @@ from app.features.paycor_integration.services import (
     integration_log_service,
 )
 from app.features.paycor_integration.services.maconomy_employee_service import (
+    MaconomyCountryLookups,
     MaconomyEmployeeService,
     MaconomyEmployeeServiceError,
 )
@@ -177,7 +178,7 @@ class PaycorEmployeeSyncService:
         (
             entities_by_description,
             specification4_by_description,
-            countries_by_alias,
+            country_lookups,
             employee_types_by_description,
         ) = await (
             self._load_maconomy_employee_reference_lookups()
@@ -246,7 +247,7 @@ class PaycorEmployeeSyncService:
                 )
                 employee = self._apply_employee_address(
                     employee,
-                    countries_by_alias=countries_by_alias,
+                    country_lookups=country_lookups,
                     required=True,
                 )
                 employee = self._apply_employee_working_time(
@@ -333,7 +334,7 @@ class PaycorEmployeeSyncService:
         (
             entities_by_description,
             specification4_by_description,
-            countries_by_alias,
+            country_lookups,
             employee_types_by_description,
         ) = await (
             self._load_maconomy_employee_reference_lookups()
@@ -355,7 +356,7 @@ class PaycorEmployeeSyncService:
         try:
             employee = self._apply_employee_address(
                 employee,
-                countries_by_alias=countries_by_alias,
+                country_lookups=country_lookups,
                 required=True,
             )
         except EmployeeAddressMappingError as exc:
@@ -438,7 +439,7 @@ class PaycorEmployeeSyncService:
         (
             entities_by_description,
             specification4_by_description,
-            countries_by_alias,
+            country_lookups,
             employee_types_by_description,
         ) = await (
             self._load_maconomy_employee_reference_lookups()
@@ -459,7 +460,7 @@ class PaycorEmployeeSyncService:
         )
         employee = self._apply_employee_address(
             employee,
-            countries_by_alias=countries_by_alias,
+            country_lookups=country_lookups,
             required=False,
         )
         employee = self._apply_employee_working_time(
@@ -598,7 +599,7 @@ class PaycorEmployeeSyncService:
         (
             entities_by_description,
             specification4_by_description,
-            countries_by_alias,
+            country_lookups,
             employee_types_by_description,
         ) = await (
             self._load_maconomy_employee_reference_lookups()
@@ -717,7 +718,7 @@ class PaycorEmployeeSyncService:
                 )
                 employee = self._apply_employee_address(
                     employee,
-                    countries_by_alias=countries_by_alias,
+                    country_lookups=country_lookups,
                     required=False,
                 )
                 employee = self._apply_employee_working_time(
@@ -901,7 +902,7 @@ class PaycorEmployeeSyncService:
     def _apply_employee_address(
         employee: dict[str, Any],
         *,
-        countries_by_alias: dict[str, str],
+        country_lookups: MaconomyCountryLookups,
         required: bool,
     ) -> dict[str, Any]:
         resolved_employee = dict(employee)
@@ -910,7 +911,13 @@ class PaycorEmployeeSyncService:
             resolved_employee["maconomyAddress"] = (
                 map_paycor_primary_address(
                     employee,
-                    countries_by_alias=countries_by_alias,
+                    us_states_by_name=(
+                        country_lookups.us_states_by_name
+                    ),
+                    non_us_countries_by_alias=(
+                        country_lookups
+                        .non_us_countries_by_alias
+                    ),
                 )
             )
             resolved_employee.pop(

@@ -41,7 +41,7 @@ from app.features.paycor_integration.services.paycor_timesheet_service import (
     PaycorTimesheetServiceError,
 )
 from app.features.paycor_integration.services.paycor_timesheet_sync_service import (
-    NoApprovedTimesheetsError,
+    NoTransferredTimesheetsError,
     PaycorTimesheetSyncService,
     TimesheetReconciliationRequiredError,
 )
@@ -326,15 +326,15 @@ def _set_grouped_warning_header(
 
 
 @router.get(
-    "/approved",
+    "/transferred-for-posting",
     response_model=dict[str, Any],
 )
-async def get_approved_timesheet_lines(
+async def get_transferred_timesheet_lines(
     maconomy_service: MaconomyServiceDependency,
     start_date: date = Query(...),
     end_date: date = Query(...),
 ) -> dict[str, Any]:
-    """Retrieve approved Maconomy timesheets."""
+    """Retrieve transferred-for-posting Maconomy timesheets."""
 
     _validate_date_range(
         start_date,
@@ -344,7 +344,7 @@ async def get_approved_timesheet_lines(
     try:
         records = await (
             maconomy_service
-            .get_approved_timesheet_lines(
+            .get_transferred_timesheet_lines(
                 period_start_from=start_date,
                 period_start_to=end_date,
             )
@@ -352,7 +352,7 @@ async def get_approved_timesheet_lines(
 
     except MaconomyTimesheetServiceError as exc:
         LOGGER.exception(
-            "Approved Maconomy timesheet "
+            "Transferred-for-posting Maconomy timesheet "
             "retrieval failed: %s",
             exc,
         )
@@ -380,7 +380,7 @@ async def get_paygrid_payload(
     start_date: date = Query(...),
     end_date: date = Query(...),
 ) -> dict[str, Any]:
-    """Fetch approved timesheets and build a Paygrid payload."""
+    """Fetch transferred timesheets and build a Paygrid payload."""
 
     _validate_date_range(
         start_date,
@@ -396,7 +396,7 @@ async def get_paygrid_payload(
     try:
         maconomy_records = await (
             maconomy_service
-            .get_approved_timesheet_lines(
+            .get_transferred_timesheet_lines(
                 period_start_from=start_date,
                 period_start_to=end_date,
             )
@@ -406,7 +406,7 @@ async def get_paygrid_payload(
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=(
-                    "No approved Maconomy timesheets "
+                    "No transferred-for-posting Maconomy timesheets "
                     "were found for the selected dates"
                 ),
             )
@@ -652,7 +652,7 @@ async def sync_previous_week_to_paycor(
             )
         )
 
-    except NoApprovedTimesheetsError as exc:
+    except NoTransferredTimesheetsError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=str(exc),
@@ -738,7 +738,7 @@ async def sync_scheduled_timesheets_to_paycor(
             start_date=schedule.workweek_start,
             end_date=schedule.workweek_end,
         )
-    except NoApprovedTimesheetsError as exc:
+    except NoTransferredTimesheetsError as exc:
         await mark_schedule_failed(
             session,
             schedule_id=schedule_id,
@@ -855,7 +855,7 @@ async def retry_paygrid_by_date_range(
             )
         )
 
-    except NoApprovedTimesheetsError as exc:
+    except NoTransferredTimesheetsError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=str(exc),
