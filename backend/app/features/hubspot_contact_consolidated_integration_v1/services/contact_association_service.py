@@ -49,6 +49,7 @@ class ContactAssociationService:
         completed_emails: set[str] = set()
         already_present = 0
         added = 0
+        pair_results: list[dict[str, str]] = []
         recovery_result: dict[str, Any] = {
             "requested": 0,
             "confirmed_ids": {},
@@ -78,9 +79,15 @@ class ContactAssociationService:
             }
             errors.append(detail)
             logger.error(
-                "v1 Contact association failed: request_id=%s detail=%s",
+                "v1 Contact association failed: request_id=%s master=%s "
+                "company=%s stage=%s reason=%s upstream_status=%s category=%s",
                 request_id,
-                detail,
+                group.master_number,
+                company_number,
+                stage,
+                detail["reason"],
+                detail["upstream_status"],
+                detail["category"],
             )
 
         if not candidates:
@@ -88,6 +95,7 @@ class ContactAssociationService:
                 "groups_considered": 0,
                 "already_present": 0,
                 "added": 0,
+                "pair_results": pair_results,
                 "completed_emails": completed_emails,
                 "parent_company_recovery": recovery_result,
                 "errors": errors,
@@ -229,6 +237,11 @@ class ContactAssociationService:
             for company_number in sorted(group.parent_companies()):
                 if company_ids[company_number] in existing.get(contact_id, set()):
                     already_present += 1
+                    pair_results.append({
+                        "master_number": group.master_number,
+                        "company_number": company_number,
+                        "status": "already_present",
+                    })
                 else:
                     tasks.append((group, company_number))
         if tasks:
@@ -236,6 +249,14 @@ class ContactAssociationService:
                 *(add_missing(group, number) for group, number in tasks)
             )
             added = sum(results)
+            pair_results.extend(
+                {
+                    "master_number": group.master_number,
+                    "company_number": number,
+                    "status": "added" if succeeded else "failed",
+                }
+                for (group, number), succeeded in zip(tasks, results)
+            )
 
         completed_emails = {
             group.email
@@ -246,6 +267,7 @@ class ContactAssociationService:
             "groups_considered": len(candidates),
             "already_present": already_present,
             "added": added,
+            "pair_results": pair_results,
             "completed_emails": completed_emails,
             "parent_company_recovery": {
                 "requested": recovery_result["requested"],

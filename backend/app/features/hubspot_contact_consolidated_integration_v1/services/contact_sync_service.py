@@ -64,14 +64,13 @@ class ContactSyncService:
                     )
                 )
             except MaconomyError as exc:
-                logger.exception(
+                logger.error(
                     "v1 contacts of new customers lookup failed: request_id=%s "
-                    "stage=%s reason=%s upstream_status=%s upstream_message=%s",
+                    "stage=%s reason=%s upstream_status=%s",
                     request_id,
                     exc.stage,
                     exc.reason,
                     exc.upstream_status,
-                    exc.upstream_message,
                 )
                 errors.append({"stage": "new_customer_contacts_lookup", **_maconomy_error(exc)})
 
@@ -105,14 +104,13 @@ class ContactSyncService:
                 )
             except MaconomyError as exc:
                 back_query_failed = True
-                logger.exception(
+                logger.error(
                     "v1 master contact back-query failed: request_id=%s "
-                    "stage=%s reason=%s upstream_status=%s upstream_message=%s",
+                    "stage=%s reason=%s upstream_status=%s",
                     request_id,
                     exc.stage,
                     exc.reason,
                     exc.upstream_status,
-                    exc.upstream_message,
                 )
                 errors.append(_maconomy_error(exc))
 
@@ -151,17 +149,15 @@ class ContactSyncService:
             try:
                 upsert_result = await self.hubspot.upsert_contacts(payload["inputs"])
             except HubSpotError as exc:
-                logger.exception(
+                logger.error(
                     "v1 master Contact upsert failed: request_id=%s reason=%s "
-                    "upstream_status=%s batch=%s category=%s correlation_id=%s "
-                    "upstream_message=%s",
+                    "upstream_status=%s batch=%s category=%s correlation_id=%s",
                     request_id,
                     exc.reason,
                     exc.upstream_status,
                     exc.batch_number,
                     exc.category,
                     exc.correlation_id,
-                    exc.upstream_message,
                 )
                 errors.append(
                     {
@@ -245,17 +241,16 @@ class ContactSyncService:
                         stamped_numbers.add(member_number)
                 except MaconomyError as exc:
                     stamp_failed.add(member_number)
-                    logger.exception(
+                    logger.error(
                         "v1 Contact master stamp failed: request_id=%s "
                         "source_id=%s master=%s stage=%s reason=%s "
-                        "upstream_status=%s upstream_message=%s",
+                        "upstream_status=%s",
                         request_id,
                         member_number,
                         group.master_number,
                         exc.stage,
                         exc.reason,
                         exc.upstream_status,
-                        exc.upstream_message,
                     )
                     errors.append(
                         {
@@ -290,17 +285,16 @@ class ContactSyncService:
                         {**checkpoint, "master_number": group.master_number}
                     )
                 except MaconomyError as exc:
-                    logger.exception(
+                    logger.error(
                         "v1 Contact remark5 writeback failed: request_id=%s "
                         "source_id=%s master=%s stage=%s reason=%s "
-                        "upstream_status=%s upstream_message=%s",
+                        "upstream_status=%s",
                         request_id,
                         member_number,
                         group.master_number,
                         exc.stage,
                         exc.reason,
                         exc.upstream_status,
-                        exc.upstream_message,
                     )
                     errors.append(
                         {
@@ -330,21 +324,21 @@ class ContactSyncService:
             logger.warning(
                 "v1 Contact sync was partial: request_id=%s groups=%s "
                 "masters_requested=%s masters_confirmed=%s children_stamped=%s "
-                "checkpoints_written=%s "
-                "errors=%s skipped=%s batch_errors=%s",
+                "checkpoints_written=%s errors=%s skipped=%s batch_errors=%s",
                 request_id,
                 len(groups),
                 upsert_result["requested"],
                 len(confirmed_ids),
                 children_stamped,
                 len(checkpoints),
-                errors,
-                selected["skipped"],
-                upsert_result["batch_errors"],
+                len(errors),
+                len(selected["skipped"]),
+                len(upsert_result["batch_errors"]),
             )
 
         return {
             "groups": [group.summary() for group in groups],
+            "selected_contact_numbers": sorted(changed_numbers),
             "masters_requested": upsert_result["requested"],
             "masters_upserted": len(confirmed_ids),
             "master_contact_ids": confirmed_ids,

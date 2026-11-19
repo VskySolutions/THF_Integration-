@@ -1304,10 +1304,6 @@ async def integration_logs(
                 "csrf_token": ensure_csrf_token(request),
                 "integration": integration,
                 "run_logs": run_logs,
-                "retry_url": request.url_for(
-                    "retry_hubspot_consolidated_record",
-                    integration_id=integration.id,
-                ),
                 "status_badges": {
                     "SUCCESS": "text-bg-success",
                     "PARTIAL_SUCCESS": "text-bg-warning",

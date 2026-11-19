@@ -44,6 +44,7 @@ class ContactGroup:
             "email": self.email,
             "master_contact_person_number": self.master_number,
             "member_numbers": sorted(_number(item) for item in self.members),
+            "parent_customer_numbers": sorted(self.parent_companies()),
             "action": self.action,
             "error": self.error,
         }

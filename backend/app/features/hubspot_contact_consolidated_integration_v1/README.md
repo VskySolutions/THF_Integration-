@@ -32,8 +32,8 @@ For each confirmed HubSpot Company, v1 binds the Maconomy customer card, writes
 `customerremark26` to the bound `versionnumber + 1`, and reads the card back to
 verify the checkpoint. A version conflict is rebound and retried once.
 Writeback failures are reported per customer under `maconomy.writeback_errors`
-without stopping other confirmed customers. Database run logging is not yet
-implemented.
+without stopping other confirmed customers. Each v1 bulk execution writes a
+RUNNING row and final outcome to `hubspot_contact_consolidation_run_logs`.
 
 After the Company phase, the bulk route reads `/contactpersons/filter` using
 the same reconnect token. It selects contact persons with a company number and
@@ -70,3 +70,9 @@ failed request without credentials or token details.
 
 Company and contact routes still return 501. The scheduler retains the
 unversioned bulk path. The existing routes use `/hubspot-consolidated_v0`.
+
+The IT monitoring screen reads the shared run-log table. V1 log details contain
+Maconomy record numbers, phase counts, safe error codes and statuses, group
+member numbers, and Contact-to-Company pair outcomes. Names, email addresses,
+phone numbers, addresses, and upstream response messages are not stored in the
+run-log JSON. Record retry remains unavailable on the v1 monitoring screen.
