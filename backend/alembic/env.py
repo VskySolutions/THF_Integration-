@@ -28,6 +28,10 @@ from app.features.sap_concur_invoice_integration.models import (  # noqa: F401
     SAPConcurInvoiceMapping,
     SAPConcurInvoiceIntegrationLog,
 )
+from app.features.sap_concur_vendor_integration.models import (  # noqa: F401
+    SAPConcurVendorIntegrationLog,
+    SAPConcurVendorMapping,
+)
 
 config = context.config
 

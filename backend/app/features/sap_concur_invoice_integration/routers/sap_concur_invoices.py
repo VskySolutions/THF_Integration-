@@ -113,6 +113,68 @@ def _extract_allocation_line_number(result: Any) -> str | None:
     return None
 
 
+def _build_allocation_map(
+    invoice_lines: list[dict[str, Any]],
+    line_items: list[dict[str, Any]],
+    line_error: str | None = None,
+) -> dict[str, Any]:
+    """``allocation_lines_status`` payload for one invoice (user 2026-11-18).
+
+    Value semantics (plain-string contract, user-approved):
+    - SUCCESS line -> Maconomy allocation line number (``str | None``,
+      ``None`` when the response carried no extractable ``linenumber``);
+    - FAILED line  -> its ``message`` (any line-level exception: gate
+      failures, mapper required/unparseable errors, HTTP/Maconomy
+      errors) instead of the former ``null``;
+    - line items present but ZERO line entries (D-6 skip — no
+      ``journalnumber``) -> ``{"*": "allocation lines skipped: ..."}``
+      marker;
+    - no line items -> ``{}``.
+
+    Keys stay the SAP line id via ``_sap_line_id`` (``LineItemId`` ->
+    ``ID`` -> ``LineNumber`` -> index fallback).
+    """
+    if not invoice_lines:
+        if line_items:
+            reason = str(line_error or "").strip()
+            return {
+                "*": (
+                    f"allocation lines skipped: {reason}"
+                    if reason
+                    else "allocation lines skipped"
+                )
+            }
+        return {}
+
+    allocation_map: dict[str, Any] = {}
+    for line_entry in invoice_lines:
+        raw_index = line_entry.get("line_index")
+        try:
+            line_index: int | None = int(raw_index)
+        except (TypeError, ValueError):
+            line_index = None
+        line_item = (
+            line_items[line_index]
+            if line_index is not None
+            and 0 <= line_index < len(line_items)
+            else None
+        )
+        key = _sap_line_id(
+            line_item,
+            line_index if line_index is not None else len(allocation_map),
+        )
+        if line_entry.get("status") == "SUCCESS":
+            allocation_map[key] = _extract_allocation_line_number(
+                line_entry.get("result")
+            )
+        else:
+            allocation_map[key] = (
+                str(line_entry.get("message") or "").strip()
+                or "allocation line failed"
+            )
+    return allocation_map
+
+
 async def _save_integration_log(
     session: AsyncSession,
     *,
@@ -403,32 +465,13 @@ async def sync_sap_concur_invoices(
 
         mapping_id: uuid.UUID | None = None
         if invoice_entry.get("status") == "SUCCESS" and invoice_id:
-            # Allocation map {<sap line id>: <maconomy line number>}.
-            allocation_map: dict[str, Any] = {}
-            for line_entry in invoice_lines:
-                raw_index = line_entry.get("line_index")
-                try:
-                    line_index: int | None = int(raw_index)
-                except (TypeError, ValueError):
-                    line_index = None
-                line_item = (
-                    line_items[line_index]
-                    if line_index is not None
-                    and 0 <= line_index < len(line_items)
-                    else None
-                )
-                key = _sap_line_id(
-                    line_item,
-                    line_index
-                    if line_index is not None
-                    else len(allocation_map),
-                )
-                if line_entry.get("status") == "SUCCESS":
-                    allocation_map[key] = _extract_allocation_line_number(
-                        line_entry.get("result")
-                    )
-                else:
-                    allocation_map[key] = None
+            # Allocation map {<sap line id>: <maconomy line number>} for
+            # SUCCESS lines / {<sap line id>: <failure message>} for
+            # FAILED lines (user 2026-11-18: every line-level exception
+            # recorded in the JSONB), plus the D-6 skip marker.
+            allocation_map = _build_allocation_map(
+                invoice_lines, line_items, line_error
+            )
 
             raw_jln = invoice_entry.get("journallinenumber")
             try:
@@ -506,6 +549,20 @@ async def sync_sap_concur_invoices(
                 "row": invoice_entry,
                 "lines": invoice_lines,
                 "line_error": line_error,
+                # One DB row per invoice (user 2026-11-18): gate
+                # failures (ENGAGEMENT_NOT_FOUND / TASK_NOT_FOUND /
+                # DEPARTMENT_NOT_FOUND) surfaced in the JSONB so a
+                # query shows which invoice hit "eng/task does not
+                # exist" without opening every line entry.
+                "validation_failures": [
+                    {
+                        "line_index": entry.get("line_index"),
+                        "reason": entry.get("reason"),
+                        "message": entry.get("message"),
+                    }
+                    for entry in invoice_lines
+                    if entry.get("reason")
+                ],
             },
         )
 
