@@ -790,6 +790,132 @@ async def retry_sap_concur_expense_report(
 
 
 @router.post(
+    "/integrations/{integration_id}/retry-sap-concur-vendor",
+    name="retry_sap_concur_vendor",
+    include_in_schema=False,
+)
+async def retry_sap_concur_vendor(
+    integration_id: uuid.UUID,
+    request: Request,
+    current_user: AuthenticatedUser,
+    csrf_token: Annotated[str, Form(min_length=1)],
+    vendor_code: Annotated[str, Form(min_length=1, max_length=200)],
+    session: Annotated[AsyncSession, Depends(get_db)],
+) -> RedirectResponse:
+    """Manually retry one SAP Concur vendor synchronization."""
+    if not valid_csrf_token(request, csrf_token):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired form token.",
+        )
+
+    result = await session.execute(
+        select(IntegrationService).where(
+            IntegrationService.id == integration_id,
+            IntegrationService.identifier_unique_name
+            == IntegrationServiceIdentifier.MACONOMY_SAP_CONCUR_VENDOR_SYNC.value,
+            IntegrationService.is_deleted.is_(False),
+        )
+    )
+    integration = result.scalar_one_or_none()
+    if integration is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="SAP Concur vendor synchronization integration service not found.",
+        )
+
+    redirect = RedirectResponse(
+        request.url_for("integration_logs", integration_id=integration.id),
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+    normalized_vendor_code = vendor_code.strip()
+    if not normalized_vendor_code:
+        _set_flash(request, "Enter a valid SAP Concur vendor code.", "danger")
+        return redirect
+
+    settings = get_settings()
+    sync_path = (
+        f"{settings.api_v1_prefix.rstrip('/')}"
+        "/sap-concur-vendors/retry-vendor-sync"
+    )
+    activity_data = {
+        "vendor_code": normalized_vendor_code,
+        "integration_id": str(integration.id),
+    }
+    try:
+        async with httpx.AsyncClient(
+            base_url=settings.scheduler_api_url,
+            headers={
+                "X-API-KEY": settings.scheduler_api_key.get_secret_value(),
+                "X-Request-ID": str(request.state.request_id),
+                "Accept": "application/json",
+            },
+            timeout=httpx.Timeout(settings.scheduler_request_timeout_seconds),
+        ) as client:
+            response = await client.post(
+                sync_path,
+                json={"vendor_code": normalized_vendor_code},
+            )
+    except httpx.RequestError:
+        await log_activity(
+            session,
+            action="manual_retry",
+            user=current_user.username,
+            service=integration.identifier_unique_name,
+            data=activity_data,
+            status="FAILED",
+        )
+        _set_flash(
+            request,
+            "The SAP Concur integration API could not be reached. Please try again.",
+            "danger",
+        )
+        return redirect
+
+    payload_value = _json_response_value(response)
+    payload = payload_value if isinstance(payload_value, dict) else {}
+    if not response.is_success:
+        await log_activity(
+            session,
+            action="manual_retry",
+            user=current_user.username,
+            service=integration.identifier_unique_name,
+            data=activity_data,
+            status="FAILED",
+        )
+        _set_flash(
+            request,
+            _internal_api_error(payload, response.status_code),
+            "danger",
+        )
+        return redirect
+
+    retry_status = str(payload.get("status") or "FAILED").upper()
+    retry_message = str(
+        payload.get("message")
+        or f"SAP Concur vendor {normalized_vendor_code} retry completed."
+    )
+    activity_status = {
+        "SUCCESS": "SUCCESS",
+        "SKIPPED": "SUCCESS",
+    }.get(retry_status, "FAILED")
+    flash_category = {
+        "SUCCESS": "success",
+        "SKIPPED": "warning",
+    }.get(retry_status, "danger")
+    await log_activity(
+        session,
+        action="manual_retry",
+        user=current_user.username,
+        service=integration.identifier_unique_name,
+        data=activity_data,
+        status=activity_status,
+    )
+    _set_flash(request, retry_message, flash_category)
+    return redirect
+
+
+@router.post(
     "/integrations/{integration_id}/retry-hubspot-record",
     name="retry_hubspot_record",
     include_in_schema=False,

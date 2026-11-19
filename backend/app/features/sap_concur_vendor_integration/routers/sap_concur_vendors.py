@@ -15,8 +15,12 @@ from app.features.sap_concur_vendor_integration.models.integration_log import (
     VendorIntegrationAction,
     VendorIntegrationStatus,
 )
+from app.features.sap_concur_vendor_integration.schemas.sap_concur_vendors import (
+    RetryVendorSyncRequest,
+)
 from app.features.sap_concur_vendor_integration.services import (
     integration_log_service,
+    retry_vendor_sync_service,
     vendor_mapping_service,
 )
 from app.features.sap_concur_vendor_integration.services.maconomy_services import (
@@ -237,3 +241,20 @@ async def sync_vendors_sap_maconomy(session: DatabaseSession) -> dict[str, Any]:
                 )
 
     return {"vendors": vendor_results}
+
+
+@router.post("/retry-vendor-sync", response_model=dict[str, Any])
+async def retry_vendor_sync(
+    session: DatabaseSession,
+    request: RetryVendorSyncRequest,
+) -> dict[str, Any]:
+    """Retry-resume a single SAP Concur vendor into Maconomy."""
+    vendor_code = request.vendor_code.strip()
+    if not vendor_code:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="vendor_code is required",
+        )
+    return await retry_vendor_sync_service.retry_vendor_sync(
+        session, vendor_code=vendor_code
+    )

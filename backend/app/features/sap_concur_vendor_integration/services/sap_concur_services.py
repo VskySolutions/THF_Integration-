@@ -202,3 +202,74 @@ class SAPConcurVendorService:
             if isinstance(vendor, dict)
         ]
         return {"vendors": all_vendors}
+
+    async def get_vendor_by_code(
+        self, vendor_code: str
+    ) -> dict[str, Any] | None:
+        """Fetch one approved vendor from SAP Concur by its vendor code.
+
+        Returns the projected vendor dict, or None when Concur has no
+        approved vendor for the code. Mirrors ``get_approved_vendors``
+        response handling with the ``vendorCode`` query filter enabled.
+        """
+        url = (
+            f"{self.settings.sap_concur_api_base_url}"
+            "/api/v3.1/invoice/vendors"
+        )
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        }
+        params = {
+            "vendorCode": vendor_code.strip(),
+            "approved": "true",
+            "limit": 999,
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await self._request_with_auth(
+                    client,
+                    "GET",
+                    url,
+                    headers=headers,
+                    params=params,
+                )
+                response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise SAPConcurVendorServiceError(
+                "SAP Concur vendors request failed"
+            ) from exc
+
+        try:
+            payload = response.json()
+        except (TypeError, ValueError) as exc:
+            raise SAPConcurVendorServiceError(
+                "Invalid SAP Concur vendors response"
+            ) from exc
+        if not isinstance(payload, dict):
+            raise SAPConcurVendorServiceError(
+                "Invalid SAP Concur vendors response"
+            )
+
+        vendors = payload.get("Vendor")
+        if vendors is None:
+            return None
+        if isinstance(vendors, dict):
+            vendors = [vendors]
+        if not isinstance(vendors, list):
+            raise SAPConcurVendorServiceError(
+                "Invalid SAP Concur vendors response"
+            )
+        for vendor in vendors:
+            if not isinstance(vendor, dict):
+                continue
+            if (
+                str(vendor.get("VendorCode") or "").strip()
+                == vendor_code.strip()
+            ):
+                return {
+                    field: vendor.get(field)
+                    for field in self._VENDOR_FIELDS
+                }
+        return None
