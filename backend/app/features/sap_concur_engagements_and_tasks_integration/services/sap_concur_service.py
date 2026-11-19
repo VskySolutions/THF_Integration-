@@ -1,4 +1,9 @@
-"""Create SAP Concur engagement/task list items via the bulk list endpoint."""
+"""Create SAP Concur engagement/task list items via the bulk list endpoint.
+
+Concur validates the bulk ``requests`` array to 1-250 entries, so payloads
+above that limit are split into sequential chunks; the per-chunk responses
+are aggregated back into a single SUCCESS / PARTIAL_SUCCESS result.
+"""
 
 import asyncio
 import time
@@ -6,10 +11,17 @@ from typing import Any, ClassVar
 
 import httpx
 from app.core.config import Settings, get_settings
+from app.features.sap_concur_engagements_and_tasks_integration.constants import (
+    CONCUR_BULK_MAX_REQUESTS,
+)
 
 
 class SAPConcurEngagementTaskServiceError(Exception):
     pass
+
+
+_SUCCESS_STATUS = "SUCCESS"
+_PARTIAL_STATUS = "PARTIAL_SUCCESS"
 
 
 class SAPConcurEngagementTaskService:
@@ -177,8 +189,19 @@ class SAPConcurEngagementTaskService:
         """Bulk-create engagement (parent) and task (child) list items.
 
         ``payload`` is the mapper's output (``{"requests": [...]}``) and is
-        posted verbatim to ``/list/v4/lists/{listid}/bulk``. The Concur
-        response (SUCCESS / PARTIAL_SUCCESS) is returned as-is.
+        posted to ``/list/v4/lists/{listid}/bulk``. Concur validates the
+        ``requests`` array to 1-250 entries, so larger payloads are split
+        into sequential chunks of at most ``CONCUR_BULK_MAX_REQUESTS``.
+
+        A single chunk is posted once and its response is returned
+        verbatim (identical to the pre-chunking behaviour). Multiple
+        chunks are posted sequentially over one HTTP client and their
+        outcomes are aggregated into a single result: ``SUCCESS`` only
+        when every chunk succeeded with ``SUCCESS``, otherwise
+        ``PARTIAL_SUCCESS`` carrying the merged per-item ``errors``
+        (Concur's own errors plus synthesized entries for items in
+        failed chunks). Only when every chunk fails does this raise
+        ``SAPConcurEngagementTaskServiceError``.
         """
         list_id = (self.settings.sap_engagement_list_id or "").strip()
         if not list_id:
@@ -202,17 +225,83 @@ class SAPConcurEngagementTaskService:
             "Content-Type": "application/json",
             "Accept-Language": "en",
         }
-        print("Payload:", payload)
-        try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await self._request_with_auth(
-                    client,
-                    "POST",
-                    url,
-                    headers=headers,
-                    json=payload,
+
+        chunks = [
+            requests[index : index + CONCUR_BULK_MAX_REQUESTS]
+            for index in range(0, len(requests), CONCUR_BULK_MAX_REQUESTS)
+        ]
+
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            if len(chunks) == 1:
+                result = await self._post_bulk_chunk(
+                    client, url, chunks[0], headers
                 )
-                response.raise_for_status()
+                print(
+                    f"Concur bulk chunk 1/1 ({len(chunks[0])} requests): "
+                    f"{result.get('status')}"
+                )
+                return result
+
+            good: list[dict[str, Any]] = []
+            bad: list[tuple[list[dict[str, Any]], str]] = []
+            for index, chunk in enumerate(chunks, start=1):
+                try:
+                    result = await self._post_bulk_chunk(
+                        client, url, chunk, headers
+                    )
+                except SAPConcurEngagementTaskServiceError as exc:
+                    # Keep going: the remaining chunks are independent and
+                    # are still worth attempting (items are retried on the
+                    # next run via the mapping table).
+                    print(
+                        f"Concur bulk chunk {index}/{len(chunks)} "
+                        f"({len(chunk)} requests) failed: {exc}"
+                    )
+                    bad.append((chunk, str(exc)))
+                    continue
+                status = str(result.get("status") or "")
+                print(
+                    f"Concur bulk chunk {index}/{len(chunks)} "
+                    f"({len(chunk)} requests): {status or 'UNKNOWN'}"
+                )
+                if status in (_SUCCESS_STATUS, _PARTIAL_STATUS):
+                    good.append(result)
+                else:
+                    bad.append(
+                        (
+                            chunk,
+                            f"bulk request status {status or 'UNKNOWN'}",
+                        )
+                    )
+
+        return self._aggregate_chunk_results(good, bad, len(chunks))
+
+    async def _post_bulk_chunk(
+        self,
+        client: httpx.AsyncClient,
+        url: str,
+        chunk: list[dict[str, Any]],
+        headers: dict[str, str],
+    ) -> dict[str, Any]:
+        """POST one <=250-item chunk to the Concur bulk endpoint."""
+        try:
+            response = await self._request_with_auth(
+                client,
+                "POST",
+                url,
+                headers=headers,
+                json={"requests": chunk},
+            )
+            print(
+                f"Concur bulk list response: {response.status_code} "
+                f"{response.text}"
+            )
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise SAPConcurEngagementTaskServiceError(
+                "SAP Concur bulk list request failed: "
+                f"{exc.response.status_code} {exc.response.text[:500]}"
+            ) from exc
         except httpx.HTTPError as exc:
             raise SAPConcurEngagementTaskServiceError(
                 "SAP Concur bulk list request failed"
@@ -231,3 +320,61 @@ class SAPConcurEngagementTaskService:
             )
 
         return result
+
+    @staticmethod
+    def _aggregate_chunk_results(
+        good: list[dict[str, Any]],
+        bad: list[tuple[list[dict[str, Any]], str]],
+        chunk_count: int,
+    ) -> dict[str, Any]:
+        """Merge per-chunk outcomes into one Concur-shaped result.
+
+        ``good`` holds parsed chunk bodies whose status is SUCCESS or
+        PARTIAL_SUCCESS; ``bad`` holds (chunk requests, reason) pairs for
+        chunks that failed at HTTP/parse level or returned an unexpected
+        status. Items of ``bad`` chunks become synthesized error entries
+        (Concur's ``listItem`` shape) so the router attributes FAILED
+        logs to exactly those engagements/tasks.
+        """
+        if not good:
+            reasons = "; ".join(
+                dict.fromkeys(reason for _, reason in bad)
+            )
+            raise SAPConcurEngagementTaskServiceError(
+                f"All {chunk_count} SAP Concur bulk chunks failed: {reasons}"
+            )
+
+        errors: list[dict[str, Any]] = []
+        for result in good:
+            for error in result.get("errors") or []:
+                if isinstance(error, dict):
+                    errors.append(error)
+
+        for chunk, reason in bad:
+            for item in chunk:
+                if not isinstance(item, dict):
+                    continue
+                short_code = str(item.get("shortCode") or "").strip()
+                if not short_code:
+                    continue
+                list_item: dict[str, str] = {"shortCode": short_code}
+                parent_code = str(item.get("parentCode") or "").strip()
+                if parent_code:
+                    list_item["parentCode"] = parent_code
+                errors.append(
+                    {
+                        "id": "chunk.failed",
+                        "message": reason,
+                        "listItem": list_item,
+                    }
+                )
+
+        partial = bool(bad) or any(
+            str(result.get("status") or "") != _SUCCESS_STATUS
+            for result in good
+        )
+        return {
+            "status": _PARTIAL_STATUS if partial else _SUCCESS_STATUS,
+            "errors": errors,
+            "chunk_count": chunk_count,
+        }
