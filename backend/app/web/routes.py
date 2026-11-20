@@ -500,7 +500,7 @@ async def retry_paycor_timesheets(
     end_date: Annotated[str, Form(min_length=10, max_length=10)],
     session: Annotated[AsyncSession, Depends(get_db)],
 ) -> RedirectResponse:
-    """Manually retry one Maconomy timesheet source week."""
+    """Manually retry complete Maconomy timesheet source weeks."""
 
     if not valid_csrf_token(request, csrf_token):
         raise HTTPException(
@@ -551,15 +551,21 @@ async def retry_paycor_timesheets(
         )
         return redirect
 
-    if (
+    inclusive_days = (
         parsed_end_date - parsed_start_date
-        != timedelta(days=6)
+    ).days + 1
+
+    if (
+        parsed_end_date < parsed_start_date
+        or inclusive_days % 7 != 0
+        or inclusive_days > 21
         or parsed_start_date.weekday() != 0
         or parsed_end_date.weekday() != 6
     ):
         _set_flash(
             request,
-            "Select one complete Monday-through-Sunday week.",
+            "Select one to three complete "
+            "Monday-through-Sunday weeks.",
             "danger",
         )
         return redirect

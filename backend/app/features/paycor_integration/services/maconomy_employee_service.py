@@ -3,7 +3,7 @@
 import asyncio
 import base64
 import uuid
-from typing import Any
+from typing import Any, NamedTuple
 from urllib.parse import quote
 from datetime import datetime,timezone
 
@@ -111,6 +111,12 @@ EMPLOYEE_REVISION_TABLE_FIELDS = (
     "fixedworkingtimesunday",
 )
 
+
+class MaconomyCountryLookups(NamedTuple):
+    us_states_by_name: dict[str, str]
+    non_us_countries_by_alias: dict[str, str]
+
+
 EMPLOYEE_FILTER_PAGE_SIZE = 1000
 
 
@@ -159,7 +165,7 @@ class MaconomyEmployeeService:
     ) -> tuple[
         dict[str, str],
         dict[str, str],
-        dict[str, str],
+        MaconomyCountryLookups,
         dict[str, str],
     ]:
         """Return employee reference lookups."""
@@ -177,7 +183,7 @@ class MaconomyEmployeeService:
                 (
                     entities_by_description,
                     specification4_by_description,
-                    countries_by_alias,
+                    country_lookups,
                     employee_types_by_description,
                 ) = await asyncio.gather(
                     self._get_reference_lookup(
@@ -205,7 +211,7 @@ class MaconomyEmployeeService:
                 return (
                     entities_by_description,
                     specification4_by_description,
-                    countries_by_alias,
+                    country_lookups,
                     employee_types_by_description,
                 )
 
@@ -971,8 +977,8 @@ class MaconomyEmployeeService:
         self,
         client: httpx.AsyncClient,
         reconnect_token: str,
-    ) -> dict[str, str]:
-        """Return unambiguous Country aliases mapped to canonical names."""
+    ) -> MaconomyCountryLookups:
+        """Return separate US-state and non-US Country lookups."""
 
         shortname = quote(
             self.settings.maconomy_shortname,
@@ -986,8 +992,10 @@ class MaconomyEmployeeService:
         headers = self._container_headers(reconnect_token)
         page_size = 1000
         offset = 0
-        aliases: dict[str, str] = {}
-        ambiguous_aliases: set[str] = set()
+        us_states_by_name: dict[str, str] = {}
+        ambiguous_us_state_names: set[str] = set()
+        non_us_countries_by_alias: dict[str, str] = {}
+        ambiguous_non_us_aliases: set[str] = set()
 
         for _ in range(self.max_filter_pages):
             response = await client.post(
@@ -1064,9 +1072,37 @@ class MaconomyEmployeeService:
                 if not canonical_name:
                     continue
 
+                iso_code = self._normalize_lookup_value(
+                    data.get("isocode")
+                )
+
+                if (
+                    iso_code is not None
+                    and iso_code.casefold() == "us"
+                ):
+                    alias = (
+                        " ".join(canonical_name.split()).casefold()
+                    )
+
+                    if alias in ambiguous_us_state_names:
+                        continue
+
+                    existing_name = us_states_by_name.get(alias)
+
+                    if (
+                        existing_name is not None
+                        and existing_name != canonical_name
+                    ):
+                        us_states_by_name.pop(alias, None)
+                        ambiguous_us_state_names.add(alias)
+                        continue
+
+                    us_states_by_name[alias] = canonical_name
+                    continue
+
                 for alias_value in (
                     canonical_name,
-                    data.get("isocode"),
+                    iso_code,
                     data.get("countrycode"),
                     data.get("eucountrycode"),
                 ):
@@ -1076,20 +1112,25 @@ class MaconomyEmployeeService:
                         else ""
                     )
 
-                    if not alias or alias in ambiguous_aliases:
+                    if (
+                        not alias
+                        or alias in ambiguous_non_us_aliases
+                    ):
                         continue
 
-                    existing_name = aliases.get(alias)
+                    existing_name = non_us_countries_by_alias.get(
+                        alias
+                    )
 
                     if (
                         existing_name is not None
                         and existing_name != canonical_name
                     ):
-                        aliases.pop(alias, None)
-                        ambiguous_aliases.add(alias)
+                        non_us_countries_by_alias.pop(alias, None)
+                        ambiguous_non_us_aliases.add(alias)
                         continue
 
-                    aliases[alias] = canonical_name
+                    non_us_countries_by_alias[alias] = canonical_name
 
             offset = row_offset + row_count
 
@@ -1100,12 +1141,20 @@ class MaconomyEmployeeService:
                 "Maconomy countries filter exceeded the maximum page limit"
             )
 
-        if not aliases:
+        if (
+            not us_states_by_name
+            and not non_us_countries_by_alias
+        ):
             raise MaconomyEmployeeServiceError(
                 "Maconomy Countries master data returned no usable values"
             )
 
-        return aliases
+        return MaconomyCountryLookups(
+            us_states_by_name=us_states_by_name,
+            non_us_countries_by_alias=(
+                non_us_countries_by_alias
+            ),
+        )
 
     async def _start_employee_creation(
         self,

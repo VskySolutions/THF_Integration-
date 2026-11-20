@@ -9,7 +9,7 @@ from datetime import (
     timedelta,
 )
 from typing import Annotated, Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -29,6 +29,7 @@ from app.features.auth.dependencies import (
     require_api_key,
 )
 from app.features.paycor_integration.mappers.timesheet_mapper import (
+    assign_employee_paygroups,
     map_maconomy_timesheets,
     map_timesheets_to_paycor,
 )
@@ -41,7 +42,7 @@ from app.features.paycor_integration.services.paycor_timesheet_service import (
     PaycorTimesheetServiceError,
 )
 from app.features.paycor_integration.services.paycor_timesheet_sync_service import (
-    NoApprovedTimesheetsError,
+    NoTransferredTimesheetsError,
     PaycorTimesheetSyncService,
     TimesheetReconciliationRequiredError,
 )
@@ -50,6 +51,13 @@ from app.features.paycor_integration.services.timesheet_integration_log_service 
 )
 from app.features.paycor_integration.services.timesheet_calculation_service import (
     calculate_all_weekly_earnings,
+)
+from app.features.paycor_integration.services.timesheet_schedule_service import (
+    TimesheetScheduleNotDueError,
+    TimesheetScheduleNotFoundError,
+    claim_due_schedule,
+    mark_schedule_completed,
+    mark_schedule_failed,
 )
 
 
@@ -106,23 +114,28 @@ def _validate_date_range(
         )
 
 
-def _validate_week_date_range(
+def _validate_complete_week_date_range(
     start_date: date,
     end_date: date,
 ) -> None:
-    """Validate one complete Monday-through-Sunday week."""
+    """Validate one to three complete Monday-through-Sunday weeks."""
 
     _validate_date_range(
         start_date,
         end_date,
     )
 
-    if end_date - start_date != timedelta(days=6):
+    inclusive_days = (end_date - start_date).days + 1
+
+    if (
+        inclusive_days % 7 != 0
+        or inclusive_days > 21
+    ):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
-                "The date range must contain exactly "
-                "seven days"
+                "The date range must contain one to three "
+                "complete weeks"
             ),
         )
 
@@ -215,6 +228,8 @@ def _set_warning_header(
     temporary_mappings: set[
         tuple[str, str]
     ],
+    excluded_salary_exempt_employees: set[str] | None = None,
+    skipped_employees: set[str] | None = None,
 ) -> None:
     """Add one combined processing-warning header."""
 
@@ -251,6 +266,24 @@ def _set_warning_header(
             f"applied: {mappings}"
         )
 
+    if excluded_salary_exempt_employees:
+        employee_numbers = ", ".join(
+            sorted(excluded_salary_exempt_employees)
+        )
+        warnings.append(
+            "Salary Exempt employees excluded: "
+            f"{employee_numbers}"
+        )
+
+    if skipped_employees:
+        employee_numbers = ", ".join(
+            sorted(skipped_employees)
+        )
+        warnings.append(
+            "Employees skipped because their Paycor pay group "
+            f"is unavailable: {employee_numbers}"
+        )
+
     if warnings:
         warning_message = "; ".join(warnings)
 
@@ -279,6 +312,19 @@ def _set_grouped_warning_header(
         )
         if isinstance(mapping, dict)
     }
+    skipped_employees = {
+        str(employee.get("employeeNumber") or "").strip()
+        for employee in warnings.get(
+            "skippedEmployees",
+            [],
+        )
+        if (
+            isinstance(employee, dict)
+            and str(
+                employee.get("employeeNumber") or ""
+            ).strip()
+        )
+    }
 
     _set_warning_header(
         response=response,
@@ -294,19 +340,26 @@ def _set_grouped_warning_header(
         temporary_mappings=(
             temporary_mappings
         ),
+        excluded_salary_exempt_employees=set(
+            warnings.get(
+                "excludedSalaryExemptEmployees",
+                [],
+            )
+        ),
+        skipped_employees=skipped_employees,
     )
 
 
 @router.get(
-    "/approved",
+    "/transferred-for-posting",
     response_model=dict[str, Any],
 )
-async def get_approved_timesheet_lines(
+async def get_transferred_timesheet_lines(
     maconomy_service: MaconomyServiceDependency,
     start_date: date = Query(...),
     end_date: date = Query(...),
 ) -> dict[str, Any]:
-    """Retrieve approved Maconomy timesheets."""
+    """Retrieve transferred-for-posting Maconomy timesheets."""
 
     _validate_date_range(
         start_date,
@@ -316,7 +369,7 @@ async def get_approved_timesheet_lines(
     try:
         records = await (
             maconomy_service
-            .get_approved_timesheet_lines(
+            .get_transferred_timesheet_lines(
                 period_start_from=start_date,
                 period_start_to=end_date,
             )
@@ -324,7 +377,7 @@ async def get_approved_timesheet_lines(
 
     except MaconomyTimesheetServiceError as exc:
         LOGGER.exception(
-            "Approved Maconomy timesheet "
+            "Transferred-for-posting Maconomy timesheet "
             "retrieval failed: %s",
             exc,
         )
@@ -352,7 +405,7 @@ async def get_paygrid_payload(
     start_date: date = Query(...),
     end_date: date = Query(...),
 ) -> dict[str, Any]:
-    """Fetch approved timesheets and build a Paygrid payload."""
+    """Fetch transferred timesheets and build a Paygrid payload."""
 
     _validate_date_range(
         start_date,
@@ -368,7 +421,7 @@ async def get_paygrid_payload(
     try:
         maconomy_records = await (
             maconomy_service
-            .get_approved_timesheet_lines(
+            .get_transferred_timesheet_lines(
                 period_start_from=start_date,
                 period_start_to=end_date,
             )
@@ -378,7 +431,7 @@ async def get_paygrid_payload(
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=(
-                    "No approved Maconomy timesheets "
+                    "No transferred-for-posting Maconomy timesheets "
                     "were found for the selected dates"
                 ),
             )
@@ -434,11 +487,15 @@ async def get_paygrid_payload(
                 ),
             )
 
+        excluded_salary_exempt_employees: set[str] = set()
         calculated_entries = (
             calculate_all_weekly_earnings(
                 daily_entries,
                 employee_classifications_by_number=(
                     employee_classifications_by_number
+                ),
+                excluded_salary_exempt_employee_numbers=(
+                    excluded_salary_exempt_employees
                 ),
             )
         )
@@ -452,7 +509,7 @@ async def get_paygrid_payload(
             earning_codes,
         )
 
-        if not calculated_entries:
+        if not calculated_entries and skipped_earnings:
             earnings = (
                 ", ".join(
                     sorted(skipped_earnings)
@@ -468,6 +525,32 @@ async def get_paygrid_payload(
                     "No calculated timesheet entries "
                     "remain after Paycor earning "
                     f"validation: {earnings}"
+                ),
+            )
+
+        (
+            calculated_entries,
+            skipped_paygroup_employees,
+        ) = assign_employee_paygroups(
+            calculated_entries,
+            paygroup_by_employee=paygroup_by_employee,
+        )
+
+        if (
+            skipped_paygroup_employees
+            and not calculated_entries
+        ):
+            employees = ", ".join(
+                sorted(skipped_paygroup_employees)
+            )
+            raise HTTPException(
+                status_code=(
+                    status.HTTP_422_UNPROCESSABLE_ENTITY
+                ),
+                detail=(
+                    "No timesheet entries remain after excluding "
+                    "employees without Paycor pay groups: "
+                    f"{employees}"
                 ),
             )
 
@@ -488,6 +571,12 @@ async def get_paygrid_payload(
             ),
             temporary_mappings=(
                 temporary_mappings
+            ),
+            excluded_salary_exempt_employees=(
+                excluded_salary_exempt_employees
+            ),
+            skipped_employees=(
+                skipped_paygroup_employees
             ),
         )
 
@@ -544,6 +633,14 @@ async def submit_paycor_paygrid(
         start_date=start_date,
         end_date=end_date,
     )
+
+    if not payload.get("importEmployees"):
+        return {
+            "status": "SKIPPED",
+            "message": (
+                "No timesheet hours require submission to Paycor"
+            ),
+        }
 
     try:
         return await (
@@ -609,7 +706,7 @@ async def sync_previous_week_to_paycor(
             )
         )
 
-    except NoApprovedTimesheetsError as exc:
+    except NoTransferredTimesheetsError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=str(exc),
@@ -652,6 +749,135 @@ async def sync_previous_week_to_paycor(
 
 
 @router.post(
+    "/sync/scheduled/{schedule_id}",
+    response_model=dict[str, Any],
+)
+async def sync_scheduled_timesheets_to_paycor(
+    schedule_id: UUID,
+    response: Response,
+    maconomy_service: MaconomyServiceDependency,
+    session: DatabaseSession,
+) -> dict[str, Any]:
+    """Submit the workweeks assigned to one database schedule."""
+
+    current_eastern_date = datetime.now(
+        ZoneInfo("America/New_York")
+    ).date()
+
+    try:
+        schedule = await claim_due_schedule(
+            session,
+            schedule_id=schedule_id,
+            current_eastern_date=current_eastern_date,
+        )
+    except TimesheetScheduleNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    except TimesheetScheduleNotDueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+
+    sync_service = PaycorTimesheetSyncService(
+        maconomy_service=maconomy_service,
+        paycor_service=PaycorTimesheetService(),
+    )
+
+    try:
+        result = await sync_service.submit_new_groups(
+            session,
+            start_date=schedule.workweek_start,
+            end_date=schedule.workweek_end,
+        )
+    except NoTransferredTimesheetsError as exc:
+        await mark_schedule_failed(
+            session,
+            schedule_id=schedule_id,
+            error=str(exc),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    except (
+        TimesheetReconciliationRequiredError,
+        TimesheetSubmissionBlockedError,
+    ) as exc:
+        await mark_schedule_failed(
+            session,
+            schedule_id=schedule_id,
+            error=str(exc),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+    except (
+        MaconomyTimesheetServiceError,
+        PaycorTimesheetServiceError,
+    ) as exc:
+        await mark_schedule_failed(
+            session,
+            schedule_id=schedule_id,
+            error=str(exc),
+        )
+        LOGGER.exception(
+            "Scheduled Paycor timesheet synchronization failed: %s",
+            exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(exc),
+        ) from exc
+    except ValueError as exc:
+        await mark_schedule_failed(
+            session,
+            schedule_id=schedule_id,
+            error=str(exc),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    except Exception as exc:
+        await mark_schedule_failed(
+            session,
+            schedule_id=schedule_id,
+            error=str(exc),
+        )
+        LOGGER.exception(
+            "Unexpected scheduled Paycor timesheet failure: %s",
+            exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Scheduled Paycor timesheet synchronization failed",
+        ) from exc
+
+    await mark_schedule_completed(
+        session,
+        schedule_id=schedule_id,
+    )
+    _set_grouped_warning_header(
+        response=response,
+        warnings=result["warnings"],
+    )
+    return {
+        "scheduleId": str(schedule_id),
+        "importFromMaconomyDate": (
+            schedule.import_from_maconomy_date.isoformat()
+        ),
+        "workweekStart": schedule.workweek_start.isoformat(),
+        "workweekEnd": schedule.workweek_end.isoformat(),
+        "status": "COMPLETED",
+        "sync": result,
+    }
+
+
+@router.post(
     "/paygrid-by-daterange",
     response_model=dict[str, Any],
 )
@@ -662,9 +888,9 @@ async def retry_paygrid_by_date_range(
     start_date: date = Query(...),
     end_date: date = Query(...),
 ) -> dict[str, Any]:
-    """Append or replace grouped batches for one source week."""
+    """Append or replace grouped batches for complete source weeks."""
 
-    _validate_week_date_range(
+    _validate_complete_week_date_range(
         start_date,
         end_date,
     )
@@ -683,7 +909,7 @@ async def retry_paygrid_by_date_range(
             )
         )
 
-    except NoApprovedTimesheetsError as exc:
+    except NoTransferredTimesheetsError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=str(exc),

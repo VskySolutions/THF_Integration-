@@ -50,10 +50,10 @@ class PaycorTimesheetSyncServiceError(ValueError):
     """Raised when a grouped synchronization cannot be built."""
 
 
-class NoApprovedTimesheetsError(
+class NoTransferredTimesheetsError(
     PaycorTimesheetSyncServiceError
 ):
-    """Raised when Maconomy returns no approved time."""
+    """Raised when Maconomy returns no transferred time."""
 
 
 class TimesheetReconciliationRequiredError(
@@ -93,15 +93,15 @@ class PaycorTimesheetSyncService:
 
         maconomy_records = await (
             self.maconomy_service
-            .get_approved_timesheet_lines(
+            .get_transferred_timesheet_lines(
                 period_start_from=start_date,
                 period_start_to=end_date,
             )
         )
 
         if not maconomy_records:
-            raise NoApprovedTimesheetsError(
-                "No approved Maconomy timesheets were "
+            raise NoTransferredTimesheetsError(
+                "No transferred-for-posting Maconomy timesheets were "
                 "found for the selected dates"
             )
 
@@ -147,11 +147,15 @@ class PaycorTimesheetSyncService:
                 f"Skipped tasks: {tasks}"
             )
 
+        excluded_salary_exempt_employees: set[str] = set()
         calculated_entries = (
             calculate_all_weekly_earnings(
                 daily_entries,
                 employee_classifications_by_number=(
                     employee_classifications_by_number
+                ),
+                excluded_salary_exempt_employee_numbers=(
+                    excluded_salary_exempt_employees
                 ),
             )
         )
@@ -165,7 +169,26 @@ class PaycorTimesheetSyncService:
             earning_codes,
         )
 
-        if not calculated_entries:
+        warnings = {
+            "skippedTasks": skipped_tasks,
+            "skippedEarnings": sorted(
+                skipped_earnings
+            ),
+            "temporaryMappings": [
+                {
+                    "source": source,
+                    "target": target,
+                }
+                for source, target in sorted(
+                    temporary_mappings
+                )
+            ],
+            "excludedSalaryExemptEmployees": sorted(
+                excluded_salary_exempt_employees
+            ),
+        }
+
+        if not calculated_entries and skipped_earnings:
             earnings = (
                 ", ".join(
                     sorted(skipped_earnings)
@@ -178,7 +201,19 @@ class PaycorTimesheetSyncService:
                 f"validation: {earnings}"
             )
 
-        calculated_entries = (
+        if not calculated_entries:
+            return {
+                "periodStartFrom": start_date.isoformat(),
+                "periodStartTo": end_date.isoformat(),
+                "batchCount": 0,
+                "batches": [],
+                "warnings": warnings,
+            }
+
+        (
+            calculated_entries,
+            skipped_paygroup_employees,
+        ) = (
             assign_employee_paygroups(
                 calculated_entries,
                 paygroup_by_employee=(
@@ -186,6 +221,26 @@ class PaycorTimesheetSyncService:
                 ),
             )
         )
+
+        warnings["skippedEmployees"] = [
+            {
+                "employeeNumber": employee_number,
+                "reason": "Paycor pay group unavailable",
+            }
+            for employee_number in sorted(
+                skipped_paygroup_employees
+            )
+        ]
+
+        if not calculated_entries:
+            employees = ", ".join(
+                sorted(skipped_paygroup_employees)
+            )
+            raise PaycorTimesheetSyncServiceError(
+                "No timesheet entries remain after excluding "
+                "employees without Paycor pay groups: "
+                f"{employees or '<none>'}"
+            )
 
         date_worked_values = [
             entry["dateWorked"]
@@ -300,21 +355,7 @@ class PaycorTimesheetSyncService:
             "periodStartTo": end_date.isoformat(),
             "batchCount": len(batches),
             "batches": batches,
-            "warnings": {
-                "skippedTasks": skipped_tasks,
-                "skippedEarnings": sorted(
-                    skipped_earnings
-                ),
-                "temporaryMappings": [
-                    {
-                        "source": source,
-                        "target": target,
-                    }
-                    for source, target in sorted(
-                        temporary_mappings
-                    )
-                ],
-            },
+            "warnings": warnings,
         }
 
     async def submit_new_groups(

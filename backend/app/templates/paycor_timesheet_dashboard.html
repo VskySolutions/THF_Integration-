@@ -231,12 +231,12 @@
               action="{{ url_for('retry_paycor_timesheets', integration_id=integration.id) }}"
               id="timesheetRetryForm">
             <div class="modal-header">
-                <h2 class="modal-title fs-5" id="timesheetRetryModalLabel">Retry Paycor timesheet week</h2>
+                <h2 class="modal-title fs-5" id="timesheetRetryModalLabel">Retry Paycor timesheet range</h2>
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
             <div class="modal-body">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <p class="text-secondary small">Select one complete Monday-through-Sunday source week.</p>
+                <p class="text-secondary small">Select one to three complete Monday-through-Sunday source weeks.</p>
                 <label for="timesheetStartDate" class="form-label">Start date (Monday)</label>
                 <input type="date" class="form-control mb-3" id="timesheetStartDate" name="start_date" required>
                 <label for="timesheetEndDate" class="form-label">End date (Sunday)</label>

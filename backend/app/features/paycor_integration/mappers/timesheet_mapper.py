@@ -348,12 +348,13 @@ def assign_employee_paygroups(
     ],
     *,
     paygroup_by_employee: dict[str, str],
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], set[str]]:
     """Add the employee's Paycor pay group to each entry."""
 
     resolved_entries: list[
         dict[str, Any]
     ] = []
+    skipped_employees: set[str] = set()
 
     for entry in calculated_entries:
         employee_number = str(
@@ -373,11 +374,8 @@ def assign_employee_paygroups(
             )
 
         if pay_group_id is None:
-            raise TimesheetMappingError(
-                "Paycor pay group is unavailable "
-                "for employee number "
-                f"{employee_number}"
-            )
+            skipped_employees.add(employee_number)
+            continue
 
         resolved_entries.append(
             {
@@ -387,7 +385,7 @@ def assign_employee_paygroups(
             }
         )
 
-    return resolved_entries
+    return resolved_entries, skipped_employees
 
 
 def assign_pay_periods(
