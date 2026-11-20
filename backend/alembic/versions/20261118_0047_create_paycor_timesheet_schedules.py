@@ -1,7 +1,7 @@
 """Create and seed Paycor timesheet schedules.
 
 Revision ID: 20261118_0047
-Revises: 20261112_0043
+Revises: 20261118_0046
 Create Date: 2026-11-18
 """
 
@@ -16,7 +16,7 @@ from alembic import op
 
 
 revision: str = "20261118_0047"
-down_revision: str | None = "20261112_0043"
+down_revision: str | None = "20261118_0046"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
