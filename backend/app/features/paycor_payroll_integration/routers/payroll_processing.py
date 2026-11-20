@@ -8,6 +8,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import Settings, get_settings
 from app.db.session import get_db
 from app.features.auth.dependencies import require_api_key
+from app.features.integration_services.constants import IntegrationServiceIdentifier
+from app.features.integration_services.dependencies import (
+    require_active_integration_service,
+)
 from app.features.paycor_payroll_integration.constants import (
     DEFAULT_COMPANY_NUMBER,
     DEFAULT_LEGAL_ENTITY_ID,
@@ -255,18 +259,23 @@ async def create_journal_for_planner(
             legal_entity_id=legal_entity_id
         )
 
-        grouped = group_gl_records_by_department(records)
+        grouped = group_gl_records_by_department(
+            records=records,
+            work_location_map=work_location_lookup,
+            employee_id_map=emp_lookup,
+        )
 
         journals_created: list[dict[str, Any]] = []
         department_errors: list[dict[str, Any]] = []
 
-        for dept_name, dept_records in grouped.items():
+        for (dept_name, loc_name), dept_records in grouped.items():
+            dept_label = f"{dept_name} - {loc_name}"
             resolved_entity = resolve_entity_code(dept_name)
             mapping_record, _ = await create_pending_mapping(
                 session=db,
                 legal_entity_id=legal_entity_id,
                 planner_id=planner_id,
-                department=dept_name,
+                department=dept_label,
                 entity_code=resolved_entity,
                 lines_count=len(dept_records),
                 run_type=run_type,
@@ -281,6 +290,7 @@ async def create_journal_for_planner(
                     transaction_date=transaction_date,
                     description=description,
                     department_description=dept_name,
+                    work_location=loc_name,
                 )
 
                 raw_mapped_lines = [
@@ -304,7 +314,7 @@ async def create_journal_for_planner(
                 if not validation["should_create"]:
                     LOGGER.info(
                         "Skipping Maconomy journal creation for department '%s' in planner %s: %s",
-                        dept_name,
+                        dept_label,
                         planner_id,
                         validation["skip_reason"],
                     )
@@ -315,11 +325,11 @@ async def create_journal_for_planner(
                         action=IntegrationAction.CREATE,
                         message=validation["skip_reason"],
                         paycor_planner_id=planner_id,
-                        department=dept_name,
+                        department=dept_label,
                         journal_mapping_log=mapping_record,
                     )
                     journals_created.append({
-                        "department": dept_name,
+                        "department": dept_label,
                         "status": "SKIPPED",
                         "message": validation["skip_reason"],
                         "linesCount": 0,
@@ -349,12 +359,12 @@ async def create_journal_for_planner(
                     action=IntegrationAction.CREATE,
                     message=f"Created Maconomy journal {mac_journal_number}",
                     paycor_planner_id=planner_id,
-                    department=dept_name,
+                    department=dept_label,
                     journal_mapping_log=mapping_record,
                 )
 
                 journals_created.append({
-                    "department": dept_name,
+                    "department": dept_label,
                     "status": "SUCCESS",
                     "linesCount": validation["lines_count"],
                     "maconomy": creation_result,
@@ -362,7 +372,7 @@ async def create_journal_for_planner(
             except Exception as dept_err:
                 LOGGER.error(
                     "Failed to create journal for department '%s' in planner %s: %s",
-                    dept_name,
+                    dept_label,
                     planner_id,
                     dept_err,
                 )
@@ -373,11 +383,11 @@ async def create_journal_for_planner(
                     action=IntegrationAction.CREATE,
                     message=str(dept_err),
                     paycor_planner_id=planner_id,
-                    department=dept_name,
+                    department=dept_label,
                     journal_mapping_log=mapping_record,
                 )
                 department_errors.append({
-                    "department": dept_name,
+                    "department": dept_label,
                     "error": str(dept_err),
                 })
 
@@ -402,6 +412,13 @@ async def create_journal_for_planner(
 
 @router.post(
     "/sync-payroll-to-maconomy",
+    dependencies=[
+        Depends(
+            require_active_integration_service(
+                IntegrationServiceIdentifier.PAYCOR_PAYROLL_JOURNAL_SYNC
+            )
+        )
+    ],
     response_model=dict[str, Any],
     summary="Sync all Paycor payroll payruns into department-wise Maconomy General Journals",
 )
@@ -499,18 +516,23 @@ async def sync_payroll_to_maconomy(
                     })
                     continue
 
-                grouped = group_gl_records_by_department(gl_records)
+                grouped = group_gl_records_by_department(
+                    records=gl_records,
+                    work_location_map=work_location_lookup,
+                    employee_id_map=emp_lookup,
+                )
 
                 dept_journals: list[dict[str, Any]] = []
                 dept_errors: list[dict[str, Any]] = []
 
-                for dept_name, dept_records in grouped.items():
+                for (dept_name, loc_name), dept_records in grouped.items():
+                    dept_label = f"{dept_name} - {loc_name}"
                     resolved_entity = resolve_entity_code(dept_name)
                     mapping_record, _ = await create_pending_mapping(
                         session=db,
                         legal_entity_id=legal_entity_id,
                         planner_id=planner_id,
-                        department=dept_name,
+                        department=dept_label,
                         entity_code=resolved_entity,
                         lines_count=len(dept_records),
                         run_type=run_type,
@@ -523,6 +545,7 @@ async def sync_payroll_to_maconomy(
                             run_type=run_type,
                             company_number=company_number,
                             department_description=dept_name,
+                            work_location=loc_name,
                         )
                         raw_mapped_lines = [
                             map_paycor_gl_record_to_maconomy_line(
@@ -545,7 +568,7 @@ async def sync_payroll_to_maconomy(
                         if not validation["should_create"]:
                             LOGGER.info(
                                 "Skipping Maconomy journal creation for department '%s' in planner %s: %s",
-                                dept_name,
+                                dept_label,
                                 planner_id,
                                 validation["skip_reason"],
                             )
@@ -556,11 +579,11 @@ async def sync_payroll_to_maconomy(
                                 action=IntegrationAction.CREATE,
                                 message=validation["skip_reason"],
                                 paycor_planner_id=planner_id,
-                                department=dept_name,
+                                department=dept_label,
                                 journal_mapping_log=mapping_record,
                             )
                             dept_journals.append({
-                                "department": dept_name,
+                                "department": dept_label,
                                 "status": "SKIPPED",
                                 "message": validation["skip_reason"],
                                 "linesCount": 0,
@@ -589,12 +612,12 @@ async def sync_payroll_to_maconomy(
                             action=IntegrationAction.CREATE,
                             message=f"Created Maconomy journal {mac_journal_number}",
                             paycor_planner_id=planner_id,
-                            department=dept_name,
+                            department=dept_label,
                             journal_mapping_log=mapping_record,
                         )
 
                         dept_journals.append({
-                            "department": dept_name,
+                            "department": dept_label,
                             "status": "SUCCESS",
                             "linesCount": validation["lines_count"],
                             "maconomy": creation_res,
@@ -602,7 +625,7 @@ async def sync_payroll_to_maconomy(
                     except Exception as dept_err:
                         LOGGER.error(
                             "Failed to create journal for department '%s' in planner %s: %s",
-                            dept_name,
+                            dept_label,
                             planner_id,
                             dept_err,
                         )
@@ -613,11 +636,11 @@ async def sync_payroll_to_maconomy(
                             action=IntegrationAction.CREATE,
                             message=str(dept_err),
                             paycor_planner_id=planner_id,
-                            department=dept_name,
+                            department=dept_label,
                             journal_mapping_log=mapping_record,
                         )
                         dept_errors.append({
-                            "department": dept_name,
+                            "department": dept_label,
                             "error": str(dept_err),
                         })
 

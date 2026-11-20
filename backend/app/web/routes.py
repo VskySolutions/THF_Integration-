@@ -659,6 +659,153 @@ async def retry_paycor_timesheets(
 
 
 @router.post(
+    "/integrations/{integration_id}/retry-paycor-payroll",
+    name="retry_paycor_payroll",
+    include_in_schema=False,
+)
+async def retry_paycor_payroll(
+    integration_id: uuid.UUID,
+    request: Request,
+    current_user: AuthenticatedUser,
+    csrf_token: Annotated[str, Form(min_length=1)],
+    from_check_date: Annotated[str, Form(min_length=10, max_length=10)],
+    to_check_date: Annotated[str | None, Form()] = None,
+    session: AsyncSession = Depends(get_db),
+) -> RedirectResponse:
+    """Manually sync/retry Paycor payroll payruns for a specific check date range."""
+    if not valid_csrf_token(request, csrf_token):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired form token.",
+        )
+
+    result = await session.execute(
+        select(IntegrationService).where(
+            IntegrationService.id == integration_id,
+            IntegrationService.identifier_unique_name
+            == IntegrationServiceIdentifier.PAYCOR_PAYROLL_JOURNAL_SYNC.value,
+            IntegrationService.is_deleted.is_(False),
+        )
+    )
+    integration = result.scalar_one_or_none()
+
+    if integration is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Paycor payroll synchronization integration service not found.",
+        )
+
+    redirect = RedirectResponse(
+        request.url_for(
+            "integration_logs",
+            integration_id=integration.id,
+        ),
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+    try:
+        parsed_from_date = date.fromisoformat(from_check_date.strip())
+        parsed_to_date = (
+            date.fromisoformat(to_check_date.strip())
+            if to_check_date and to_check_date.strip()
+            else None
+        )
+    except ValueError:
+        _set_flash(
+            request,
+            "Enter valid check dates in YYYY-MM-DD format.",
+            "danger",
+        )
+        return redirect
+
+    if parsed_to_date and parsed_to_date < parsed_from_date:
+        _set_flash(
+            request,
+            "To check date cannot be earlier than From check date.",
+            "danger",
+        )
+        return redirect
+
+    settings = get_settings()
+    sync_path = f"{settings.api_v1_prefix.rstrip('/')}/paycor/payroll/sync-payroll-to-maconomy"
+    
+    formatted_from = f"{parsed_from_date.isoformat()}T00:00:00"
+    params: dict[str, Any] = {"fromCheckDate": formatted_from}
+    if parsed_to_date:
+        params["toCheckDate"] = f"{parsed_to_date.isoformat()}T23:59:59"
+
+    activity_data = {
+        "from_check_date": formatted_from,
+        "to_check_date": params.get("toCheckDate"),
+        "integration_id": str(integration.id),
+    }
+
+    try:
+        async with httpx.AsyncClient(
+            base_url=settings.scheduler_api_url,
+            headers={
+                "X-API-KEY": settings.scheduler_api_key.get_secret_value(),
+                "X-Request-ID": str(request.state.request_id),
+                "Accept": "*/*",
+            },
+            timeout=httpx.Timeout(settings.scheduler_request_timeout_seconds),
+        ) as client:
+            response = await client.post(sync_path, params=params)
+    except httpx.RequestError:
+        await log_activity(
+            session,
+            action="manual_retry",
+            user=current_user.username,
+            service=integration.identifier_unique_name,
+            data=activity_data,
+            status="FAILED",
+        )
+        _set_flash(
+            request,
+            "The Paycor payroll integration API could not be reached. Please try again.",
+            "danger",
+        )
+        return redirect
+
+    payload_value = _json_response_value(response)
+    payload = payload_value if isinstance(payload_value, dict) else {}
+
+    if not response.is_success:
+        await log_activity(
+            session,
+            action="manual_retry",
+            user=current_user.username,
+            service=integration.identifier_unique_name,
+            data=activity_data,
+            status="FAILED",
+        )
+        _set_flash(
+            request,
+            _internal_api_error(payload, response.status_code),
+            "danger",
+        )
+        return redirect
+
+    await log_activity(
+        session,
+        action="manual_retry",
+        user=current_user.username,
+        service=integration.identifier_unique_name,
+        data=activity_data,
+        status="SUCCESS",
+    )
+    
+    created_count = payload.get("journalsCreatedCount", 0) or len(payload.get("journalsCreated", []))
+    _set_flash(
+        request,
+        f"Paycor payroll sync completed successfully from {parsed_from_date.isoformat()}."
+        + (f" Created {created_count} journal(s)." if created_count else ""),
+        "success",
+    )
+    return redirect
+
+
+@router.post(
     "/integrations/{integration_id}/retry-sap-concur-expense-report",
     name="retry_sap_concur_expense_report",
     include_in_schema=False,

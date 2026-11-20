@@ -10,6 +10,7 @@ from app.features.paycor_payroll_integration.constants import (
     DEFAULT_TRANSACTION_TYPE,
     DEFAULT_TYPE_OF_ENTRY,
     DEPARTMENT_ENTITY_CODE_MAP,
+    LOCATION_NAME_TO_SHORTFORM,
 )
 
 
@@ -59,12 +60,61 @@ def format_iso_datetime(value: str | datetime | None = None) -> str:
     return str_val
 
 
+def extract_work_location(
+    record: dict[str, Any],
+    work_location_map: dict[str, str] | None = None,
+    employee_id_map: dict[str, str] | None = None,
+) -> str:
+    """Extract and resolve the work location shortform code for a Paycor GL record.
+    Falls back to '-' (LOCATION_NAME_TO_SHORTFORM['Default']) if unresolved.
+    """
+    default_loc = LOCATION_NAME_TO_SHORTFORM.get("Default", "-")
+    if not work_location_map:
+        return default_loc
+
+    # 1. Try departmentId/departmentID lookup
+    dept_id = (
+        record.get("departmentId")
+        or record.get("departmentID")
+        or record.get("department_id")
+        or record.get("department")
+        or record.get("id")
+    )
+    if dept_id:
+        loc = work_location_map.get(str(dept_id).strip())
+        if loc:
+            return loc
+
+    # 2. Try employeeNumber lookup
+    emp_number = record.get("employeeNumber") or ""
+    if not emp_number and employee_id_map:
+        emp_id = (
+            record.get("employeeId")
+            or record.get("employeeID")
+            or record.get("id")
+        )
+        if emp_id:
+            emp_number = employee_id_map.get(str(emp_id).strip(), "")
+
+    str_emp_number = str(emp_number).strip() if emp_number else ""
+    if str_emp_number:
+        loc = work_location_map.get(str_emp_number)
+        if loc:
+            return loc
+
+    return default_loc
+
+
 def group_gl_records_by_department(
     records: list[dict[str, Any]],
-) -> dict[str, list[dict[str, Any]]]:
-    """Group Paycor GL records by departmentDescription."""
-    grouped: dict[str, list[dict[str, Any]]] = {}
-    unassigned: list[dict[str, Any]] = []
+    work_location_map: dict[str, str] | None = None,
+    employee_id_map: dict[str, str] | None = None,
+) -> dict[tuple[str, str], list[dict[str, Any]]]:
+    """Group Paycor GL records by (departmentDescription, workLocation).
+    Returns a dict with tuple key: (department_name, work_location_shortform).
+    """
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    default_loc = LOCATION_NAME_TO_SHORTFORM.get("Default", "-")
 
     for record in records:
         dept = (
@@ -72,14 +122,15 @@ def group_gl_records_by_department(
             or record.get("department_description")
             or record.get("department")
         )
-        if not dept or not str(dept).strip():
-            unassigned.append(record)
-        else:
-            dept_key = str(dept).strip()
-            grouped.setdefault(dept_key, []).append(record)
+        dept_key = str(dept).strip() if dept and str(dept).strip() else "UNASSIGNED"
+        loc_key = extract_work_location(
+            record=record,
+            work_location_map=work_location_map,
+            employee_id_map=employee_id_map,
+        ) or default_loc
 
-    if unassigned:
-        grouped["UNASSIGNED"] = unassigned
+        composite_key = (dept_key, loc_key)
+        grouped.setdefault(composite_key, []).append(record)
 
     return grouped
 
@@ -92,13 +143,22 @@ def map_paycor_gl_to_maconomy_card(
     transaction_date: str | None = None,
     description: str | None = None,
     department_description: str | None = None,
+    work_location: str | None = None,
 ) -> dict[str, Any]:
     """Map Paycor payroll run details to Maconomy General Journal card header."""
-    dept_label = department_description or ""
-    desc = (
-        description
-        or f"Automated SYNC from paycor - {run_type or 'Payrun'} ({group_id or planner_id}) [{dept_label}]"
-    )
+    dept_label = (department_description or "").strip()
+    loc_label = (work_location or LOCATION_NAME_TO_SHORTFORM.get("Default", "-")).strip()
+    
+    # Header remark1 displays exact: "TAX - Chicago" (or "TAX - -")
+    if description:
+        desc = description
+    elif dept_label and loc_label:
+        desc = f"{dept_label} - {loc_label}"
+    elif dept_label:
+        desc = dept_label
+    else:
+        desc = f"Paycor Sync - {planner_id}"
+
     date_val = transaction_date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     return {
@@ -185,20 +245,11 @@ def map_paycor_gl_record_to_maconomy_line(
 
     str_emp_number = str(employee_number).strip() if employee_number else ""
 
-    work_location = ""
-    if work_location_map:
-        dept_id = (
-            record.get("departmentId")
-            or record.get("departmentID")
-            or record.get("department_id")
-            or record.get("department")
-            or record.get("id")
-        )
-        if dept_id:
-            work_location = work_location_map.get(str(dept_id).strip(), "")
-
-        if not work_location and str_emp_number:
-            work_location = work_location_map.get(str_emp_number, "")
+    work_location = extract_work_location(
+        record=record,
+        work_location_map=work_location_map,
+        employee_id_map=employee_id_map,
+    )
 
     return {
         "accountnumber": account_number,
