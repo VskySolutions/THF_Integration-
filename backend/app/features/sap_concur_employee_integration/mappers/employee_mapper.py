@@ -263,9 +263,10 @@ def _build_enterprise_extension(
         extension["department"] = department
 
     # Spec 4 is Executing office / Assigned Location (e.g., Lakeland, Panama City, Tallahassee, Tampa, Dade City)
-    location = _clean_str(employee.get("specification4name"))
-    if location is not None:
-        extension["location"] = location
+    # Note: SAP Concur SCIM schema does NOT support 'location' under enterprise extension (rejects with 400 Unsupported attribute)
+    # location = _clean_str(employee.get("specification4name"))
+    # if location is not None:
+    #     extension["location"] = location
 
     start_date = _format_scim_datetime(employee.get("dateemployed"))
     if start_date is not None:
@@ -585,8 +586,8 @@ def map_maconomy_employee_to_scim_patch(
         })
         operations.append({
             "op": "replace",
-            "path": f"{TRAVEL_USER_SCHEMA}:manager.employeeNumber",
-            "value": manager,
+            "path": f"{TRAVEL_USER_SCHEMA}:manager",
+            "value": {"employeeNumber": manager},
         })
 
     return {

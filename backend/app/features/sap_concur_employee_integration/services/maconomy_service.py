@@ -53,8 +53,8 @@ EMPLOYEE_FIELDS = [
     "changeddate",
     "versionnumber",
 ]
-FILTER_LIMIT = 100
-MAX_PAGES = 100
+FILTER_LIMIT = 2000
+MAX_PAGES = 1
 
 
 class MaconomyEmployeeServiceError(Exception):
@@ -151,10 +151,15 @@ class MaconomyEmployeeService:
         offset: int,
     ) -> list[dict[str, Any]]:
         """Fetch one page of employees from the showemployeeshr container."""
-        # Filter employees updated within the last 2 days
-        days_ago = (date.today() - timedelta(days=2)).strftime("%Y-%m-%d")
+        # Fetch employees changed today or yesterday only (days=1 → yesterday's date)
+        # Deltek Maconomy MQL requires date(YYYY,MM,DD) format with commas
+        yesterday = date.today() - timedelta(days=1)
+        date_filter = f"date({yesterday.year},{yesterday.month},{yesterday.day})"
         payload = {
-            "restriction": f"(DateEmployed le currentDate() and (DateEndEmployment gt currentDate() or DateEndEmployment = date(nulldate))) and (changeddate >= date({days_ago}))",
+            "restriction": (
+                "(DateEmployed le currentDate() and (DateEndEmployment gt currentDate() "
+                f"or DateEndEmployment = date(nulldate))) and (changeddate >= {date_filter})"
+            ),
             "fields": EMPLOYEE_FIELDS,
             "limit": FILTER_LIMIT,
             "offset": offset,

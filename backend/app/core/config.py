@@ -102,6 +102,7 @@ class Settings(BaseSettings):
     sap_concur_client_id: SecretStr
     sap_concur_client_secret: SecretStr
     sap_concur_refresh_token: SecretStr
+    sap_concur_company_id: str = "f7255b65-38e0-458f-ab3d-40856e011c0b"
     # List id of the SAP Concur list holding engagements (parents) and
     # tasks (children) for the bulk list endpoint; blank until the env
     # var is configured (manual step).
