@@ -101,18 +101,18 @@ class SchedulerService:
                 coalesce=True,
                 misfire_grace_time=60,
             )
-        scheduler.add_job(
-            self._run_sap_concur_employee_sync,
-            trigger="interval",
-            minutes=self._settings.scheduler_sap_concur_employee_interval_minutes,
-            args=[client],
-            id=SAP_CONCUR_EMPLOYEE_SYNC_JOB_ID,
-            name="Maconomy to SAP Concur 5-minute employee delta sync",
-            replace_existing=True,
-            max_instances=1,
-            coalesce=True,
-            misfire_grace_time=60,
-        )
+        # scheduler.add_job(
+        #     self._run_sap_concur_employee_sync,
+        #     trigger="interval",
+        #     minutes=self._settings.scheduler_sap_concur_employee_interval_minutes,
+        #     args=[client],
+        #     id=SAP_CONCUR_EMPLOYEE_SYNC_JOB_ID,
+        #     name="Maconomy to SAP Concur 5-minute employee delta sync",
+        #     replace_existing=True,
+        #     max_instances=1,
+        #     coalesce=True,
+        #     misfire_grace_time=60,
+        # )
 
         scheduler.add_job(
             self._run_sap_concur_vendor_invoice_sync,
@@ -187,6 +187,6 @@ class SchedulerService:
         async with self._integration_lock:
             await run_hubspot_contact_consolidated_sync(client)
 
-    async def _run_sap_concur_employee_sync(self, client: httpx.AsyncClient) -> None:
-        async with self._integration_lock:
-            await run_maconomy_concur_employee_sync(client)
+    # async def _run_sap_concur_employee_sync(self, client: httpx.AsyncClient) -> None:
+    #     async with self._integration_lock:
+    #         await run_maconomy_concur_employee_sync(client)

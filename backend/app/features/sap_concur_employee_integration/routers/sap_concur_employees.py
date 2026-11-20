@@ -11,6 +11,10 @@ from app.features.sap_concur_employee_integration.services import (
     SAPConcurEmployeeUpdateService,
 )
 
+from app.features.integration_services import (
+    IntegrationServiceIdentifier,
+    require_active_integration_service,
+)
 router = APIRouter(
     prefix="/sap-concur-employees",
     tags=["sap-concur-employee-integration"],
@@ -18,7 +22,18 @@ router = APIRouter(
 )
 
 
-@router.post("/sync", response_model=list[dict[str, Any]])
+@router.post(
+    "/sync", 
+    response_model=list[dict[str, Any]],
+    dependencies=[
+        Depends(
+            require_active_integration_service(
+                IntegrationServiceIdentifier
+                .PAYCOR_SYNC_EMPLOYEES
+            )
+        )
+    ]
+)
 async def sync_maconomy_employees_with_sap_concur() -> list[dict[str, Any]]:
     """Retrieve all active employees from Maconomy for SAP Concur creation."""
     try:
@@ -35,7 +50,18 @@ async def sync_maconomy_employees_with_sap_concur() -> list[dict[str, Any]]:
         ) from exc
 
 
-@router.post("/sync-cycle", response_model=dict[str, Any])
+@router.post(
+    "/sync-cycle", 
+    response_model=dict[str, Any],
+    dependencies=[
+        Depends(
+            require_active_integration_service(
+                IntegrationServiceIdentifier
+                .PAYCOR_SYNC_EMPLOYEES
+            )
+        )
+    ]
+)
 async def run_employee_sync_cycle(
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
