@@ -34,8 +34,8 @@ def get_location_code(department_name: str) -> str:
         Maconomy department code (e.g., "ADM", "AUD") or default code "-" if not found
     """
     if not department_name:
-        return DEFAULT_DEPARTMENT_CODE
-    return DEPARTMENT_CODE_MAPPING.get(department_name, DEFAULT_DEPARTMENT_CODE)
+        return DEFAULT_LOCATION_CODE
+    return LOCATION_CODE_MAPPING.get(department_name, DEFAULT_LOCATION_CODE)
 
 
 def get_department_code(location_name: str) -> str:

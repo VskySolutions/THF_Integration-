@@ -349,7 +349,7 @@ class MaconomyService:
         ) -> tuple[str, str]:
             url = f"{self._expense_sheet_url()}/instances"
 
-            payload = {"panes":{"card":{"fields":["description","employeenumber","expensesheettext5","expensesheettext1","jobnumber"]},"table":{"fields":[]}}}
+            payload = {"panes":{"card":{"fields":["description","employeenumber","expensesheettext5","expensesheettext1","jobnumber","currency"]},"table":{"fields":[]}}}
 
             print("======= _retrieve_expense_sheet_instance ==========")
             response = await client.post(
