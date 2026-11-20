@@ -97,8 +97,8 @@
                         id="openHubspotRetryButton"
                         data-bs-toggle="modal" data-bs-target="#hubspotRetryModal"
                         data-dashboard-tooltip data-bs-placement="top"
-                        data-bs-title="Retry one Customer or Contact Person"
-                        aria-label="Retry one Customer or Contact Person">
+                        data-bs-title="Retry one Customer, its Contacts, and Company links"
+                        aria-label="Retry one Customer and its Contact Persons">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true"><path d="M8.5 1.5v3a1 1 0 0 0 1 1h3v8a1 1 0 0 1-1 1h-7a1 1 0 0 1-1-1v-12a1 1 0 0 1 1-1h3zm.121-1H4.5a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h7a2 2 0 0 0 2-2V5.379a2 2 0 0 0-.586-1.414l-2.879-2.879A2 2 0 0 0 8.621.5"/><path fill-rule="evenodd" d="M8 12a.5.5 0 0 0 .5-.5V7.707l1.146 1.147a.5.5 0 0 0 .708-.708l-2-2a.5.5 0 0 0-.708 0l-2 2a.5.5 0 1 0 .708.708L7.5 7.707V11.5a.5.5 0 0 0 .5.5"/></svg>
                 </button>
             </div>
@@ -164,9 +164,9 @@
             <div class="table-responsive">
                 <table id="hubspotRunHistoryTable" class="table table-hover align-middle w-100">
                     <thead><tr>
-                        <th>Started (UTC)</th><th>Status</th><th>Operation</th><th>Trigger</th>
-                        <th>Customers</th><th>Contacts</th><th>Associations</th>
-                        <th>Writebacks</th><th>Skipped</th><th>Failed</th>
+                        <th>Started (UTC)</th><th>Completed (UTC)</th><th>Status</th><th>Operation</th><th>Trigger</th>
+                        <th>Companies</th><th>Contacts</th><th>Links added</th>
+                        <th>Checkpoints</th><th>Skipped</th><th>Failed</th>
                         <th>Record status</th>
                         <th data-orderable="false">Details</th>
                     </tr></thead>
@@ -182,6 +182,9 @@
                         <td class="text-nowrap" data-order="{{ run.started_on_utc.isoformat() }}">
                             {{ run.started_on_utc.strftime('%d %b %Y, %H:%M:%S') }}
                             <div class="small text-secondary">{{ (run.request_id | string)[:8] }}&hellip;</div>
+                        </td>
+                        <td class="text-nowrap">
+                            {% if run.completed_on_utc %}{{ run.completed_on_utc.strftime('%d %b %Y, %H:%M:%S') }}{% else %}&mdash;{% endif %}
                         </td>
                         <td><span class="badge {{ status_badges.get(run.status, 'text-bg-secondary') }}">
                             {{ run.status | replace('_', ' ') | title }}
@@ -247,7 +250,7 @@
 <template id="hubspotRunDetails-{{ run.request_id }}">
     <div class="row g-2 mb-4" aria-label="Run outcome summary">
         <div class="col-4"><div class="run-detail-summary h-100">
-            <div class="run-detail-summary-label">Customers</div>
+            <div class="run-detail-summary-label">Companies</div>
             <div class="run-detail-summary-value">{{ run.customers_succeeded }}/{{ run.customers_discovered }}</div>
         </div></div>
         <div class="col-4"><div class="run-detail-summary h-100">
@@ -264,6 +267,15 @@
         <div class="col-md-4"><div class="small text-secondary">Maconomy writebacks</div><div class="fw-semibold">{{ run.checkpoints_succeeded }}</div></div>
         <div class="col-md-4"><div class="small text-secondary">Mapping or parent skips</div><div class="fw-semibold">{{ run.skipped_count }}</div></div>
     </div>
+    {% if details.get('version') == 'v1' %}
+    {% set counts = details.get('counts', {}) %}
+    <div class="row g-3 mb-4" aria-label="v1 processing counts">
+        <div class="col-6 col-md-3"><div class="small text-secondary">Parent Companies recovered</div><div class="fw-semibold">{{ counts.get('companies_recovered', 0) }}</div></div>
+        <div class="col-6 col-md-3"><div class="small text-secondary">MASTER Contacts upserted</div><div class="fw-semibold">{{ counts.get('masters_upserted', 0) }}</div></div>
+        <div class="col-6 col-md-3"><div class="small text-secondary">Children stamped</div><div class="fw-semibold">{{ counts.get('children_stamped', 0) }}</div></div>
+        <div class="col-6 col-md-3"><div class="small text-secondary">Links already present</div><div class="fw-semibold">{{ counts.get('associations_existing', 0) }}</div></div>
+    </div>
+    {% endif %}
     {% if run.failure_stage or run.error_message %}
     <div class="alert alert-danger py-2">
         {% if run.failure_stage %}<strong>{{ run.failure_stage | replace('_', ' ') | title }}:</strong>{% endif %}
@@ -310,7 +322,31 @@
         </table>
     </div>
     {% endif %}
-    {% if group_summaries %}
+    {% if group_summaries and details.get('version') == 'v1' %}
+    <h3 class="h6 fw-bold mt-4 mb-2">MASTER Contact groups</h3>
+    <div class="table-responsive mb-4">
+        <table class="table table-hover align-middle mb-0">
+            <thead><tr>
+                <th>MASTER</th><th>Contact Person numbers</th><th>Customer numbers</th>
+                <th>Action</th><th>Upserted</th><th>Stamped</th><th>Checkpoints</th><th>Links added / existing</th>
+            </tr></thead>
+            <tbody>
+            {% for group in group_summaries %}
+            <tr>
+                <td>{% if group.get('master_contact_person_number') %}<code>{{ group.get('master_contact_person_number') }}</code>{% else %}&mdash;{% endif %}</td>
+                <td>{% for number in group.get('member_numbers', []) %}<code class="me-1">{{ number }}</code>{% endfor %}</td>
+                <td>{% for number in group.get('parent_customer_numbers', []) %}<code class="me-1">{{ number }}</code>{% endfor %}</td>
+                <td>{{ group.get('action', 'unknown') | replace('_', ' ') | title }}</td>
+                <td>{{ 'Yes' if group.get('upserted') else 'No' }}</td>
+                <td>{{ group.get('stamped_members', 0) }}</td>
+                <td>{{ group.get('checkpointed_members', 0) }}</td>
+                <td>{{ group.get('associations_added', 0) }} / {{ group.get('associations_existing', 0) }}</td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% elif group_summaries %}
     <h3 class="h6 fw-bold mt-4 mb-2">Consolidated contact groups</h3>
     <div class="table-responsive mb-4">
         <table class="table table-hover align-middle mb-0">
@@ -336,6 +372,23 @@
         </table>
     </div>
     {% endif %}
+    {% if details.get('association_pairs') %}
+    <h3 class="h6 fw-bold mt-4 mb-2">Contact–Company links</h3>
+    <div class="table-responsive mb-4">
+        <table class="table table-hover align-middle mb-0">
+            <thead><tr><th>MASTER Contact Person</th><th>Customer</th><th>Outcome</th></tr></thead>
+            <tbody>
+            {% for pair in details.get('association_pairs', []) %}
+            <tr>
+                <td><code>{{ pair.get('master_number') }}</code></td>
+                <td><code>{{ pair.get('company_number') }}</code></td>
+                <td><span class="badge {{ 'text-bg-success' if pair.get('status') == 'added' else 'text-bg-danger' if pair.get('status') == 'failed' else 'text-bg-secondary' }}">{{ pair.get('status', 'unknown') | replace('_', ' ') | title }}</span></td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
     {% if failed_records %}
     <h3 class="h6 fw-bold mt-4 mb-2">Failed records</h3>
     <div class="table-responsive mb-4">
@@ -347,7 +400,37 @@
                 <td>{{ item.get('entity_type', 'record') | replace('_', ' ') | title }}</td>
                 <td><code>{{ item.get('source_id') }}</code></td>
                 <td>{{ item.get('stage', 'unknown') | replace('_', ' ') | title }}</td>
-                <td class="detail-reason">{{ item.get('message') or 'Synchronization did not complete for this record.' }}</td>
+                <td class="detail-reason">
+                    {{ item.get('message') or 'Synchronization did not complete for this record.' }}
+                    {% if details.get('version') == 'v1' %}
+                    <div class="small text-secondary">
+                        {% if item.get('parent_customer_number') %}Customer <code>{{ item.get('parent_customer_number') }}</code> · {% endif %}
+                        {% if item.get('upstream_status') %}HTTP {{ item.get('upstream_status') }} · {% endif %}
+                        {% if item.get('category') %}{{ item.get('category') }} · {% endif %}
+                        {% if item.get('correlation_id') %}Correlation <code>{{ item.get('correlation_id') }}</code>{% endif %}
+                    </div>
+                    {% if item.get('property_names') %}<div class="small text-secondary">Properties: {{ item.get('property_names') | join(', ') }}</div>{% endif %}
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+    {% if details.get('run_errors') %}
+    <h3 class="h6 fw-bold mt-4 mb-2">Run-level errors</h3>
+    <div class="table-responsive mb-4">
+        <table class="table table-hover align-middle mb-0">
+            <thead><tr><th>Stage</th><th>Reason</th><th>HTTP</th><th>Category</th><th>Correlation ID</th></tr></thead>
+            <tbody>
+            {% for item in details.get('run_errors', []) %}
+            <tr>
+                <td>{{ item.get('stage', 'unknown') | replace('_', ' ') | title }}</td>
+                <td>{{ item.get('reason', 'failed') | replace('_', ' ') | title }}</td>
+                <td>{{ item.get('upstream_status') or '—' }}</td>
+                <td>{{ item.get('category') or '—' }}</td>
+                <td>{% if item.get('correlation_id') %}<code>{{ item.get('correlation_id') }}</code>{% else %}—{% endif %}</td>
             </tr>
             {% endfor %}
             </tbody>
@@ -412,46 +495,31 @@
 
 <div class="modal fade" id="hubspotRetryModal" tabindex="-1"
      aria-labelledby="hubspotRetryModalLabel" aria-hidden="true">
-    <div class="modal-dialog modal-dialog-centered">
-        <div class="modal-content">
-            <form method="post"
-                  action="{{ retry_url }}"
-                  id="hubspotRetryForm">
-                <div class="modal-header">
-                    <h2 class="modal-title fs-5" id="hubspotRetryModalLabel">Retry a HubSpot record</h2>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-                </div>
-                <div class="modal-body">
-                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                    <p class="text-secondary small">
-                        {% if is_consolidated %}
-                        Synchronize one Maconomy Customer as a Company, or synchronize
-                        the master Contact Person selected for an email group.
-                        {% else %}
-                        Synchronize one Maconomy Customer with all its Contact Persons,
-                        or one Contact Person under its existing HubSpot Company.
-                        {% endif %}
-                    </p>
-                    <label for="hubspotRecordType" class="form-label">Record type</label>
-                    <select class="form-select mb-3" id="hubspotRecordType" name="record_type" required>
-                        <option value="customer">Customer</option>
-                        <option value="contact">Contact Person</option>
-                    </select>
-                    <label for="hubspotRecordNumber" class="form-label">Maconomy number</label>
-                    <input type="text" class="form-control" id="hubspotRecordNumber"
-                           name="record_number" maxlength="100" autocomplete="off"
-                           placeholder="Enter the Customer or Contact Person number" required>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="submit" class="btn btn-primary" id="submitHubspotRetry">
-                        <span class="spinner-border spinner-border-sm me-1 d-none" aria-hidden="true"></span>
-                        <span class="hubspot-retry-label">Retry sync</span>
-                    </button>
-                </div>
-            </form>
-        </div>
-    </div>
+    <div class="modal-dialog modal-dialog-centered"><div class="modal-content">
+        <form method="post" action="{{ retry_url }}" id="hubspotRetryForm">
+            <div class="modal-header">
+                <h2 class="modal-title fs-5" id="hubspotRetryModalLabel">Retry a Company</h2>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="record_type" value="customer">
+                <p class="text-secondary small">Sync this Customer as a HubSpot Company, its Contact Persons and MASTER Contacts, then add missing links and write back checkpoints.</p>
+                <label for="hubspotCustomerNumber" class="form-label">Maconomy Customer number</label>
+                <input type="text" class="form-control" id="hubspotCustomerNumber"
+                       name="record_number" inputmode="text"
+                       pattern="[A-Za-z0-9_-]*[0-9][A-Za-z0-9_-]*"
+                       maxlength="30" autocomplete="off" required>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="submit" class="btn btn-primary" id="submitHubspotRetry">
+                    <span class="spinner-border spinner-border-sm me-1 d-none" aria-hidden="true"></span>
+                    <span class="hubspot-retry-label">Retry Company</span>
+                </button>
+            </div>
+        </form>
+    </div></div>
 </div>
 
 <div class="modal fade" id="integrationStatusModal" tabindex="-1" aria-hidden="true">
@@ -507,7 +575,7 @@
         });
 
         $('#hubspotRetryModal').on('shown.bs.modal', function () {
-            $('#hubspotRecordNumber').trigger('focus');
+            $('#hubspotCustomerNumber').trigger('focus');
         });
 
         $('#hubspotRetryForm').on('submit', function () {

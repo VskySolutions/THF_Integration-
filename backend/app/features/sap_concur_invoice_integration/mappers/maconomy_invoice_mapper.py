@@ -6,8 +6,11 @@
   currency field on the card).
 - Table pane payload: one dynamically mapped invoice row per SAP Concur
   invoice (Req[#27] FR-3): Invoice Name -> `entrytext`, Invoice Number ->
-  `invoicenumber`, Invoice Date -> `entrydate` + `invoicedate`
-  (YYYY-MM-DD), SAP Concur invoice id (`PaymentRequestId`/`ID`) ->
+  `invoicenumber`, Invoice Date -> `invoicedate` (YYYY-MM-DD),
+  PostingDate -> `entrydate` (YYYY-MM-DD, "" when missing/empty),
+  PaymentDueDate -> `duedate` (YYYY-MM-DD, key OMITTED from the payload
+  when missing/empty — user 2026-11-17 date-mapping amendment), SAP
+  Concur invoice id (`PaymentRequestId`/`ID`) ->
   `remarks5` (user 2026-11-09), SAP vendor code
   (`VendorRemitAddress.VendorCode`, root `VendorCode` fallback) ->
   `vendornumber` (DYNAMIC — user 2026-11-10, replaces the former
@@ -25,8 +28,10 @@ def build_vendor_invoice_instance_payload() -> dict[str, Any]:
     Card fields: sliced for the STATIC journal card payload (17 fields —
     the card pane creates a journal, no Concur mapping). Table fields:
     sliced for the invoice-row payload — must cover EVERY key of
-    ``map_concur_invoice_to_maconomy_invoice_row(...)["data"]`` (16 keys
-    incl. the dynamic entrydate/invoicedate/invoicenumber/entrytext +
+    ``map_concur_invoice_to_maconomy_invoice_row(...)["data"]`` (15–16
+    keys — ``duedate`` is CONDITIONAL, only written when the Concur
+    invoice carries a PaymentDueDate, user 2026-11-17 — incl. the
+    dynamic entrydate/invoicedate/invoicenumber/entrytext +
     remarks5 + static currency "USD"). Maconomy only allows writing
     fields that were sliced in at instance retrieval (400 "modify record
     fields which you have sliced out" otherwise), mirroring
@@ -112,11 +117,11 @@ def map_concur_invoice_to_maconomy_vendor_invoice() -> dict[str, Any]:
     }
 
 
-def _normalize_entry_date(raw: str) -> str:
-    """Concur InvoiceDate -> Maconomy YYYY-MM-DD (raises ValueError w/ raw)."""
+def _normalize_date(raw: str, source_field: str) -> str:
+    """Concur ``source_field`` -> Maconomy YYYY-MM-DD (raises ValueError w/ raw)."""
     value = str(raw or "").strip()
     if not value:
-        raise ValueError("InvoiceDate is empty")
+        raise ValueError(f"{source_field} is empty")
     try:                                   # ISO, ISO-time, space, Z (py3.11)
         return datetime.fromisoformat(value.replace("Z", "+00:00")).date().isoformat()
     except ValueError:
@@ -126,7 +131,7 @@ def _normalize_entry_date(raw: str) -> str:
             return datetime.strptime(value, fmt).date().isoformat()
         except ValueError:
             continue
-    raise ValueError(f"Unparseable InvoiceDate for entrydate: {value!r}")
+    raise ValueError(f"Unparseable {source_field}: {value!r}")
 
 
 def map_concur_invoice_to_maconomy_invoice_row(
@@ -137,7 +142,16 @@ def map_concur_invoice_to_maconomy_invoice_row(
     Req[#27] FR-3 (live-confirmed keys, WO[#27.1] Step 1, 2026-11-09):
     - ``Name`` (Invoice Name) → ``entrytext``
     - ``InvoiceNumber`` → ``invoicenumber``
-    - ``InvoiceDate`` → ``entrydate`` AND ``invoicedate`` (YYYY-MM-DD)
+    - ``InvoiceDate`` → ``invoicedate`` (YYYY-MM-DD; user 2026-11-17 —
+      no longer also written to ``entrydate``)
+    - ``PostingDate`` → ``entrydate`` (YYYY-MM-DD; user 2026-11-17:
+      "maconomy entrydate will be sap posting date - PostingDate" —
+      missing/empty PostingDate writes ``entrydate`` = ``""``, the row
+      still succeeds)
+    - ``PaymentDueDate`` → ``duedate`` (YYYY-MM-DD; user 2026-11-17:
+      "add in payload only if its value is present in the SAP Concur —
+      safe" — missing/empty PaymentDueDate OMITS the ``duedate`` key
+      from ``data`` entirely, so Maconomy's default applies)
     - ``PaymentRequestId``/``ID`` (SAP Concur invoice id) → ``remarks5``
       (user 2026-11-09: "remarks5 field in maconomy vendorinvoices will
       store the sap concur invoice id")
@@ -153,14 +167,19 @@ def map_concur_invoice_to_maconomy_invoice_row(
     Missing/empty Invoice Name / InvoiceNumber / InvoiceDate /
     invoice id / SAP vendor code raises ``ValueError`` naming the
     field(s) (service records a per-invoice FAILED entry and continues
-    the batch — required set is now 5). ``CurrencyCode`` is no longer
-    required (currency is static). Every ``data`` key must be present
-    in the instance table slice (16/16 — sync rule; `vendornumber` was
-    already sliced — only its VALUE source changed).
+    the batch — required set is still 5; PostingDate and PaymentDueDate
+    are OPTIONAL and never enter the required check). A present-but
+    unparseable date raises ``ValueError`` naming the source field.
+    ``CurrencyCode`` is no longer required (currency is static). Every
+    ``data`` key must be present in the instance table slice (15–16/16 —
+    sync rule; ``duedate`` is conditional, the other 15 always written;
+    `vendornumber` was already sliced — only its VALUE source changed).
     """
     invoice_name = str(invoice.get("Name") or invoice.get("InvoiceName") or "").strip()
     invoice_number = str(invoice.get("InvoiceNumber") or "").strip()
     entry_date = str(invoice.get("InvoiceDate") or "").strip()
+    payment_due_date = str(invoice.get("PaymentDueDate") or "").strip()
+    posting_date = str(invoice.get("PostingDate") or "").strip()
     concur_invoice_id = str(
         invoice.get("PaymentRequestId") or invoice.get("ID") or ""
     ).strip()
@@ -188,27 +207,38 @@ def map_concur_invoice_to_maconomy_invoice_row(
             f"mapping: {', '.join(missing)}"
         )
 
-    normalized_date = _normalize_entry_date(entry_date)
+    invoice_date = _normalize_date(entry_date, "InvoiceDate")
+    # PostingDate missing/empty -> entrydate "" (user 2026-11-17 — the
+    # row still succeeds; only an unparseable PRESENT value raises).
+    posting_date_normalized = (
+        _normalize_date(posting_date, "PostingDate") if posting_date else ""
+    )
+
+    data: dict[str, Any] = {
+        "vendornumber": vendor_code,       # dynamic: SAP vendor code (user 2026-11-10)
+        "entrydate": invoice_date, # posting_date_normalized,  # dynamic: PostingDate → YYYY-MM-DD ("" when absent)
+        "invoicedate": invoice_date,       # dynamic: InvoiceDate → YYYY-MM-DD
+        "invoicenumber": invoice_number,    # dynamic: InvoiceNumber
+        "entrytext": invoice_name,          # dynamic: Invoice Name (Description)
+        "currency": "USD",                  # static (user 2026-11-09 — invoice row only)
+        "remark5": concur_invoice_id,      # dynamic: SAP Concur invoice id (user 2026-11-09)
+        "amountcurrency": 0,
+        "vatcurrency": 0,
+        "financevatcode": "",
+        "purchaseordernumber": "",
+        "documentarchivenumber": "",
+        "filename": "",
+        "allocationresponsible": "",
+        "amountexclvatcurrency": 0,
+    }
+    if payment_due_date:
+        # Conditional key (user 2026-11-17): only written when Concur
+        # carries a PaymentDueDate — absent key leaves Maconomy's
+        # default duedate untouched.
+        data["duedate"] = _normalize_date(payment_due_date, "PaymentDueDate")
 
     return {
-        "data": {
-            "vendornumber": vendor_code,       # dynamic: SAP vendor code (user 2026-11-10)
-            "entrydate": normalized_date,       # dynamic: InvoiceDate → YYYY-MM-DD
-            "invoicedate": normalized_date,     # dynamic: InvoiceDate → YYYY-MM-DD
-            "duedate": "",
-            "invoicenumber": invoice_number,    # dynamic: InvoiceNumber
-            "entrytext": invoice_name,          # dynamic: Invoice Name (Description)
-            "currency": "USD",                  # static (user 2026-11-09 — invoice row only)
-            "remark5": concur_invoice_id,      # dynamic: SAP Concur invoice id (user 2026-11-09)
-            "amountcurrency": 0,
-            "vatcurrency": 0,
-            "financevatcode": "",
-            "purchaseordernumber": "",
-            "documentarchivenumber": "",
-            "filename": "",
-            "allocationresponsible": "",
-            "amountexclvatcurrency": 0,
-        },
+        "data": data,
         "offset": 0,
         "limit": 100,
         "row": "end",

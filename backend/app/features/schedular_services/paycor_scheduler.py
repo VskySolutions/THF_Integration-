@@ -1,4 +1,5 @@
 import asyncio
+import logging
 
 import httpx
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -17,6 +18,7 @@ from app.features.schedular_services.services import (
     run_maconomy_concur_employee_sync
 )
 
+logger = logging.getLogger(__name__)
 
 class PaycorSchedulerService:
     """Run Paycor jobs independently from the existing integrations."""

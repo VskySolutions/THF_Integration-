@@ -22,6 +22,9 @@ from app.features.sap_concur_invoice_integration.routers import (
 from app.features.sap_concur_engagements_and_tasks_integration.routers import (
     router as sap_concur_engagements_tasks_router,
 )
+from app.features.sap_concur_vendor_integration.routers.sap_concur_vendors import (
+    router as sap_concur_vendors_router,
+)
 from app.features.exception_logs import install_exception_logging
 from app.features.schedular_services import (
     PaycorPayrollSchedulerService,
@@ -49,11 +52,10 @@ from app.features.hubspot_contact_consolidated_integration.routers import (
     consolidated_company_manual_sync_router,
     consolidated_contact_manual_sync_router,
 )
-from app.features.hubspot_integration.routers.get_recent_customers_contacts import (
-    router as maconomy_customers_contacts_router,
-)
-from app.features.hubspot_integration.routers.get_recent_customers import (
-    router as hubspot_manual_sync_router,
+from app.features.hubspot_contact_consolidated_integration_v1.routers import (
+    consolidated_bulk_sync_v1_router,
+    consolidated_company_sync_v1_router,
+    consolidated_contact_sync_v1_router,
 )
 @asynccontextmanager
 async def lifespan(_: FastAPI):
@@ -133,6 +135,7 @@ app.include_router(sap_concur_invoice_router, prefix=settings.api_v1_prefix)
 app.include_router(
     sap_concur_engagements_tasks_router, prefix=settings.api_v1_prefix
 )
+app.include_router(sap_concur_vendors_router, prefix=settings.api_v1_prefix)
 
 app.include_router(pending_cch_task_mapping_router, prefix=settings.api_v1_prefix)
 app.include_router(manual_cch_task_mapping_router, prefix=settings.api_v1_prefix)
@@ -144,11 +147,10 @@ app.include_router(paycor_update_router, prefix=settings.api_v1_prefix)
 app.include_router(paycor_timesheets_router, prefix=settings.api_v1_prefix)
 app.include_router(paycor_payroll_processing_router, prefix=settings.api_v1_prefix)
 
-# HubSpot router
-app.include_router(maconomy_customers_contacts_router, prefix=settings.api_v1_prefix)
-app.include_router(hubspot_manual_sync_router, prefix=settings.api_v1_prefix)
-
 # Consolidated HubSpot contact integration router
 app.include_router(consolidated_bulk_sync_router, prefix=settings.api_v1_prefix)
 app.include_router(consolidated_company_manual_sync_router, prefix=settings.api_v1_prefix)
 app.include_router(consolidated_contact_manual_sync_router, prefix=settings.api_v1_prefix)
+app.include_router(consolidated_bulk_sync_v1_router, prefix=settings.api_v1_prefix)
+app.include_router(consolidated_company_sync_v1_router, prefix=settings.api_v1_prefix)
+app.include_router(consolidated_contact_sync_v1_router, prefix=settings.api_v1_prefix)

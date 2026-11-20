@@ -22,7 +22,6 @@ from app.features.integration_services.models import IntegrationService
 from app.features.hubspot_contact_consolidated_integration.models import (
     ConsolidationRunLog,
 )
-from app.features.hubspot_integration.models import HubSpotIntegrationRunLog
 from app.features.maconomy_caseware_cloud_intergration.models import (
     MaconomyCasewareRequestLog,
 )
@@ -37,6 +36,9 @@ from app.features.sap_concur_engagements_and_tasks_integration.models.integratio
 from app.features.sap_concur_integration.models import SAPConcurIntegrationLog
 from app.features.sap_concur_invoice_integration.models import (
     SAPConcurInvoiceIntegrationLog,
+)
+from app.features.sap_concur_vendor_integration.models.integration_log import (
+    SAPConcurVendorIntegrationLog,
 )
 from app.features.user_activity.models import UserActivityLog
 from app.features.user_activity.services import log_activity
@@ -72,7 +74,10 @@ async def dashboard(
 ) -> HTMLResponse:
     result = await session.execute(
         select(IntegrationService)
-        .where(IntegrationService.is_deleted.is_(False))
+        .where(
+            IntegrationService.is_deleted.is_(False),
+            IntegrationService.identifier_unique_name != "MACONOMY_HUBSPOT_SYNC",
+        )
         .order_by(IntegrationService.display_name)
     )
     integrations = list(result.scalars().all())
@@ -117,6 +122,7 @@ async def update_integration_status(
         select(IntegrationService).where(
             IntegrationService.id == integration_id,
             IntegrationService.is_deleted.is_(False),
+            IntegrationService.identifier_unique_name != "MACONOMY_HUBSPOT_SYNC",
         )
     )
     integration = result.scalar_one_or_none()
@@ -934,20 +940,19 @@ async def retry_sap_concur_expense_report(
 
 
 @router.post(
-    "/integrations/{integration_id}/retry-hubspot-record",
-    name="retry_hubspot_record",
+    "/integrations/{integration_id}/retry-sap-concur-vendor",
+    name="retry_sap_concur_vendor",
     include_in_schema=False,
 )
-async def retry_hubspot_record(
+async def retry_sap_concur_vendor(
     integration_id: uuid.UUID,
     request: Request,
     current_user: AuthenticatedUser,
     csrf_token: Annotated[str, Form(min_length=1)],
-    record_type: Annotated[str, Form(min_length=1)],
-    record_number: Annotated[str, Form(min_length=1, max_length=100)],
+    vendor_code: Annotated[str, Form(min_length=1, max_length=200)],
     session: Annotated[AsyncSession, Depends(get_db)],
 ) -> RedirectResponse:
-    """Manually retry one HubSpot Customer or Contact Person sync."""
+    """Manually retry one SAP Concur vendor synchronization."""
     if not valid_csrf_token(request, csrf_token):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -958,7 +963,7 @@ async def retry_hubspot_record(
         select(IntegrationService).where(
             IntegrationService.id == integration_id,
             IntegrationService.identifier_unique_name
-            == IntegrationServiceIdentifier.MACONOMY_HUBSPOT_SYNC.value,
+            == IntegrationServiceIdentifier.MACONOMY_SAP_CONCUR_VENDOR_SYNC.value,
             IntegrationService.is_deleted.is_(False),
         )
     )
@@ -966,36 +971,25 @@ async def retry_hubspot_record(
     if integration is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="HubSpot synchronization integration service not found.",
+            detail="SAP Concur vendor synchronization integration service not found.",
         )
 
     redirect = RedirectResponse(
         request.url_for("integration_logs", integration_id=integration.id),
         status_code=status.HTTP_303_SEE_OTHER,
     )
-    normalized_type = record_type.strip().lower()
-    normalized_number = record_number.strip()
-    path_segments = {
-        "customer": "customers",
-        "contact": "contacts",
-    }
-    path_segment = path_segments.get(normalized_type)
-    if path_segment is None or not normalized_number:
-        _set_flash(
-            request,
-            "Select Customer or Contact Person and enter a valid number.",
-            "danger",
-        )
+    normalized_vendor_code = vendor_code.strip()
+    if not normalized_vendor_code:
+        _set_flash(request, "Enter a valid SAP Concur vendor code.", "danger")
         return redirect
 
     settings = get_settings()
-    encoded_number = quote(normalized_number, safe="")
     sync_path = (
-        f"{settings.api_v1_prefix.rstrip('/')}/hubspot/"
-        f"{path_segment}/{encoded_number}/sync"
+        f"{settings.api_v1_prefix.rstrip('/')}"
+        "/sap-concur-vendors/retry-vendor-sync"
     )
     activity_data = {
-        "record_type": normalized_type,
+        "vendor_code": normalized_vendor_code,
         "integration_id": str(integration.id),
     }
     try:
@@ -1008,7 +1002,10 @@ async def retry_hubspot_record(
             },
             timeout=httpx.Timeout(settings.scheduler_request_timeout_seconds),
         ) as client:
-            response = await client.post(sync_path)
+            response = await client.post(
+                sync_path,
+                json={"vendor_code": normalized_vendor_code},
+            )
     except httpx.RequestError:
         await log_activity(
             session,
@@ -1020,7 +1017,7 @@ async def retry_hubspot_record(
         )
         _set_flash(
             request,
-            "The HubSpot integration API could not be reached. Please try again.",
+            "The SAP Concur integration API could not be reached. Please try again.",
             "danger",
         )
         return redirect
@@ -1043,28 +1040,28 @@ async def retry_hubspot_record(
         )
         return redirect
 
-    retry_status = str(payload.get("status") or "success")
+    retry_status = str(payload.get("status") or "FAILED").upper()
+    retry_message = str(
+        payload.get("message")
+        or f"SAP Concur vendor {normalized_vendor_code} retry completed."
+    )
+    activity_status = {
+        "SUCCESS": "SUCCESS",
+        "SKIPPED": "SUCCESS",
+    }.get(retry_status, "FAILED")
+    flash_category = {
+        "SUCCESS": "success",
+        "SKIPPED": "warning",
+    }.get(retry_status, "danger")
     await log_activity(
         session,
         action="manual_retry",
         user=current_user.username,
         service=integration.identifier_unique_name,
         data=activity_data,
-        status="SUCCESS" if retry_status == "success" else "PARTIAL_SUCCESS",
+        status=activity_status,
     )
-    record_label = "Customer" if normalized_type == "customer" else "Contact Person"
-    if retry_status == "partial_success":
-        _set_flash(
-            request,
-            f"{record_label} retry completed with some synchronization errors.",
-            "warning",
-        )
-    else:
-        _set_flash(
-            request,
-            f"{record_label} was synchronized with HubSpot successfully.",
-            "success",
-        )
+    _set_flash(request, retry_message, flash_category)
     return redirect
 
 
@@ -1082,7 +1079,7 @@ async def retry_hubspot_consolidated_record(
     record_number: Annotated[str, Form(min_length=1, max_length=100)],
     session: Annotated[AsyncSession, Depends(get_db)],
 ) -> RedirectResponse:
-    """Manually retry one consolidated HubSpot Company or Contact sync."""
+    """Manually retry a v1 Company and its Contact Persons."""
     if not valid_csrf_token(request, csrf_token):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -1110,15 +1107,16 @@ async def retry_hubspot_consolidated_record(
     )
     normalized_type = record_type.strip().lower()
     normalized_number = record_number.strip()
-    path_segments = {
-        "customer": "companies",
-        "contact": "contacts",
-    }
-    path_segment = path_segments.get(normalized_type)
-    if path_segment is None or not normalized_number:
+    if (
+        normalized_type != "customer"
+        or not normalized_number.isascii()
+        or not all(char.isalnum() or char in "_-" for char in normalized_number)
+        or not any(char.isdigit() for char in normalized_number)
+        or len(normalized_number) > 30
+    ):
         _set_flash(
             request,
-            "Select Customer or Contact Person and enter a valid number.",
+            "Enter a valid Maconomy Customer number for Company retry.",
             "danger",
         )
         return redirect
@@ -1127,10 +1125,11 @@ async def retry_hubspot_consolidated_record(
     encoded_number = quote(normalized_number, safe="")
     sync_path = (
         f"{settings.api_v1_prefix.rstrip('/')}/hubspot-consolidated/"
-        f"{path_segment}/{encoded_number}/sync"
+        f"companies/{encoded_number}/sync"
     )
     activity_data = {
         "record_type": normalized_type,
+        "record_number": normalized_number,
         "integration_id": str(integration.id),
     }
     try:
@@ -1187,17 +1186,16 @@ async def retry_hubspot_consolidated_record(
         data=activity_data,
         status="SUCCESS" if retry_status == "success" else "PARTIAL_SUCCESS",
     )
-    record_label = "Customer" if normalized_type == "customer" else "Contact Person"
     if retry_status == "partial_success":
         _set_flash(
             request,
-            f"{record_label} retry completed with synchronization errors.",
+            f"Customer {normalized_number} retry completed with synchronization errors. Check the latest run details.",
             "warning",
         )
     else:
         _set_flash(
             request,
-            f"{record_label} was synchronized by the consolidated flow.",
+            f"Customer {normalized_number}, its Contact Persons, and Company links were synchronized.",
             "success",
         )
     return redirect
@@ -1219,6 +1217,7 @@ async def integration_logs(
         select(IntegrationService).where(
             IntegrationService.id == integration_id,
             IntegrationService.is_deleted.is_(False),
+            IntegrationService.identifier_unique_name != "MACONOMY_HUBSPOT_SYNC",
         )
     )
     integration = result.scalar_one_or_none()
@@ -1582,7 +1581,6 @@ async def integration_logs(
                 "csrf_token": ensure_csrf_token(request),
                 "integration": integration,
                 "run_logs": run_logs,
-                "is_consolidated": True,
                 "retry_url": request.url_for(
                     "retry_hubspot_consolidated_record",
                     integration_id=integration.id,
@@ -1593,60 +1591,6 @@ async def integration_logs(
                     "FAILED": "text-bg-danger",
                     "RUNNING": "text-bg-primary",
                     "SKIPPED": "text-bg-secondary",
-                },
-                "metrics": {
-                    "total_runs": total_runs,
-                    "success_rate": (
-                        round(successful_runs / total_runs * 100, 1)
-                        if total_runs
-                        else 0
-                    ),
-                    "records_succeeded": sum(
-                        log.customers_succeeded + log.contacts_succeeded
-                        for log in run_logs
-                    ),
-                    "attention_required": sum(
-                        log.failed_count + log.skipped_count
-                        for log in run_logs
-                    ),
-                    "latest_run": run_logs[0] if run_logs else None,
-                },
-                "flash_message": flash_message,
-                "flash_category": flash_category,
-            },
-        )
-
-    if (
-        integration.identifier_unique_name
-        == IntegrationServiceIdentifier.MACONOMY_HUBSPOT_SYNC.value
-    ):
-        run_result = await session.execute(
-            select(HubSpotIntegrationRunLog)
-            .order_by(HubSpotIntegrationRunLog.started_on_utc.desc())
-            .limit(250)
-        )
-        run_logs = list(run_result.scalars().all())
-        successful_runs = sum(log.status == "SUCCESS" for log in run_logs)
-        total_runs = len(run_logs)
-
-        return templates.TemplateResponse(
-            request=request,
-            name="maconomy_hubspot_dashboard.html",
-            context={
-                "current_user": current_user,
-                "csrf_token": ensure_csrf_token(request),
-                "integration": integration,
-                "run_logs": run_logs,
-                "is_consolidated": False,
-                "retry_url": request.url_for(
-                    "retry_hubspot_record",
-                    integration_id=integration.id,
-                ),
-                "status_badges": {
-                    "SUCCESS": "text-bg-success",
-                    "PARTIAL_SUCCESS": "text-bg-warning",
-                    "FAILED": "text-bg-danger",
-                    "RUNNING": "text-bg-primary",
                 },
                 "metrics": {
                     "total_runs": total_runs,
@@ -1805,6 +1749,60 @@ async def integration_logs(
                     ),
                     "created": sum(
                         log.action.value == "CREATE"
+                        for log in activity_logs
+                    ),
+                    "failed": sum(
+                        log.status.value == "FAILED"
+                        for log in activity_logs
+                    ),
+                    "latest_activity": (
+                        activity_logs[0] if activity_logs else None
+                    ),
+                },
+                "flash_message": flash_message,
+                "flash_category": flash_category,
+            },
+        )
+
+    if (
+        integration.identifier_unique_name
+        == IntegrationServiceIdentifier.MACONOMY_SAP_CONCUR_VENDOR_SYNC.value
+    ):
+        log_result = await session.execute(
+            select(SAPConcurVendorIntegrationLog)
+            .options(
+                selectinload(SAPConcurVendorIntegrationLog.vendor_mapping)
+            )
+            .order_by(SAPConcurVendorIntegrationLog.created_on_utc.desc())
+            .limit(1000)
+        )
+        activity_logs = list(log_result.scalars().all())
+        successful_logs = sum(
+            log.status.value == "SUCCESS" for log in activity_logs
+        )
+        total_logs = len(activity_logs)
+
+        return templates.TemplateResponse(
+            request=request,
+            name="sap_concur_vendor_dashboard.html",
+            context={
+                "current_user": current_user,
+                "csrf_token": ensure_csrf_token(request),
+                "integration": integration,
+                "activity_logs": activity_logs,
+                "metrics": {
+                    "total_activity": total_logs,
+                    "success_rate": (
+                        round(successful_logs / total_logs * 100, 1)
+                        if total_logs
+                        else 0
+                    ),
+                    "created": sum(
+                        log.status.value == "SUCCESS"
+                        for log in activity_logs
+                    ),
+                    "skipped": sum(
+                        log.status.value == "SKIPPED"
                         for log in activity_logs
                     ),
                     "failed": sum(
