@@ -57,9 +57,7 @@ async def run_employee_sync_cycle(
 
     stats: dict[str, Any] = {
         "total_fetched": len(employees),
-        "created": 0,
         "updated": 0,
-        "adopted_and_updated": 0,
         "skipped": 0,
         "failed": 0,
         "results": [],
@@ -69,18 +67,18 @@ async def run_employee_sync_cycle(
         try:
             res = await update_service.sync_or_update_employee(emp)
             action = res.get("action")
-            if action == "CREATED":
-                stats["created"] += 1
-            elif action == "UPDATED":
+            if action == "UPDATED":
                 stats["updated"] += 1
-            elif action == "ADOPT_AND_UPDATED":
-                stats["adopted_and_updated"] += 1
             elif action == "SKIPPED":
                 stats["skipped"] += 1
             elif "FAILED" in str(action):
                 stats["failed"] += 1
             stats["results"].append(res)
         except Exception as exc:
+            try:
+                await db.rollback()
+            except Exception:
+                pass
             stats["failed"] += 1
             stats["results"].append({
                 "employee_number": emp.get("employeenumber"),

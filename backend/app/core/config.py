@@ -102,6 +102,7 @@ class Settings(BaseSettings):
     sap_concur_client_id: SecretStr
     sap_concur_client_secret: SecretStr
     sap_concur_refresh_token: SecretStr
+    sap_concur_company_id: str = "f7255b65-38e0-458f-ab3d-40856e011c0b"
     # List id of the SAP Concur list holding engagements (parents) and
     # tasks (children) for the bulk list endpoint; blank until the env
     # var is configured (manual step).
@@ -122,6 +123,7 @@ class Settings(BaseSettings):
     scheduler_cch_interval_minutes: int = Field(default=5, ge=1)
     scheduler_sap_concur_interval_minutes: int = Field(default=5, ge=1)
     scheduler_sap_concur_invoice_interval_minutes: int = Field(default=5, ge=1)
+    scheduler_sap_concur_employee_interval_minutes: int = Field(default=5, ge=1)
     scheduler_sap_concur_engagements_tasks_interval_minutes: int = Field(
         default=5,
         ge=1,
@@ -157,7 +159,7 @@ class Settings(BaseSettings):
         ge=0,
         le=59,
     )
-    scheduler_paycor_payroll_day: str = "15,30"
+    scheduler_paycor_payroll_day: str = "15,last"
     scheduler_paycor_payroll_hour_et: int = Field(default=23, ge=0, le=23)
     scheduler_paycor_payroll_minute_et: int = Field(default=0, ge=0, le=59)
     scheduler_request_timeout_seconds: float = Field(default=600, gt=0)

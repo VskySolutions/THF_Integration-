@@ -104,7 +104,7 @@ class SchedulerService:
         scheduler.add_job(
             self._run_sap_concur_employee_sync,
             trigger="interval",
-            minutes=100000,
+            minutes=self._settings.scheduler_sap_concur_employee_interval_minutes,
             args=[client],
             id=SAP_CONCUR_EMPLOYEE_SYNC_JOB_ID,
             name="Maconomy to SAP Concur 5-minute employee delta sync",

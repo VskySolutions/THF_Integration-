@@ -12,6 +12,7 @@ from typing import Any
 
 SCIM_USER_SCHEMA = "urn:ietf:params:scim:schemas:core:2.0:User"
 BULK_REQUEST_SCHEMA = "urn:ietf:params:scim:api:messages:2.0:BulkRequest"
+SCIM_PATCH_SCHEMA = "urn:ietf:params:scim:api:messages:2.0:PatchOp"
 ENTERPRISE_USER_SCHEMA = (
     "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User"
 )
@@ -203,7 +204,7 @@ def _build_phone_numbers(
     country_iso2: str | None,
 ) -> list[dict[str, str]]:
     """Build Home Phone for SCIM User."""
-    phone = _phone_digits(employee.get("phone"))
+    phone = _phone_digits(employee.get("telephone")) or _phone_digits(employee.get("phone"))
     if phone is None:
         return []
 
@@ -245,7 +246,8 @@ def _build_addresses(
     if country_iso2 is not None:
         address["country"] = country_iso2
 
-    if len(address) == 1:
+    # If only 'type' and 'country' are present, there is no actual address data
+    if len(address) <= 2 and not any(k in address for k in ("streetAddress", "locality", "postalCode", "region")):
         return []
     return [address]
 
@@ -261,9 +263,10 @@ def _build_enterprise_extension(
         extension["department"] = department
 
     # Spec 4 is Executing office / Assigned Location (e.g., Lakeland, Panama City, Tallahassee, Tampa, Dade City)
-    location = _clean_str(employee.get("specification4name"))
-    if location is not None:
-        extension["location"] = location
+    # Note: SAP Concur SCIM schema does NOT support 'location' under enterprise extension (rejects with 400 Unsupported attribute)
+    # location = _clean_str(employee.get("specification4name"))
+    # if location is not None:
+    #     extension["location"] = location
 
     start_date = _format_scim_datetime(employee.get("dateemployed"))
     if start_date is not None:
@@ -458,4 +461,136 @@ def build_bulk_request(
         "schemas": [BULK_REQUEST_SCHEMA],
         "failOnErrors": DEFAULT_FAIL_ON_ERRORS,
         "Operations": list(operations),
+    }
+
+
+def map_maconomy_employee_to_scim_patch(
+    employee: dict[str, Any],
+) -> dict[str, Any]:
+    """Map Maconomy employee dictionary to a SCIM 2.0 PATCH replace payload.
+
+    Safely builds replace operations only for fields present and populated,
+    preventing null/empty value validation errors in SAP Concur.
+    """
+    if not isinstance(employee, dict):
+        raise EmployeeMappingError(
+            "Maconomy employee record must be a dictionary"
+        )
+
+    operations: list[dict[str, Any]] = []
+
+    # 1. Emails
+    email = _clean_str(employee.get("electronicmailaddress"))
+    if email:
+        operations.append({
+            "op": "replace",
+            "path": "emails",
+            "value": [{"value": email, "type": "work"}],
+        })
+
+    # 2. Name components
+    name_obj = _build_name(employee)
+    if "givenName" in name_obj:
+        operations.append({
+            "op": "replace",
+            "path": "name.givenName",
+            "value": name_obj["givenName"],
+        })
+    if "middleName" in name_obj:
+        operations.append({
+            "op": "replace",
+            "path": "name.middleName",
+            "value": name_obj["middleName"],
+        })
+    if "familyName" in name_obj:
+        operations.append({
+            "op": "replace",
+            "path": "name.familyName",
+            "value": name_obj["familyName"],
+        })
+
+    # 3. Active status
+    operations.append({
+        "op": "replace",
+        "path": "active",
+        "value": not _is_blocked(employee.get("blocked")),
+    })
+
+    # 4. Title / Position
+    title = _clean_str(employee.get("position"))
+    if title is not None:
+        operations.append({
+            "op": "replace",
+            "path": "title",
+            "value": title,
+        })
+
+    # 5. Home Address (only if address fields exist)
+    country_iso2 = DEFAULT_COUNTRY_ISO2 or _country_iso2(employee.get("country")) or "US"
+    addresses = _build_addresses(employee, country_iso2)
+    if addresses:
+        operations.append({
+            "op": "replace",
+            "path": "addresses",
+            "value": addresses,
+        })
+
+    # 6. Phone numbers (home)
+    phone_numbers = _build_phone_numbers(employee, country_iso2)
+    if phone_numbers:
+        operations.append({
+            "op": "replace",
+            "path": "phoneNumbers",
+            "value": phone_numbers,
+        })
+
+    # 7. Enterprise Department
+    department = _clean_str(employee.get("entityname"))
+    if department is not None:
+        operations.append({
+            "op": "replace",
+            "path": f"{ENTERPRISE_USER_SCHEMA}:department",
+            "value": department,
+        })
+
+    # 8. Enterprise Start Date (Formatted as YYYY-MM-DDTHH:MM:SSZ)
+    raw_start_date = employee.get("dateemployed")
+    formatted_start = _format_scim_datetime(raw_start_date)
+    if formatted_start:
+        operations.append({
+            "op": "replace",
+            "path": f"{ENTERPRISE_USER_SCHEMA}:startDate",
+            "value": formatted_start,
+        })
+
+    # 9. Enterprise Company ID
+    if DEFAULT_COMPANY_ID:
+        operations.append({
+            "op": "replace",
+            "path": f"{ENTERPRISE_USER_SCHEMA}:companyId",
+            "value": DEFAULT_COMPANY_ID,
+        })
+
+    # 10. Manager / Approver (only if superioremployee is present)
+    manager = _clean_str(employee.get("superioremployee"))
+    if manager:
+        operations.append({
+            "op": "replace",
+            "path": f"{SPEND_APPROVER_SCHEMA}:report",
+            "value": [
+                {
+                    "approver": {"employeeNumber": manager},
+                    "primary": True,
+                }
+            ],
+        })
+        operations.append({
+            "op": "replace",
+            "path": f"{TRAVEL_USER_SCHEMA}:manager",
+            "value": {"employeeNumber": manager},
+        })
+
+    return {
+        "schemas": [SCIM_PATCH_SCHEMA],
+        "Operations": operations,
     }

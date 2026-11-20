@@ -32,36 +32,29 @@ EMPLOYEE_RESTRICTION = (
 )
 
 EMPLOYEE_FIELDS = [
-    "blocked",
-    "companyname",
-    "country",
-    # "dateemployed",
-    "dateendemployment",
-    "electronicmailaddress",
     "employeenumber",
-    "initials",
-    "instancekey",
+    "electronicmailaddress",
+    "firstname",
+    "middlename",
+    "lastname",
     "name1",
+    "blocked",
     "position",
-    "profileimage",
-    # "superioremployee",
-    "vendornumber",
     "name2",
     "name3",
-    "zipcode",
     "postaldistrict",
-    "dateemployed",
-    "superioremployee",
-    # "superioremployeename",
+    "zipcode",
+    "country",
+    "telephone",
     "entityname",
     "specification4name",
-    "firstname",
-    "lastname",
-    "middlename"
-    # "phone"
+    "dateemployed",
+    "superioremployee",
+    "changeddate",
+    "versionnumber",
 ]
-FILTER_LIMIT = 100
-MAX_PAGES = 100
+FILTER_LIMIT = 2000
+MAX_PAGES = 1
 
 
 class MaconomyEmployeeServiceError(Exception):
@@ -158,9 +151,15 @@ class MaconomyEmployeeService:
         offset: int,
     ) -> list[dict[str, Any]]:
         """Fetch one page of employees from the showemployeeshr container."""
-        yesterday = (date.today() - timedelta(days=1)).strftime("%Y-%m-%d")
+        # Fetch employees changed today or yesterday only (days=1 → yesterday's date)
+        # Deltek Maconomy MQL requires date(YYYY,MM,DD) format with commas
+        yesterday = date.today() - timedelta(days=1)
+        date_filter = f"date({yesterday.year},{yesterday.month},{yesterday.day})"
         payload = {
-            "restriction": f"(DateEmployed le currentDate() and (DateEndEmployment gt currentDate() or DateEndEmployment = date(nulldate))) and (changeddate >= date({yesterday}))",
+            "restriction": (
+                "(DateEmployed le currentDate() and (DateEndEmployment gt currentDate() "
+                f"or DateEndEmployment = date(nulldate))) and (changeddate >= {date_filter})"
+            ),
             "fields": EMPLOYEE_FIELDS,
             "limit": FILTER_LIMIT,
             "offset": offset,

@@ -13,6 +13,9 @@ from app.features.schedular_services.services import (
     run_paycor_create_sync,
     run_paycor_update_sync,
 )
+from app.features.schedular_services.services import (
+    run_maconomy_concur_employee_sync
+)
 
 
 class PaycorSchedulerService:
@@ -114,5 +117,9 @@ class PaycorSchedulerService:
         self,
         client: httpx.AsyncClient,
     ) -> None:
-        async with self._paycor_lock:
-            await run_paycor_update_sync(client)
+        try:
+            async with self._paycor_lock:
+                await run_paycor_update_sync(client)
+        except Exception: 
+            logger.exception("Paycor employee sync failed and continwith SAP concur employee sync" )
+        await run_maconomy_concur_employee_sync(client)

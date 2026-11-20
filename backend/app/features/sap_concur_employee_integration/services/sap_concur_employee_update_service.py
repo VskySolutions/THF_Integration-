@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import Settings, get_settings
 from app.features.sap_concur_employee_integration.mappers.employee_mapper import (
     ENTERPRISE_USER_SCHEMA,
+    map_maconomy_employee_to_scim_patch,
     map_maconomy_employee_to_scim_user,
 )
 from app.features.sap_concur_employee_integration.models.employee_sync_tracking import (
@@ -94,10 +95,14 @@ class SAPConcurEmployeeUpdateService:
             details=details,
             created_at=datetime.now(timezone.utc),
         )
-        self.db.add(log_entry)
-        await self.db.commit()
-        await self.db.refresh(log_entry)
-        return log_entry
+        try:
+            self.db.add(log_entry)
+            await self.db.commit()
+            await self.db.refresh(log_entry)
+            return log_entry
+        except Exception:
+            await self.db.rollback()
+            raise
 
     async def record_sync_state(
         self,
@@ -142,8 +147,12 @@ class SAPConcurEmployeeUpdateService:
             tracking.sync_status = sync_status
             tracking.updated_at = now
 
-        await self.db.commit()
-        await self.db.refresh(tracking)
+        try:
+            await self.db.commit()
+            await self.db.refresh(tracking)
+        except Exception:
+            await self.db.rollback()
+            raise
 
         # Write to audit log
         await self.add_log(
@@ -183,6 +192,7 @@ class SAPConcurEmployeeUpdateService:
             queries.append(f'userName eq "{clean_email}"')
             queries.append(f'userName eq "{clean_email}.uat"')
 
+        scim_headers = self.concur_base_service._scim_headers()
         for filter_expr in queries:
             body = {
                 "schemas": [SCIM_SEARCH_SCHEMA],
@@ -191,12 +201,12 @@ class SAPConcurEmployeeUpdateService:
             try:
                 if self.client is not None:
                     resp = await self.concur_base_service._request_with_auth(
-                        self.client, "POST", search_url, json=body
+                        self.client, "POST", search_url, headers=scim_headers, json=body
                     )
                 else:
                     async with httpx.AsyncClient(timeout=self.timeout) as client:
                         resp = await self.concur_base_service._request_with_auth(
-                            client, "POST", search_url, json=body
+                            client, "POST", search_url, headers=scim_headers, json=body
                         )
 
                 if resp.status_code == 200:
@@ -217,8 +227,9 @@ class SAPConcurEmployeeUpdateService:
         # Concur enterprise extension requires companyId and ISO-8601 UTC Z format for startDate
         enterprise = payload.get(ENTERPRISE_USER_SCHEMA, {})
         if enterprise:
-            # Inject companyId discovered from Concur sandbox
-            enterprise["companyId"] = "f7255b65-38e0-458f-ab3d-40856e011c0b"
+            # Use configured companyId with fallback to sandbox default
+            company_id = getattr(self.settings, "sap_concur_company_id", "f7255b65-38e0-458f-ab3d-40856e011c0b")
+            enterprise["companyId"] = company_id
             # Location is rejected by single user endpoint, pop it safely
             enterprise.pop("location", None)
             start_date = enterprise.get("startDate")
@@ -234,15 +245,16 @@ class SAPConcurEmployeeUpdateService:
         base_url = str(self.settings.sap_concur_api_base_url).rstrip("/")
         create_url = f"{base_url}/profile/v4/Users"
         payload = self._prepare_scim_payload(maconomy_employee)
+        scim_headers = self.concur_base_service._scim_headers()
 
         if self.client is not None:
             resp = await self.concur_base_service._request_with_auth(
-                self.client, "POST", create_url, json=payload
+                self.client, "POST", create_url, headers=scim_headers, json=payload
             )
         else:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 resp = await self.concur_base_service._request_with_auth(
-                    client, "POST", create_url, json=payload
+                    client, "POST", create_url, headers=scim_headers, json=payload
                 )
 
         if resp.status_code in (200, 201, 202):
@@ -256,19 +268,20 @@ class SAPConcurEmployeeUpdateService:
         sap_concur_user_id: str,
         maconomy_employee: dict[str, Any],
     ) -> dict[str, Any]:
-        """Update existing user in SAP Concur via SCIM 2.0 PUT /profile/v4/Users/{userId}."""
+        """Update existing user in SAP Concur via SCIM 2.0 PATCH /profile/v4/Users/{userId}."""
         base_url = str(self.settings.sap_concur_api_base_url).rstrip("/")
         update_url = f"{base_url}/profile/v4/Users/{sap_concur_user_id.strip()}"
-        payload = self._prepare_scim_payload(maconomy_employee)
+        payload = map_maconomy_employee_to_scim_patch(maconomy_employee)
+        scim_headers = self.concur_base_service._scim_headers()
 
         if self.client is not None:
             resp = await self.concur_base_service._request_with_auth(
-                self.client, "PUT", update_url, json=payload
+                self.client, "PATCH", update_url, headers=scim_headers, json=payload
             )
         else:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 resp = await self.concur_base_service._request_with_auth(
-                    client, "PUT", update_url, json=payload
+                    client, "PATCH", update_url, headers=scim_headers, json=payload
                 )
 
         if resp.status_code in (200, 202, 204):
@@ -309,14 +322,17 @@ class SAPConcurEmployeeUpdateService:
         if not emp_number:
             return {"action": "SKIPPED", "reason": "Missing employeenumber"}
 
+        if email == (""):
+            return {"action": "SKIPPED", "reason": "Missing email"}
+
+
         emp_number = str(emp_number).strip()
-        live_version = (
-            maconomy_employee.get("rowVersion")
-            or maconomy_employee.get("versionnumber")
-            or maconomy_employee.get("version_number")
-            or maconomy_employee.get("instancekey")
-            or maconomy_employee.get("changeddate")
-        )
+        # Priority: versionnumber is canonical. Check is not None to avoid 0 evaluating to False (falsy bug).
+        live_version = None
+        for key in ("versionnumber", "versionNumber", "rowVersion", "version_number"):
+            if key in maconomy_employee and maconomy_employee[key] is not None:
+                live_version = maconomy_employee[key]
+                break
 
         tracking = await self.get_tracking(emp_number)
 
@@ -326,18 +342,20 @@ class SAPConcurEmployeeUpdateService:
         if tracking is not None:
             stored_version = tracking.maconomy_version
 
-            # Check if unchanged
-            if (
-                live_version is not None
-                and stored_version is not None
-                and str(live_version).strip() == str(stored_version).strip()
-                and tracking.sync_status == "SUCCESS"
-            ):
-                return {
-                    "action": "SKIPPED",
-                    "employee_number": emp_number,
-                    "reason": f"Version unchanged ({stored_version})",
-                }
+            # Integer version comparison — prevents wrong skips like "9" > "10" in string
+            if live_version is not None and stored_version is not None and tracking.sync_status == "SUCCESS":
+                try:
+                    live_v = int(str(live_version).strip())
+                    stored_v = int(str(stored_version).strip())
+                except (ValueError, TypeError):
+                    live_v = str(live_version).strip()
+                    stored_v = str(stored_version).strip()
+                if live_v <= stored_v:
+                    return {
+                        "action": "SKIPPED",
+                        "employee_number": emp_number,
+                        "reason": f"Version not newer (Maconomy: {live_v}, DB: {stored_v})",
+                    }
 
             # Version changed or previous failure -> Trigger Concur Update
             concur_id = tracking.sap_concur_user_id
@@ -381,52 +399,24 @@ class SAPConcurEmployeeUpdateService:
                         "error": str(exc),
                     }
             else:
-                # No Concur ID found, attempt creation
-                try:
-                    create_res = await self.create_concur_user(maconomy_employee)
-                    new_id = create_res.get("id")
-                    await self.record_sync_state(
-                        maconomy_employee_number=emp_number,
-                        sap_concur_user_id=new_id,
-                        maconomy_version=live_version,
-                        sync_status="SUCCESS",
-                        action="CREATE",
-                        old_version=stored_version,
-                        details=create_res,
-                    )
-                    return {
-                        "action": "CREATED",
-                        "employee_number": emp_number,
-                        "status": "SUCCESS",
-                        "concur_user_id": new_id,
-                    }
-                except Exception as exc:
-                    await self.record_sync_state(
-                        maconomy_employee_number=emp_number,
-                        sap_concur_user_id=None,
-                        maconomy_version=stored_version,
-                        sync_status="FAILED",
-                        action="CREATE",
-                        old_version=stored_version,
-                        error_message=str(exc),
-                        details={"error": str(exc)},
-                    )
-                    return {
-                        "action": "FAILED_CREATION",
-                        "employee_number": emp_number,
-                        "error": str(exc),
-                    }
+                # Concur ID not found in DB or Concur search -> SKIP (creation handled via trigger)
+                logger.info("Employee %s has tracking record but no SAP Concur user found. Skipping creation.", emp_number)
+                return {
+                    "action": "SKIPPED",
+                    "employee_number": emp_number,
+                    "reason": "Employee not found in SAP Concur (creation handled via trigger)",
+                }
 
         # ---------------------------------------------------------------------
-        # SCENARIO 2 & 3: EMPLOYEE NOT FOUND IN OUR DB
+        # SCENARIO 2: EMPLOYEE NOT FOUND IN OUR DB
         # ---------------------------------------------------------------------
         logger.info("Employee %s not in local DB. Checking SAP Concur for existing account...", emp_number)
         existing_concur_user = await self.find_concur_user(email, emp_number)
 
-        # SCENARIO 3: Pre-existing user in SAP Concur -> Adopt and Update
+        # User found in SAP Concur -> Record tracking and execute UPDATE
         if existing_concur_user is not None:
             concur_id = existing_concur_user.get("id")
-            logger.info("Found pre-existing Concur User %s for employee %s. Adopting and updating...", concur_id, emp_number)
+            logger.info("Found existing Concur User %s for employee %s. Updating...", concur_id, emp_number)
             try:
                 update_res = await self.update_concur_user(concur_id, maconomy_employee)
                 await self.record_sync_state(
@@ -434,12 +424,12 @@ class SAPConcurEmployeeUpdateService:
                     sap_concur_user_id=concur_id,
                     maconomy_version=live_version,
                     sync_status="SUCCESS",
-                    action="ADOPT_AND_UPDATE",
+                    action="UPDATE",
                     old_version=None,
                     details=update_res,
                 )
                 return {
-                    "action": "ADOPT_AND_UPDATED",
+                    "action": "UPDATED",
                     "employee_number": emp_number,
                     "status": "SUCCESS",
                     "concur_user_id": concur_id,
@@ -450,74 +440,21 @@ class SAPConcurEmployeeUpdateService:
                     sap_concur_user_id=concur_id,
                     maconomy_version=None,
                     sync_status="FAILED",
-                    action="ADOPT_AND_UPDATE",
+                    action="UPDATE",
                     old_version=None,
                     error_message=str(exc),
                     details={"error": str(exc)},
                 )
                 return {
-                    "action": "FAILED_ADOPT_UPDATE",
+                    "action": "FAILED_UPDATE",
                     "employee_number": emp_number,
                     "error": str(exc),
                 }
 
-        # SCENARIO 2: Brand new employee -> Create in SAP Concur
-        logger.info("Employee %s not in Concur. Proceeding with user creation...", emp_number)
-        try:
-            create_res = await self.create_concur_user(maconomy_employee)
-            new_id = create_res.get("id")
-            await self.record_sync_state(
-                maconomy_employee_number=emp_number,
-                sap_concur_user_id=new_id,
-                maconomy_version=live_version,
-                sync_status="SUCCESS",
-                action="CREATE",
-                old_version=None,
-                details=create_res,
-            )
-            return {
-                "action": "CREATED",
-                "employee_number": emp_number,
-                "status": "SUCCESS",
-                "concur_user_id": new_id,
-            }
-        except Exception as exc:
-            # If Concur returns 409 (User already exists due to eventual consistency or asynchronous indexing),
-            # catch the conflict, query by user list to find their ID, and adopt them immediately!
-            if "409" in str(exc) or "USER_ALREADY_EXISTS" in str(exc):
-                logger.info("Caught 409 Conflict for %s. Recovering and adopting existing user...", emp_number)
-                recovered_user = await self.find_concur_user(email, emp_number)
-                if recovered_user and recovered_user.get("id"):
-                    rec_id = recovered_user["id"]
-                    update_res = await self.update_concur_user(rec_id, maconomy_employee)
-                    await self.record_sync_state(
-                        maconomy_employee_number=emp_number,
-                        sap_concur_user_id=rec_id,
-                        maconomy_version=live_version,
-                        sync_status="SUCCESS",
-                        action="ADOPT_AND_UPDATE",
-                        old_version=None,
-                        details=update_res,
-                    )
-                    return {
-                        "action": "ADOPT_AND_UPDATED",
-                        "employee_number": emp_number,
-                        "status": "SUCCESS",
-                        "concur_user_id": rec_id,
-                    }
-
-            await self.record_sync_state(
-                maconomy_employee_number=emp_number,
-                sap_concur_user_id=None,
-                maconomy_version=None,
-                sync_status="FAILED",
-                action="CREATE",
-                old_version=None,
-                error_message=str(exc),
-                details={"error": str(exc)},
-            )
-            return {
-                "action": "FAILED_CREATION",
-                "employee_number": emp_number,
-                "error": str(exc),
-            }
+        # Employee not found in SAP Concur -> Direct SKIP (creation is trigger-only)
+        logger.info("Employee %s not in SAP Concur. Skipping (creation handled via trigger)...", emp_number)
+        return {
+            "action": "SKIPPED",
+            "employee_number": emp_number,
+            "reason": "Employee not found in SAP Concur (creation handled via trigger)",
+        }

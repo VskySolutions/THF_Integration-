@@ -1,7 +1,7 @@
 """Mappers for Paycor Payroll data to Maconomy General Journal format."""
 
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.features.paycor_payroll_integration.constants import (
@@ -35,9 +35,16 @@ def resolve_entity_code(department_description: str | None) -> str:
 
 
 def format_iso_datetime(value: str | datetime | None = None) -> str:
-    """Format a date/datetime into Paycor's required ISO-8601 format (YYYY-MM-DDTHH:MM:SS)."""
+    """Format a date/datetime into Paycor's required ISO-8601 format (YYYY-MM-DDTHH:MM:SS).
+    If no date is provided:
+      - When running on or before the 15th: defaults to the 1st of the current month (YYYY-MM-01T00:00:00)
+      - When running after the 15th (last day): defaults to the 16th of the current month (YYYY-MM-16T00:00:00)
+    """
     if not value:
-        return datetime.now(timezone.utc).strftime("%Y-%m-%dT00:00:00")
+        now = datetime.now(timezone.utc)
+        start_day = 1 if now.day <= 15 else 16
+        period_start = now.replace(day=start_day, hour=0, minute=0, second=0, microsecond=0)
+        return period_start.strftime("%Y-%m-%dT00:00:00")
 
     if isinstance(value, datetime):
         return value.strftime("%Y-%m-%dT%H:%M:%S")
@@ -101,7 +108,7 @@ def map_paycor_gl_to_maconomy_card(
         "remark1": desc[:100],
         "postingdate": date_val,
         "defaulttransactiontype": DEFAULT_TRANSACTION_TYPE,
-        "entityname": "",
+        "entityname": resolve_entity_code(department_description),
     }
 
 
