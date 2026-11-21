@@ -132,8 +132,6 @@ async def retry_expense_report_sync(
 async def _run_retry_expense_report_sync(
     session: AsyncSession, *, report_id: str
 ) -> dict[str, Any]:
-    print("======= retry_expense_report_sync ==========")
-
     # --- Shared workflow locals (WO[#16.2] 4.4) ---
     abort_reason: str | None = None
     user_id: str | None = None
@@ -439,10 +437,6 @@ async def _run_retry_expense_report_sync(
         )
         if recheck_sheet is not None:
             # Adopt the concurrently created sheet; never create a duplicate.
-            print(
-                f"Pre-create re-check found sheet for report {report_id_norm}; "
-                "adopting it instead of creating"
-            )
             resume_point, sheet_no, sheet_submitted, sheet_approved, employee_number = (
                 _classify_sheet_state(recheck_sheet)
             )
@@ -596,11 +590,7 @@ async def _run_retry_expense_report_sync(
             ]
 
             if not missing_expenses:
-                # FR-14: all lines already synchronized — proceed per submission state.
-                print(
-                    f"Expense lines already synchronized for report "
-                    f"{report_id_norm} ({existing_lines_count} existing)"
-                )
+                # FR-14: all lines already synchronized - proceed per submission state.
                 line_results = {
                     "succeeded": [
                         {

@@ -102,7 +102,6 @@ class MaconomyService:
         the card (line-only, user correction 2026-11-06). Covers router
         and retry callers alike (FR-14).
         """
-        print("=========== create_expense_sheet =============")
         # Concur-side engagement read happens ONCE (not per attempt):
         # report customData custom10 -> raw code (verbatim; "" = absent).
         raw_jobnumber = await self._resolve_report_engagement(expense_sheet_data)
@@ -169,7 +168,6 @@ class MaconomyService:
                         concurrency_token=concurrency_token,
                     )
 
-                    print("======== Expense Sheet Creation Started ========")
                     url = f"{self._expense_sheet_url()}/instances/{instance_id}/data/panes/card"
                     headers = self._container_headers(reconnect_token)
                     headers["Maconomy-Concurrency-Control"] = concurrency_token
@@ -187,7 +185,6 @@ class MaconomyService:
                             "Invalid Maconomy expense sheet response"
                         )
 
-                    print("========= Expense Sheet creation completed ==========")
                     return payload
             except httpx.HTTPError as http_exc:
                 if attempt >= 1:
@@ -214,7 +211,6 @@ class MaconomyService:
                 "Authorization": f"Basic {encoded_credentials}",
             },
         )
-        # print(response.status_code, response.text)
         response.raise_for_status()
 
         token = response.headers.get("Maconomy-Reconnect", "").strip()
@@ -299,7 +295,6 @@ class MaconomyService:
             "and canbeusedforexpenseregistration = true "
             "and allowexpenseregistration = true"
         )
-        print("restriction:", restriction)
         payload = {
             "restriction": restriction,
             "fields": [
@@ -317,7 +312,6 @@ class MaconomyService:
                 headers=self._container_headers(reconnect_token),
                 json=payload,
             )
-            print("response:", response.status_code, response.text)
             response.raise_for_status()
             records = response.json()["panes"]["filter"]["records"]
         except httpx.HTTPError as exc:
@@ -351,7 +345,6 @@ class MaconomyService:
 
             payload = {"panes":{"card":{"fields":["description","employeenumber","expensesheettext5","expensesheettext1","jobnumber","currency"]},"table":{"fields":[]}}}
 
-            print("======= _retrieve_expense_sheet_instance ==========")
             response = await client.post(
                 url,
                 headers=self._container_headers(
@@ -398,7 +391,6 @@ class MaconomyService:
         headers["Maconomy-Concurrency-Control"] = (
             concurrency_token
         )
-        print("========= _initialize_expense_sheet_card =========")
         response = await client.post(
             url,
             headers=headers,
@@ -433,7 +425,6 @@ class MaconomyService:
         new_concurrency_token = self._get_concurrency_token(
             response
         )
-        print("Card initialized!")
         return dict(initialized_data), new_concurrency_token
 
 
@@ -453,77 +444,6 @@ class MaconomyService:
             raise MaconomyServiceError(
                 "Invalid Maconomy concurrency token"
             ) from exc
- 
-
-    async def get_all_employees_from_maconomy(
-            self,
-        ) -> list[dict[str, Any]]:
-            print("get all employees")
-            try:
-                async with httpx.AsyncClient(timeout=self.timeout) as client:
-                    reconnect_token = await self._get_reconnect_token(client)
-                    return await self._get_maconomy_employees(
-                        client,
-                        reconnect_token,
-                    )
-            except httpx.HTTPError as exc:
-                raise MaconomyServiceError("Maconomy request failed") from exc
-
-
-    async def _get_maconomy_employees(
-        self,
-        client: httpx.AsyncClient,
-        reconnect_token: str,
-    )-> dict[str, Any] | None:
-        print("_get_maconomy_employees")
-        shortname = quote(self.settings.maconomy_shortname, safe="")
-        
-        url = f"{self.settings.maconomy_url}/maconomy-api/containers/{shortname}/showemployeeshr/filter"
-        
-        payload = {
-            "restriction":"DateEmployed le currentDate() and (DateEndEmployment gt currentDate() or DateEndEmployment = date(nulldate))",
-            "fields":["companyname","companynumber","country","vendornumber","departmentnumber","electronicmailaddress","employeenumber","employeetype","instancekey","name1","position","superioremployee"],
-            "limit":500
-        }
-
-        response = await client.post(
-            url,
-            headers=self._container_headers(
-                reconnect_token
-            ),
-            json=payload,
-        )
-        # print(response.status_code, response.text)
-        response.raise_for_status()
-
-
-        try:
-            employee_card = response.json()["panes"]["filter"]["records"]
-            # records = employee_card["records"]
-            # if employee_card["meta"]["rowCount"] != 1 or len(records) != 1:
-            #     return None
-            # job_data = records[0]["data"]
-
-            filtered_employees = [
-                {
-                    "employeenumber": item["data"]["employeenumber"], 
-                    "vendornumber": item["data"]["vendornumber"],
-                    "email": item["data"]["electronicmailaddress"],
-                    "employeename": item["data"]["name1"],
-                    "instancekey": item["data"]["instancekey"]
-                }
-                for item in employee_card
-                if item["data"]["electronicmailaddress"] and item["data"]["vendornumber"]
-            ]
-
-
-        except (KeyError, TypeError, ValueError) as exc:
-            raise MaconomyServiceError("Invalid employee response") from exc
-
-        # if not isinstance(job_data, dict):
-        #     raise MaconomyServiceError("Invalid Maconomy job response")
-        print(len(filtered_employees))
-        return filtered_employees
 
 
     # ==================== Scoped employee fetch (report owners only) ====================
@@ -540,10 +460,8 @@ class MaconomyService:
 
         if not normalized:
             # FR-5: no owners → no Maconomy request
-            print("No owner emails provided; skipping Maconomy employee request")
             return []
 
-        print("get_employees_by_emails_from_maconomy", normalized)
 
         # Transient-fault retry (FR-6): up to 2 attempts (initial + one
         # immediate retry), only on a genuine network failure. Each attempt
@@ -570,7 +488,6 @@ class MaconomyService:
         reconnect_token: str,
         emails: list[str],
     ) -> list[dict[str, Any]]:
-        print("_get_maconomy_employees_by_emails")
         shortname = quote(self.settings.maconomy_shortname, safe="")
         url = f"{self.settings.maconomy_url}/maconomy-api/containers/{shortname}/showemployeeshr/filter"
 
@@ -591,7 +508,6 @@ class MaconomyService:
             headers=self._container_headers(reconnect_token),
             json=payload,
         )
-        print("Maconomy employee fetch response:", response.status_code, response.text)
         response.raise_for_status()
 
         try:
@@ -611,7 +527,6 @@ class MaconomyService:
             raise MaconomyServiceError("Invalid employee response") from exc
 
         # FR-8/NFR-4: visibility into what was requested vs returned
-        print(f"Scoped employee fetch: requested={len(emails)} returned={len(filtered_employees)}")
         return filtered_employees
 
 
@@ -627,7 +542,6 @@ class MaconomyService:
 
         payload = {"panes":{"card":{"fields":["description","employeenumber","expensesheettext5","expensesheettext1"]},"table":{"fields":["entrydate","expensesheetlinetext10","currency","linenumber","numberof","unitpricecurrency","specification4name","entityname","text","jobnumber","taskname","remark1"]}}} # "specification4name","locationname","amountbase", "specification4name"
 
-        print("======= _retrieve_expense_instance ==========")
         response = await client.post(
             url,
             headers=self._container_headers(
@@ -664,7 +578,6 @@ class MaconomyService:
         concurrency_token: str,
         row: int,
     ) -> tuple[dict[str, Any], str]:
-        print("instance_id:", instance_id)
         url = (
             f"{self._expense_sheet_url()}/instances/"
             f"{instance_id}/data/panes/table/init"
@@ -677,13 +590,11 @@ class MaconomyService:
             concurrency_token
         )
         payload={"row":"end"}
-        print("========= _initialize_expense_table =========")
         response = await client.post(
             url,
             headers=headers,
             json=payload,
         )
-        print("Expense line response:", response.status_code, response.text)
  
         response.raise_for_status()
  
@@ -713,7 +624,6 @@ class MaconomyService:
         new_concurrency_token = self._get_concurrency_token(
             response
         )
-        print("Table initialized!")
         return dict(initialized_data), new_concurrency_token
 
 
@@ -768,14 +678,12 @@ class MaconomyService:
             Phase B retrieval failures carry message
             "Maconomy Jobs/Tasks retrieval failed: ...".
         """
-        print("=========== create_expense_line_items =============")
 
         sap_concur_service = SAPConcurService()
         succeeded: list[dict[str, Any]] = []
         failed: list[dict[str, Any]] = []
 
         def _record_skip(expense_id: str | None, reason: str) -> None:
-            print(f"Skipping expense: {reason}")
             failed.append(
                 {
                     "expense_id": expense_id or "",
@@ -796,10 +704,6 @@ class MaconomyService:
                     _record_skip(None, "missing expenseId")
                     continue
 
-                print(
-                    f"---- Pre-resolving expense line {index} "
-                    f"(expense_id={expense_id}) ----"
-                )
 
                 # 1) Fetch detailed expense data from SAP Concur
                 detailed_expense = (
@@ -820,14 +724,12 @@ class MaconomyService:
 
                 # 2) Resolve customData list items
                 custom_data = detailed_expense.get("customData", [])
-                print("=== custom_data ===:", custom_data)
                 custom_data_values: dict[str, Any] = {}
                 skip_expense = False
                 skip_reason = ""
 
                 if custom_data:
                     for custom_entry in custom_data:
-                        print("custom_entry:", custom_entry)
                         entry_id = custom_entry.get("id")
                         entry_value = custom_entry.get("value", "")
 
@@ -887,12 +789,6 @@ class MaconomyService:
                             # (code/short_code/value) — read `short_code`.
                             custom_data_values["task_code"] = (
                                 list_item.get("short_code", "")
-                            )
-                            print(
-                                f"[TaskCodeDebug] expense_id={expense_id} "
-                                f"custom11 list_item_id={entry_value} "
-                                f"concur_shortCode="
-                                f"{custom_data_values['task_code']!r}"
                             )
                         elif entry_id == "custom10":
                             # Engagement — code IS the Maconomy job number
@@ -956,7 +852,6 @@ class MaconomyService:
                 except httpx.HTTPError as exc:
                     raise MaconomyServiceError("Maconomy request failed") from exc
 
-                print("======== Expense Line Items Creation Started ========")
 
                 # --- Phase B: ONE jobs/filter + ONE api_tasks/filter (FR-3/FR-8/FR-15) ---
                 job_tasklist_map: dict[str, str] = {}
@@ -993,17 +888,6 @@ class MaconomyService:
                                     for r in task_records
                                     if str(r.get("taskname") or "").strip()
                                 }
-                            )
-                            print(
-                                f"[TaskCodeDebug] Maconomy api_tasks taskname "
-                                f"values (tasklists={task_lists}, "
-                                f"records={len(task_records)}): "
-                                f"{maconomy_tasknames}"
-                            )
-                            print(
-                                f"[TaskCodeDebug] task_code_map keys "
-                                f"({len(task_code_map)}): "
-                                f"{sorted(task_code_map)}"
                             )
                     except Exception as exc:
                         # FR-19: expense sheet already created — never raise.
@@ -1045,25 +929,10 @@ class MaconomyService:
                             job_tasklist_map,
                             task_code_map,
                         )
-                        print(
-                            f"[TaskCodeDebug] expense_id={expense_id} "
-                            f"job={entry['job_number']!r} "
-                            f"concur_shortCode="
-                            f"{entry['custom_data_values'].get('task_code')!r} "
-                            f"-> tasklist={tasklist!r} "
-                            f"maconomy_taskname={task_code!r} "
-                            f"skip={skip_reason!r}"
-                        )
                         if skip_reason:
                             _record_skip(expense_id, skip_reason)
                             continue
 
-                        print(
-                            f"---- Processing expense line {index} "
-                            f"(expense_id={expense_id}) -> tasklist="
-                            f"{tasklist}, task_code={task_code} "
-                            f"(source=custom11) ----"
-                        )
 
                         # 3) Map THIS line with DYNAMIC jobnumber/taskcode
                         expense_line_data = map_concur_expense_to_maconomy_expense(
@@ -1120,11 +989,9 @@ class MaconomyService:
                         headers["Maconomy-Concurrency-Control"] = (
                             concurrency_token
                         )
-                        print("expense_line_data:", expense_line_data)
                         response = await client.post(
                             url, headers=headers, json=expense_line_data
                         )
-                        print("response:", response.status_code, response.text)
                         response.raise_for_status()
 
                         try:
@@ -1184,7 +1051,6 @@ class MaconomyService:
                         )
                         continue
 
-                print("========= Expense Line Items creation completed ==========")
 
         except MaconomyServiceError:
             raise
@@ -1199,77 +1065,6 @@ class MaconomyService:
             "success_count": len(succeeded),
             "failure_count": len(failed),
         }
-        
-
-
-
-# ==================== Get all expense sheets from Maconomy ====================
-    async def get_all_expense_sheets_from_maconomy(
-            self,
-        ) -> list[dict[str, Any]]:
-            try:
-                async with httpx.AsyncClient(timeout=self.timeout) as client:
-                    reconnect_token = await self._get_reconnect_token(client)
-                    return await self._get_maconomy_expense_sheets(
-                        client,
-                        reconnect_token,
-                    )
-            except httpx.HTTPError as exc:
-                raise MaconomyServiceError("Maconomy request failed") from exc
-
-
-    async def _get_maconomy_expense_sheets(
-        self,
-        client: httpx.AsyncClient,
-        reconnect_token: str,
-    )-> dict[str, Any] | None:
-        shortname = quote(self.settings.maconomy_shortname, safe="")
-        
-        url = f"{self.settings.maconomy_url}/maconomy-api/containers/{shortname}/expensesheets/filter"
-        
-        payload = {
-            "fields":["amountbase","approvaldate","approved","createddate","description","employeename","employeenumber","expensesheetnumber","expensesheettext5","expensesheettext1","fullyapproved","instancekey","submitted","vendorsettlementstatus"],
-            "limit":500,
-        }
-
-        response = await client.post(
-            url,
-            headers=self._container_headers(
-                reconnect_token
-            ),
-            json=payload,
-        )
-        response.raise_for_status()
-        print("response:",response)
-
-
-        try:
-            expensesheets = response.json()["panes"]["filter"]["records"]
-            # records = employee_card["records"]
-            # if employee_card["meta"]["rowCount"] != 1 or len(records) != 1:
-            #     return None
-            # job_data = records[0]["data"]
-
-            filtered_expensesheets = [
-                {
-                    "expensesheetnumber": item["data"]["expensesheetnumber"], 
-                    "employeenumber": item["data"]["employeenumber"],
-                    "instancekey": item["data"]["instancekey"],
-                    "sap_report_id": item["data"]["expensesheettext5"]
-                }
-                for item in expensesheets
-                if item["data"]["expensesheetnumber"] and item["data"]["expensesheettext5"]
-            ]
-
-
-        except (KeyError, TypeError, ValueError) as exc:
-            raise MaconomyServiceError("Invalid vendor response", exc) from exc
-
-        # if not isinstance(job_data, dict):
-        #     raise MaconomyServiceError("Invalid Maconomy job response")
-        print(len(filtered_expensesheets))
-        return filtered_expensesheets
-
 
 # ==================== Get expense sheets by SAP Concur report IDs (restricted) ====================
     async def get_expense_sheets_by_report_ids(
@@ -1277,7 +1072,6 @@ class MaconomyService:
         report_ids: list[str],
     ) -> list[dict[str, Any]]:
         if not report_ids:
-            print("No SAP Concur report IDs provided; skipping Maconomy request")
             return []
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
@@ -1295,7 +1089,6 @@ class MaconomyService:
         report_ids: list[str],
     )-> dict[str, Any] | None:
         shortname = quote(self.settings.maconomy_shortname, safe="")
-        print("In exp sheet retrieval")
 
         url = f"{self.settings.maconomy_url}/maconomy-api/containers/{shortname}/expensesheets/filter"
 
@@ -1318,7 +1111,6 @@ class MaconomyService:
             ),
             json=payload,
         )
-        print("Maconomy sync-status response:", response.status_code)
         response.raise_for_status()
 
 
@@ -1348,7 +1140,6 @@ class MaconomyService:
             raise MaconomyServiceError("Invalid vendor response", exc) from exc
 
         extracted_ids = [sheet["sap_report_id"] for sheet in filtered_expensesheets]
-        print("Maconomy extracted synced report IDs:", extracted_ids)
         if expensesheets and not extracted_ids:
             # Should never happen under confirmed behavior (a returned record always
             # carries expensesheettext5) — retained as an anomaly tripwire.
@@ -1358,7 +1149,6 @@ class MaconomyService:
                 "record(s) but none carried expensesheettext5 -",
                 "every report will proceed to creation. Investigate the raw response.",
             )
-        print(len(filtered_expensesheets))
         return filtered_expensesheets
 
 
@@ -1412,7 +1202,6 @@ class MaconomyService:
                 },
             }
         }
-        print("======= _get_expense_sheet_lines_by_expensesheetnumber ==========")
         response = await client.post(
             url,
             headers=self._container_headers(reconnect_token),
@@ -1438,7 +1227,6 @@ class MaconomyService:
         )
         load_headers = self._container_headers(reconnect_token)
         load_headers["Maconomy-Concurrency-Control"] = concurrency_token
-        print("Loading expense sheet lines for:", expense_sheet_number)
         load_response = await client.post(
             load_url,
             headers=load_headers,
@@ -1519,7 +1307,6 @@ class MaconomyService:
             }
         }
 
-        print("======= _retrieve_expense_sheet_instance_for_submit ==========")
         response = await client.post(
             url,
             headers=self._container_headers(reconnect_token),
@@ -1559,7 +1346,6 @@ class MaconomyService:
         )
         load_headers = self._container_headers(reconnect_token)
         load_headers["Maconomy-Concurrency-Control"] = concurrency_token
-        print("Loading expense sheet for submit:", expense_sheet_number)
         load_response = await client.post(
             load_url, headers=load_headers, json={}
         )
@@ -1604,9 +1390,7 @@ class MaconomyService:
         action_headers = self._container_headers(reconnect_token)
         action_headers["Maconomy-Concurrency-Control"] = concurrency_token
         response = await client.post(action_url, headers=action_headers, json={})
-        print("Maconomy submit response:", response.status_code)
         response.raise_for_status()
-        print("Maconomy submit response body:", response.text)
 
         # The action already succeeded at this point, so a missing/invalid
         # concurrency token on THIS response must not fail the submission.
@@ -1671,7 +1455,6 @@ class MaconomyService:
             }
         }
 
-        print("======= _retrieve_expense_sheet_instance_for_approve ==========")
         response = await client.post(
             url,
             headers=self._container_headers(reconnect_token),
@@ -1711,7 +1494,6 @@ class MaconomyService:
         )
         load_headers = self._container_headers(reconnect_token)
         load_headers["Maconomy-Concurrency-Control"] = concurrency_token
-        print("Loading expense sheet for approve:", expense_sheet_number)
         load_response = await client.post(
             load_url, headers=load_headers, json={}
         )
@@ -1756,13 +1538,10 @@ class MaconomyService:
         action_headers = self._container_headers(reconnect_token)
         action_headers["Maconomy-Concurrency-Control"] = concurrency_token
         action_body = {"offset": 0, "limit": 100}
-        print("Maconomy approve action URL:", action_url)
         response = await client.post(
             action_url, headers=action_headers, json=action_body
         )
-        print("Maconomy approve response:", response.status_code)
         response.raise_for_status()
-        print("Maconomy approve response body:", response.text)
 
         try:
             action_payload = response.json() if response.text.strip() else {}
