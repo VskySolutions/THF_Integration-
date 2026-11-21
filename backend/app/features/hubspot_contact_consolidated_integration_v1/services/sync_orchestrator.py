@@ -25,8 +25,17 @@ from app.features.hubspot_contact_consolidated_integration_v1.services.hubspot_s
 from app.features.hubspot_contact_consolidated_integration_v1.services.integration_run_log_service import (
     V1ConsolidationRunLogger,
 )
+from app.features.hubspot_contact_consolidated_integration_v1.services.job_enrichment_service import (
+    JobEnrichmentService,
+)
+from app.features.hubspot_contact_consolidated_integration_v1.services.job_hubspot_service import (
+    JobHubSpotService,
+)
 from app.features.hubspot_contact_consolidated_integration_v1.services.maconomy_service import (
     MaconomyService,
+)
+from app.features.hubspot_contact_consolidated_integration_v1.services.maconomy_job_service import (
+    MaconomyJobService,
 )
 
 logger = logging.getLogger(__name__)
@@ -216,6 +225,18 @@ class ConsolidatedSyncService:
                 specification6_descriptions,
             )
 
+            self._stage = "job_cse_market_enrichment"
+            job_enrichment_result = await JobEnrichmentService(
+                MaconomyJobService(maconomy), JobHubSpotService(client)
+            ).run(
+                {
+                    str(customer.get("customernumber") or "").strip()
+                    for customer in selected_customers
+                    if str(customer.get("customernumber") or "").strip()
+                },
+                include_recent_jobs=True,
+            )
+
         errors_by_source = {
             error["source_id"]: error
             for error in upsert_result["batch_errors"]
@@ -272,6 +293,7 @@ class ConsolidatedSyncService:
                     or contact_sync_result["skipped"]
                     or contact_sync_result["errors"]
                     or contact_sync_result["batch_errors"]
+                    or job_enrichment_result["status"] == "partial_success"
                 )
                 else "success"
             ),
@@ -308,4 +330,5 @@ class ConsolidatedSyncService:
                 },
             },
             "skipped": company_payload["skipped"],
+            "job_enrichment": job_enrichment_result,
         }

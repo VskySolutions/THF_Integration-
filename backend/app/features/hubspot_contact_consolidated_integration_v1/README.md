@@ -83,3 +83,20 @@ member numbers, and Contact-to-Company pair outcomes. Names, email addresses,
 phone numbers, addresses, and upstream response messages are not stored in the
 run-log JSON. The monitoring screen's retry button starts the v1 Company flow;
 Contact-only retry will be added separately.
+
+After the existing Company and Contact phases, a separate job enrichment phase
+reads eligible Maconomy jobs that were created or changed yesterday or today.
+It also reads all eligible jobs, regardless of date, for Customers selected by
+the bulk Company flow. Eligible jobs are open, are not templates, and have an
+account manager and Specification 4. The phase selects one job per Customer by
+latest `createddate`; a tie keeps the first encountered job. Customers without
+an eligible job or a HubSpot Company are excluded. It searches HubSpot Contacts
+by `maconomy_customer_number` and updates each matching Contact and the Company:
+`cse` comes from the job's `accountmanagername`, and `market` comes from its
+`specification4name`. The Company upsert no longer maps Customer card
+`theaccountmanagername` to `cse`. A manual Company retry runs the same enrichment
+for that Customer's jobs only.
+
+The monitoring details show selected job and Customer numbers, the job creation
+date, Company and Contact update counts, safe HubSpot IDs, and coded errors.
+They do not store account manager names, market values, or Contact personal data.

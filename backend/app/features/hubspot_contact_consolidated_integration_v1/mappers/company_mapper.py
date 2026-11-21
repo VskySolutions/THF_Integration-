@@ -12,7 +12,6 @@ COMPANY_FIELD_MAPPING: dict[str, str] = {
     "name2": "address",
     "postaldistrict": "city",
     "name3": "address2",
-    "theaccountmanagername": "cse",
 }
 
 HUBSPOT_INDUSTRY_BY_SPECIFICATION1_DESCRIPTION: dict[str, str] = {}

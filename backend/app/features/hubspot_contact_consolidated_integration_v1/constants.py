@@ -59,3 +59,12 @@ CONTACT_PERSON_FIELDS = [
 
 SPECIFICATION1_FIELDS = ["specification1name", "description"]
 SPECIFICATION6_FIELDS = ["specification6name", "description"]
+
+JOB_CSE_MARKET_FIELDS = [
+    "jobnumber",
+    "customernumber",
+    "specification4name",
+    "accountmanagername",
+    "changeddate",
+    "createddate",
+]

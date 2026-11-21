@@ -99,12 +99,70 @@ def _safe_skip(item: dict[str, Any], entity_type: str) -> dict[str, str]:
     }
 
 
+def _safe_job_details(raw: dict[str, Any]) -> dict[str, Any]:
+    selected = [
+        {
+            "customer_number": _id(item.get("customer_number")),
+            "job_number": _id(item.get("job_number")),
+            "job_createddate": _code(item.get("job_createddate"), ""),
+            "company_id": _id(item.get("company_id")),
+            "company_updated": item.get("company_updated") is True,
+            "contacts_found": max(0, int(item.get("contacts_found") or 0)),
+            "contacts_updated": max(0, int(item.get("contacts_updated") or 0)),
+            "contact_ids": [
+                number for value in item.get("contact_ids", [])
+                if (number := _id(value))
+            ],
+            "failed_contact_ids": [
+                number for value in item.get("failed_contact_ids", [])
+                if (number := _id(value))
+            ],
+        }
+        for item in raw.get("selected_jobs", [])
+        if isinstance(item, dict)
+    ]
+    skipped = [
+        {
+            "customer_number": _id(item.get("customer_number")),
+            "job_number": _id(item.get("job_number")),
+            "reason": _code(item.get("reason"), "skipped"),
+        }
+        for item in raw.get("groups_skipped", [])
+        if isinstance(item, dict)
+    ]
+    errors = [
+        {
+            **_safe_error({
+                "source_id": item.get("job_number") or item.get("customer_number"),
+                "stage": item.get("stage"),
+                "reason": item.get("reason"),
+                "upstream_status": item.get("upstream_status"),
+                "category": item.get("category"),
+                "correlation_id": item.get("correlation_id"),
+            }, "job"),
+            "customer_number": _id(item.get("customer_number")),
+            "job_number": _id(item.get("job_number")),
+            "hubspot_id": _id(item.get("hubspot_id")),
+        }
+        for item in raw.get("errors", [])
+        if isinstance(item, dict)
+    ]
+    return {
+        "jobs_discovered": max(0, int(raw.get("jobs_discovered") or 0)),
+        "groups_considered": max(0, int(raw.get("groups_considered") or 0)),
+        "groups_skipped": skipped,
+        "selected_jobs": selected,
+        "errors": errors,
+    }
+
+
 def _run_details(result: dict[str, Any]) -> dict[str, Any]:
     contacts = result["contact_persons"]
     hubspot = result["hubspot"]
     maconomy = result["maconomy"]
     associations = contacts["associations"]
     recovery = associations["parent_company_recovery"]
+    job_details = _safe_job_details(result.get("job_enrichment") or {})
 
     main_customer_ids = _ids(
         [*result["new_customers"], *result["updated_customers"]],
@@ -264,6 +322,7 @@ def _run_details(result: dict[str, Any]) -> dict[str, Any]:
     failure_stages = Counter(
         item["stage"] for item in [*unique_errors, *pending_records]
     )
+    failure_stages.update(item["stage"] for item in job_details["errors"])
     failed_records = [
         *[item for item in unique_errors if item["source_id"]],
         *pending_records,
@@ -286,7 +345,16 @@ def _run_details(result: dict[str, Any]) -> dict[str, Any]:
         "checkpoints_succeeded": len(customer_checkpoints) + len(contact_checkpoints),
         "skipped": len(skipped),
         "failed": len(failed_keys) + len(run_errors),
+        "job_groups_considered": job_details["groups_considered"],
+        "job_groups_skipped": len(job_details["groups_skipped"]),
+        "job_companies_updated": sum(
+            item["company_updated"] for item in job_details["selected_jobs"]
+        ),
+        "job_contacts_updated": sum(
+            item["contacts_updated"] for item in job_details["selected_jobs"]
+        ),
     }
+    counts["failed"] += len(job_details["errors"])
     return {
         "version": "v1",
         "counts": counts,
@@ -297,6 +365,7 @@ def _run_details(result: dict[str, Any]) -> dict[str, Any]:
         "group_summaries": groups,
         "association_pairs": pairs,
         "run_errors": run_errors,
+        **({"job_enrichment": job_details} if "job_enrichment" in result else {}),
     }
 
 
@@ -378,6 +447,11 @@ class V1ConsolidationRunLogger:
             f"links added {row.associations_succeeded}; "
             f"failed {row.failed_count}"
         )
+        if counts.get("job_groups_considered"):
+            row.summary_message += (
+                f"; job CSE/market {counts['job_companies_updated']} Companies, "
+                f"{counts['job_contacts_updated']} Contacts"
+            )
         row.failure_stage = (
             ",".join(sorted(details["failure_stage_counts"])) or None
         )

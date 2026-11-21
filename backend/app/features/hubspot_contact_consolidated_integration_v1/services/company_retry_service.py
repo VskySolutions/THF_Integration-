@@ -25,8 +25,17 @@ from app.features.hubspot_contact_consolidated_integration_v1.services.hubspot_s
 from app.features.hubspot_contact_consolidated_integration_v1.services.integration_run_log_service import (
     V1ConsolidationRunLogger,
 )
+from app.features.hubspot_contact_consolidated_integration_v1.services.job_enrichment_service import (
+    JobEnrichmentService,
+)
+from app.features.hubspot_contact_consolidated_integration_v1.services.job_hubspot_service import (
+    JobHubSpotService,
+)
 from app.features.hubspot_contact_consolidated_integration_v1.services.maconomy_service import (
     MaconomyService,
+)
+from app.features.hubspot_contact_consolidated_integration_v1.services.maconomy_job_service import (
+    MaconomyJobService,
 )
 
 
@@ -86,6 +95,9 @@ class CompanyRetryService:
             "associations_added": contacts["associations"]["added"],
             "associations_existing": contacts["associations"]["already_present"],
             "contact_checkpoints_written": contacts["checkpoints_written"],
+            "job_groups_selected": len(
+                result.get("job_enrichment", {}).get("selected_jobs", [])
+            ),
         }
 
     async def _run_customer(
@@ -251,12 +263,18 @@ class CompanyRetryService:
                     "upstream_status": exc.upstream_status,
                 })
 
+            self._stage = "job_cse_market_enrichment"
+            job_enrichment_result = await JobEnrichmentService(
+                MaconomyJobService(maconomy), JobHubSpotService(client)
+            ).run({number}, include_recent_jobs=False)
+
         partial = bool(
             contact_result["errors"]
             or contact_result["skipped"]
             or contact_result["batch_errors"]
             or company_upsert["batch_errors"]
             or writeback_errors
+            or job_enrichment_result["status"] == "partial_success"
         )
         return {
             "status": "partial_success" if partial else "success",
@@ -283,4 +301,5 @@ class CompanyRetryService:
                 **contact_result,
             },
             "skipped": [],
+            "job_enrichment": job_enrichment_result,
         }

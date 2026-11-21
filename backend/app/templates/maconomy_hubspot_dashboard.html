@@ -247,6 +247,7 @@
 {% set skipped_records = details.get('skipped_records', []) %}
 {% set record_results = details.get('record_results', []) %}
 {% set group_summaries = details.get('group_summaries', []) %}
+{% set job_enrichment = details.get('job_enrichment', {}) %}
 <template id="hubspotRunDetails-{{ run.request_id }}">
     <div class="row g-2 mb-4" aria-label="Run outcome summary">
         <div class="col-4"><div class="run-detail-summary h-100">
@@ -275,6 +276,66 @@
         <div class="col-6 col-md-3"><div class="small text-secondary">Children stamped</div><div class="fw-semibold">{{ counts.get('children_stamped', 0) }}</div></div>
         <div class="col-6 col-md-3"><div class="small text-secondary">Links already present</div><div class="fw-semibold">{{ counts.get('associations_existing', 0) }}</div></div>
     </div>
+    {% endif %}
+    {% if job_enrichment %}
+    <h3 class="h6 fw-bold mt-4 mb-2">Job CSE and market sync</h3>
+    <div class="small text-secondary mb-2">
+        {{ job_enrichment.get('jobs_discovered', 0) }} jobs found;
+        {{ job_enrichment.get('groups_considered', 0) }} Customer groups;
+        {{ counts.get('job_companies_updated', 0) }} Companies and
+        {{ counts.get('job_contacts_updated', 0) }} Contacts updated.
+    </div>
+    {% if job_enrichment.get('selected_jobs') %}
+    <div class="table-responsive mb-3">
+        <table class="table table-hover align-middle mb-0">
+            <thead><tr>
+                <th>Customer</th><th>Selected job</th><th>Job created</th>
+                <th>HubSpot Company ID</th><th>Company CSE/market</th><th>Contacts CSE/market</th><th>HubSpot Contact IDs</th>
+            </tr></thead>
+            <tbody>
+            {% for item in job_enrichment.get('selected_jobs', []) %}
+            <tr>
+                <td><code>{{ item.get('customer_number') }}</code></td>
+                <td><code>{{ item.get('job_number') }}</code></td>
+                <td>{{ item.get('job_createddate') or '—' }}</td>
+                <td><code>{{ item.get('company_id') }}</code></td>
+                <td>{{ 'Updated' if item.get('company_updated') else 'Failed' }}</td>
+                <td>{{ item.get('contacts_updated', 0) }}/{{ item.get('contacts_found', 0) }}</td>
+                <td>{% for number in item.get('contact_ids', []) %}<code class="me-1">{{ number }}</code>{% endfor %}</td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+    {% if job_enrichment.get('groups_skipped') %}
+    <div class="small text-secondary mb-2">Jobs excluded because their Customer Company is absent from HubSpot:</div>
+    <div class="small mb-3">
+        {% for item in job_enrichment.get('groups_skipped', []) %}
+        <span class="me-3">Customer <code>{{ item.get('customer_number') }}</code>, job <code>{{ item.get('job_number') }}</code></span>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% if job_enrichment.get('errors') %}
+    <div class="table-responsive mb-4">
+        <table class="table table-hover align-middle mb-0">
+            <thead><tr><th>Customer</th><th>Job</th><th>Stage</th><th>Reason</th><th>HTTP</th><th>Category</th><th>Correlation ID</th></tr></thead>
+            <tbody>
+            {% for item in job_enrichment.get('errors', []) %}
+            <tr>
+                <td><code>{{ item.get('customer_number') }}</code></td>
+                <td><code>{{ item.get('job_number') }}</code></td>
+                <td>{{ item.get('stage', 'unknown') | replace('_', ' ') | title }}</td>
+                <td>{{ item.get('reason', 'failed') | replace('_', ' ') | title }}</td>
+                <td>{{ item.get('upstream_status') or '—' }}</td>
+                <td>{{ item.get('category') or '—' }}</td>
+                <td><code>{{ item.get('correlation_id') or '—' }}</code></td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
     {% endif %}
     {% if run.failure_stage or run.error_message %}
     <div class="alert alert-danger py-2">
