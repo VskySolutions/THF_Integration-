@@ -38,6 +38,9 @@ from app.features.sap_concur_integration.models import SAPConcurIntegrationLog
 from app.features.sap_concur_invoice_integration.models import (
     SAPConcurInvoiceIntegrationLog,
 )
+from app.features.sap_concur_invoice_integration_v2.models import (
+    SAPConcurInvoiceIntegrationLogV2,
+)
 from app.features.sap_concur_vendor_integration.models.integration_log import (
     SAPConcurVendorIntegrationLog,
 )
@@ -790,6 +793,101 @@ async def retry_sap_concur_expense_report(
 
 
 @router.post(
+    "/integrations/{integration_id}/retry-sap-concur-invoice-v2",
+    name="retry_sap_concur_invoice_v2",
+    include_in_schema=False,
+)
+async def retry_sap_concur_invoice_v2(
+    integration_id: uuid.UUID,
+    request: Request,
+    current_user: AuthenticatedUser,
+    csrf_token: Annotated[str, Form(min_length=1)],
+    invoice_id: Annotated[str, Form()],
+    session: Annotated[AsyncSession, Depends(get_db)],
+) -> RedirectResponse:
+    if not valid_csrf_token(request, csrf_token):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired form token.",
+        )
+
+    result = await session.execute(
+        select(IntegrationService).where(
+            IntegrationService.id == integration_id,
+            IntegrationService.identifier_unique_name
+            == IntegrationServiceIdentifier.MACONOMY_SAP_CONCUR_INVOICE_V2_SYNC.value,
+            IntegrationService.is_deleted.is_(False),
+        )
+    )
+    integration = result.scalar_one_or_none()
+    if integration is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="SAP Concur Invoice v2 integration service not found.",
+        )
+
+    redirect = RedirectResponse(
+        request.url_for("integration_logs", integration_id=integration.id),
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+    if not integration.is_active:
+        _set_flash(request, "Enable Invoice v2 before retrying an invoice.", "warning")
+        return redirect
+
+    invoice_id = invoice_id.strip()
+    if not invoice_id:
+        _set_flash(request, "Enter a SAP Concur invoice ID.", "danger")
+        return redirect
+
+    settings = get_settings()
+    sync_path = (
+        f"{settings.api_v1_prefix.rstrip('/')}"
+        "/sap-concur-invoices-v2/retry-invoice-sync"
+    )
+    retry_status = "FAILED"
+    categories = {
+        "SUCCESS": "success",
+        "SKIPPED": "warning",
+        "PARTIALLY_SUCCESS": "warning",
+        "FAILED": "danger",
+    }
+    try:
+        async with httpx.AsyncClient(
+            base_url=settings.scheduler_api_url,
+            headers={
+                "X-API-KEY": settings.scheduler_api_key.get_secret_value(),
+                "X-Request-ID": str(request.state.request_id),
+                "Accept": "application/json",
+            },
+            timeout=httpx.Timeout(settings.scheduler_request_timeout_seconds),
+        ) as client:
+            response = await client.post(sync_path, json={"invoice_id": invoice_id})
+    except httpx.RequestError:
+        message = "The retry API did not respond. Refresh invoice activity before retrying again."
+    else:
+        value = _json_response_value(response)
+        payload = value if isinstance(value, dict) else {}
+        if response.is_success:
+            outcome = str(payload.get("status") or "FAILED")
+            retry_status = outcome if outcome in categories else "FAILED"
+            fallback = f"Invoice retry returned {retry_status.lower().replace('_', ' ')}."
+            message = str(payload.get("message") or fallback)
+        else:
+            message = _internal_api_error(payload, response.status_code)
+
+    await log_activity(
+        session,
+        action="manual_retry",
+        user=current_user.username,
+        service=integration.identifier_unique_name,
+        data={"invoice_id": invoice_id, "integration_id": str(integration.id)},
+        status=retry_status,
+    )
+    _set_flash(request, message, categories[retry_status])
+    return redirect
+
+
+@router.post(
     "/integrations/{integration_id}/retry-sap-concur-vendor",
     name="retry_sap_concur_vendor",
     include_in_schema=False,
@@ -1352,6 +1450,44 @@ async def integration_logs(
 
     flash_message = request.session.pop("flash_message", None)
     flash_category = request.session.pop("flash_category", "success")
+    if (
+        integration.identifier_unique_name
+        == IntegrationServiceIdentifier.MACONOMY_SAP_CONCUR_INVOICE_V2_SYNC.value
+    ):
+        log_result = await session.execute(
+            select(SAPConcurInvoiceIntegrationLogV2)
+            .options(selectinload(SAPConcurInvoiceIntegrationLogV2.invoice_mapping))
+            .order_by(
+                SAPConcurInvoiceIntegrationLogV2.created_on_utc.desc(),
+                SAPConcurInvoiceIntegrationLogV2.id.desc(),
+            )
+            .limit(1000)
+        )
+        activity_logs = list(log_result.scalars().all())
+        total_logs = len(activity_logs)
+        successful_logs = sum(log.status.value == "SUCCESS" for log in activity_logs)
+        return templates.TemplateResponse(
+            request=request,
+            name="sap_concur_invoice_v2_dashboard.html",
+            context={
+                "current_user": current_user,
+                "csrf_token": ensure_csrf_token(request),
+                "integration": integration,
+                "activity_logs": activity_logs,
+                "metrics": {
+                    "total_activity": total_logs,
+                    "success_rate": (
+                        round(successful_logs / total_logs * 100, 1) if total_logs else 0
+                    ),
+                    "created": sum(log.action.value == "CREATE" for log in activity_logs),
+                    "failed": sum(log.status.value == "FAILED" for log in activity_logs),
+                    "latest_activity": activity_logs[0] if activity_logs else None,
+                },
+                "flash_message": flash_message,
+                "flash_category": flash_category,
+            },
+        )
+
     print("Integration Logs", "*"*50)
     print(integration.identifier_unique_name)
     if integration.identifier_unique_name == IntegrationServiceIdentifier.PAYCOR_SYNC_EMPLOYEES.value:

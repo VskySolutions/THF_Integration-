@@ -31,6 +31,10 @@ from app.features.sap_concur_invoice_integration.models import (  # noqa: F401
     SAPConcurInvoiceMapping,
     SAPConcurInvoiceIntegrationLog,
 )
+from app.features.sap_concur_invoice_integration_v2.models import (  # noqa: F401
+    SAPConcurInvoiceIntegrationLogV2,
+    SAPConcurInvoiceMappingV2,
+)
 from app.features.sap_concur_vendor_integration.models import (  # noqa: F401
     SAPConcurVendorIntegrationLog,
     SAPConcurVendorMapping,
