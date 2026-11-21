@@ -35,6 +35,7 @@ class MaconomyService:
         self.client = client
         self.settings = settings or get_settings()
         self._reconnect_token: str | None = None
+        self._country_names: dict[str, str] | None = None
 
     async def authenticate(self) -> None:
         if self._reconnect_token is not None:
@@ -80,6 +81,13 @@ class MaconomyService:
         return (
             f"{self.settings.maconomy_url}"
             f"/maconomy-api/containers/{shortname}/vendorcard"
+        )
+
+    def _countries_url(self) -> str:
+        shortname = quote(self.settings.maconomy_shortname, safe="")
+        return (
+            f"{self.settings.maconomy_url}"
+            f"/maconomy-api/containers/{shortname}/countries"
         )
 
     @staticmethod
@@ -192,13 +200,18 @@ class MaconomyService:
     async def create_vendor(
         self, sap_vendor: dict[str, Any]
     ) -> dict[str, Any]:
+        await self.authenticate()
+        country_names = await self.get_country_names()
+
         try:
-            payload = map_concur_vendor_to_maconomy_vendor_card(sap_vendor)
+            payload = map_concur_vendor_to_maconomy_vendor_card(
+                sap_vendor,
+                country_names,
+            )
         except ValueError as exc:
             raise MaconomyServiceError(str(exc)) from exc
 
         try:
-            await self.authenticate()
             instance_id, concurrency_token = (
                 await self._retrieve_vendor_instance()
             )
@@ -298,6 +311,67 @@ class MaconomyService:
             offset += limit
 
         return vendors
+
+    async def get_country_names(self) -> dict[str, str]:
+        if self._country_names is not None:
+            return self._country_names
+
+        await self.authenticate()
+        url = f"{self._countries_url()}/filter"
+        payload = {
+            "fields": [
+                "countrycode",
+                "countrynumber",
+                "eucountrycode",
+                "isocode",
+                "name",
+            ],
+            "limit": 500,
+        }
+        try:
+            response = await self.client.post(
+                url,
+                headers=self._container_headers(),
+                json=payload,
+            )
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise MaconomyServiceError(
+                "Maconomy country list request failed"
+            ) from exc
+
+        try:
+            pane = response.json()["panes"]["filter"]
+            records = pane["records"]
+        except (KeyError, TypeError, ValueError) as exc:
+            raise MaconomyServiceError(
+                "Invalid Maconomy countries filter response"
+            ) from exc
+        if not isinstance(records, list) or not all(
+            isinstance(record, dict) for record in records
+        ):
+            raise MaconomyServiceError(
+                "Invalid Maconomy countries filter response"
+            )
+
+        country_names: dict[str, str] = {}
+        for record in records:
+            data = record.get("data")
+            if not isinstance(data, dict):
+                raise MaconomyServiceError(
+                    "Invalid Maconomy countries filter response"
+                )
+            name = str(data.get("name") or "").strip()
+            if name:
+                country_names.setdefault(name.casefold(), name)
+
+        if not country_names:
+            raise MaconomyServiceError(
+                "Maconomy countries filter returned no usable values"
+            )
+
+        self._country_names = country_names
+        return country_names
 
     async def get_vendor_by_code(
         self, vendor_code: str

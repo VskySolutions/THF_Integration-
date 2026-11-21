@@ -10,6 +10,9 @@ from app.features.sap_concur_engagements_and_tasks_integration.services.sap_conc
     SAPConcurEngagementTaskService,
     SAPConcurEngagementTaskServiceError,
 )
+from app.features.sap_concur_engagements_and_tasks_integration.services import (
+    retry_engagement_task_sync_service,
+)
 
 __all__ = [
     "MaconomyService",
@@ -18,4 +21,5 @@ __all__ = [
     "SAPConcurEngagementTaskServiceError",
     "engagement_task_mapping_service",
     "integration_log_service",
+    "retry_engagement_task_sync_service",
 ]

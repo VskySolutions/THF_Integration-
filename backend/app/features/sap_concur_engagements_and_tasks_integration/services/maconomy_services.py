@@ -68,6 +68,7 @@ class MaconomyService:
                     "Authorization": f"Basic {encoded}",
                 },
             )
+            print(f"Maconomy auth response: {response.text}")
             response.raise_for_status()
         except httpx.HTTPError as exc:
             raise MaconomyServiceError(
@@ -75,11 +76,13 @@ class MaconomyService:
             ) from exc
 
         token = response.headers.get("Maconomy-Reconnect", "").strip()
+        print(f"Maconomy reconnect token: {token}")
         if response.status_code != 204 or not token:
             raise MaconomyServiceError("Invalid Maconomy authentication response")
         self._reconnect_token = token
 
     def _container_headers(self) -> dict[str, str]:
+        print(f"Maconomy reconnect token: {self._reconnect_token}")
         if self._reconnect_token is None:
             raise MaconomyServiceError("Maconomy has not been authenticated")
         return {
@@ -170,6 +173,46 @@ class MaconomyService:
             ) from exc
         return self._read_filter_records(response)
 
+    async def get_engagement_by_jobnumber(
+        self,
+        jobnumber: str,
+    ) -> dict[str, Any] | None:
+        """ONE jobs/filter lookup for a single open, non-template job.
+
+        Retry variant of ``get_engagements``: keeps the batch's
+        ``template=false and closed=false`` eligibility filters but drops
+        the two-day ``createddate`` window so older engagements remain
+        reachable. Returns the first matching raw record, or None when no
+        job matches.
+        """
+        code = jobnumber.strip()
+        if not code:
+            raise MaconomyServiceError("Maconomy jobnumber is required")
+        or_clause = self._build_or_restriction("jobnumber", [code])
+        restriction = f"template=false and closed=false and {or_clause}"
+        payload: dict[str, Any] = {
+            "restriction": restriction,
+            "fields": JOBS_FILTER_FIELDS,
+            "limit": 1,
+            "offset": 0,
+        }
+        try:
+            response = await self.client.post(
+                f"{self._jobs_url()}/filter",
+                headers=self._container_headers(),
+                json=payload,
+            )
+            print(f"Maconomy jobs/filter response: {response.text}")
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise MaconomyServiceError(
+                f"Maconomy jobs request failed: {exc}"
+            ) from exc
+        records = self._read_filter_records(response)
+        if not records:
+            return None
+        return records[0]
+
     async def get_tasks_by_task_lists(
         self,
         task_lists: list[str],
@@ -187,12 +230,10 @@ class MaconomyService:
         if not task_lists:
             return []
         or_clause = self._build_or_restriction("tasklist", task_lists)
-        current_date = today or date.today()
-        start_date = current_date - timedelta(days=1)
         restriction = (
             f"({or_clause}) "
             "and approved=true "
-            
+
         )
         payload: dict[str, Any] = {
             "restriction": restriction,
