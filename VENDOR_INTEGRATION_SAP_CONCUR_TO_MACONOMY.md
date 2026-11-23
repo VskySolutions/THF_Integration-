@@ -39,7 +39,8 @@ Order: all skipped first, then all attempted (each group in Concur order).
    - Returns `[{"vendornumber", "name1"}, ...]`.
 3. **Pre-check** — build a set of existing Maconomy `vendornumber` values; keep only Concur vendors whose `VendorCode` is **not** in that set (whitespace-stripped exact match). Already-existing vendors are omitted from the response.
 4. **Create loop** (per new vendor, failures do not stop the run):
-   - `map_concur_vendor_to_maconomy_vendor_card` (mappers/maconomy_vendor_mapper.py) → 11-field payload; `VendorCode`/`VendorName` required.
+   - `MaconomyService.get_country_names()` — one `POST {countries}/filter` per run (`{"fields": ["countrycode","countrynumber","eucountrycode","isocode","name"], "limit": 500}`), cached on the service instance; returns `{name.casefold(): name}`. Fetch failure or empty result → `MaconomyServiceError` (vendor fails).
+   - `map_concur_vendor_to_maconomy_vendor_card` (mappers/maconomy_vendor_mapper.py) → 11-field payload; `VendorCode`/`VendorName` required; `country` = SAP `State` looked up in that map (case-insensitive), else `united_states_of_america`.
    - Maconomy 3-step create: instance retrieval → card init → card submit (`MaconomyService.create_vendor`).
    - `MaconomyServiceError` for one vendor → `created: false` + message, continue with the next.
 5. **DB logging** (Part D) — mapping row + integration log per decision table below.
@@ -70,7 +71,7 @@ Order: all skipped first, then all attempted (each group in Concur order).
 | Address2 | `name3` |
 | City | `postaldistrict` |
 | PostalCode | `zipcode` |
-| — | `country` = `"United States"` (hardcoded — see Blockers) |
+| State | `country` = SAP `State` resolved case-insensitively against Maconomy `countries.name` via `countries/filter`; no match → `united_states_of_america` |
 | — | `currency` = `"USD"` (hardcoded) |
 | ContactFirstName + ContactLastName | `attention` = `"First Last"` |
 | ContactEmail | `electronicmailaddress` |
@@ -141,7 +142,7 @@ Dashboard: **Retry vendor** button + modal on `sap_concur_vendor_dashboard.html`
 
 ## Known blockers / deviations
 
-- **`country` hardcode unresolved:** `"United States"` was rejected live (`invalid enum value: 'United_States'`). Maconomy expects a canonical value from its `countries` table (paycor resolves via `countries/filter`). Card create (step 3) unverified until corrected.
+- **`country` resolved dynamically (previously blocked):** `"United States"` was rejected live (`invalid enum value: 'United_States'`). Now resolved via `countries/filter` against SAP `State` with `united_states_of_america` fallback (see Mapping).
 - **`paymentmodename` → `paymentmode`:** Maconomy rejects `paymentmodename` as an instance field (live-proven 400); slice uses `paymentmode` (still never written).
 - Pre-check is exact-string on `vendornumber`; no fuzzy matching (e.g., `E-*` paycor vendors simply never match Concur codes).
 

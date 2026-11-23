@@ -34,8 +34,8 @@ def get_location_code(department_name: str) -> str:
         Maconomy department code (e.g., "ADM", "AUD") or default code "-" if not found
     """
     if not department_name:
-        return DEFAULT_DEPARTMENT_CODE
-    return DEPARTMENT_CODE_MAPPING.get(department_name, DEFAULT_DEPARTMENT_CODE)
+        return DEFAULT_LOCATION_CODE
+    return LOCATION_CODE_MAPPING.get(department_name, DEFAULT_LOCATION_CODE)
 
 
 def get_department_code(location_name: str) -> str:
@@ -78,8 +78,6 @@ def map_concur_expense_to_maconomy_expense(
     custom_task_code = custom_data_values.get("task_code", "") if custom_data_values else ""
     custom_engagement = custom_data_values.get("Engagement_number", "") if custom_data_values else ""
 
-    print("custom_location:",custom_location , "custom_department:",custom_department,"custom_travel_reason:",custom_travel_reason,"custom_job_number:",custom_job_number)
-
     if not expense_id:
         raise ValueError("SAP Concur expense_id are required")
     if not job_number or not str(job_number).strip():
@@ -105,31 +103,5 @@ def map_concur_expense_to_maconomy_expense(
     return {
         "data": payload_data,
         "offset":0,"limit":100,"row":"end"    
-    }
-
-
-def map_expense_to_summary(
-    expense: dict[str, Any],
-) -> dict[str, Any]:
-    """
-    Map a full SAP Concur expense to a simplified summary with only required fields.
-    
-    Args:
-        expense: Full expense dict from SAP Concur API.
-        
-    Returns:
-        dict with expense_type, transaction_date, payment_type, currency,
-        business_purpose, amount, location, and department fields.
-    """
-    return {
-        "expense_type": str(expense.get("expenseType", {}).get("name", "")),
-        "transaction_date": str(expense.get("transactionDate", "")),
-        "payment_type": str(expense.get("paymentType", {}).get("name", "")),
-        "currency": str(expense.get("transactionAmount", {}).get("currencyCode", "")),
-        "business_purpose": str(expense.get("businessPurpose", "")),
-        "amount": expense.get("transactionAmount", {}).get("value", ""),
-        "vendor": str(expense.get("vendor", {})),
-        "location": str(expense.get("location", {}).get("name", "")),
-        "department": str(expense.get("department", "")),
     }
 

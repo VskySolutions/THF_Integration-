@@ -47,7 +47,6 @@ class SAPConcurService:
         user_id: str,
         context_type: str,
     ) -> dict[str, Any] | None:
-        print(f"Fetching report details for report_id: {report_id}, user_id: {user_id}, context_type: {context_type}")
         if not report_id.strip():
             raise SAPConcurServiceError("Invalid Concur Expense report ID")
 
@@ -183,7 +182,6 @@ class SAPConcurService:
         Returns:
             Complete detailed expense dict, or None if not found
         """
-        print(f"Fetching detailed expense data for expense_id: {expense_id}, report_id: {report_id}")
         if not expense_id.strip():
             raise SAPConcurServiceError("Invalid expense ID")
 
@@ -251,8 +249,6 @@ class SAPConcurService:
             payload = response.json()
             token = payload["access_token"]
             new_refresh_token = payload["refresh_token"]
-            # print(f"Concur Access Token: {token}")
-            # print(f"Concur Refresh Token: {new_refresh_token}")
         except (KeyError, TypeError, ValueError) as exc:
             raise SAPConcurServiceError(
                 "Invalid SAP Concur authentication response"
@@ -311,9 +307,6 @@ class SAPConcurService:
             token, expires_in = await self._get_token_from_refresh_token(client)
             self._cached_access_token = token
             self._cached_token_expires_at = time.time() + expires_in
-            print(
-                f"Concur access token cached; expires in {expires_in:.0f}s"
-            )
             return token
 
 
@@ -345,7 +338,6 @@ class SAPConcurService:
         request_headers = dict(headers or {})
         token = await self._get_valid_access_token(client)
         request_headers["Authorization"] = f"Bearer {token}"
-        print("Yes")
         response = await client.request(
             method, url, headers=request_headers, **kwargs
         )
@@ -522,11 +514,6 @@ class SAPConcurService:
                     "Invalid Concur expense reports response"
                 ) from exc
 
-            # TESTING: report this page's record count.
-            print(
-                f"[Concur debug] page {pages_fetched}: {len(items)} record(s)"
-            )
-
             if not isinstance(items, list) or any(
                 not isinstance(item, dict) for item in items
             ):
@@ -574,11 +561,6 @@ class SAPConcurService:
 
         # Validate the accumulated set exactly as the previous single-page
         # paths did (same exception type/message — FR-11).
-        # TESTING: report the total retrieved count to verify paging past 100.
-        print(
-            f"[Concur debug] pagination complete: {len(all_items)} total report(s) "
-            f"across {pages_fetched} page(s) (beyond 100: {len(all_items) > 100})"
-        )
         return self._validate_report_items(all_items)
 
     # Get yesterday and today's new expense reports from SAP Concur
@@ -601,12 +583,10 @@ class SAPConcurService:
         """
         Fetch Concur expense reports created yesterday or today.
         """
-        print("Fetching new expense reports from SAP Concur...")
         today = datetime.now().date()
         yesterday = today - timedelta(days=1)
         tomorrow = today + timedelta(days=1)
 
-        print(f"Fetching reports from {yesterday} to {tomorrow}")
         params = {
             "user": "ALL",
             "modifiedDateAfter": yesterday.isoformat(),
@@ -652,68 +632,8 @@ class SAPConcurService:
         return await self._get_all_expense_reports_paged(client, params)
 
 
-    # Get expense reports by email ID from SAP Concur
-    async def get_expense_reports_by_email_id_from_sap_concur(
-        self,
-        email_id: str,
-    ) -> list[dict[str, Any]]:
-        try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                return await self._get_expense_reports_by_email_id(
-                    client,
-                    email_id,
-                )
-        except httpx.HTTPError as exc:
-            raise SAPConcurServiceError("SAP Concur request failed") from exc
-
-
-    async def _get_expense_reports_by_email_id(
-        self,
-        client: httpx.AsyncClient,
-        email_id: str,
-    ) -> list[dict[str, Any]]:
-        """
-        Fetch Concur expense reports for a specific user by Email ID.
-        """
-        print(f"Fetching expense reports for email_id: {email_id}")
-
-        print(f"Fetching reports for user: {email_id}")
-        url = f"{self.settings.sap_concur_api_base_url}/api/v3.0/expense/reports"
-        headers = {
-            "Content-Type": "application/x-www-form-urlencoded",
-            "Accept": "application/json"
-        }
-        params = {
-            "user": email_id,
-            "limit": 100,
-        }
-
-        response = await self._request_with_auth(
-            client, "GET", url, headers=headers, params=params
-        )
-        response.raise_for_status()
-
-        try:
-            payload = response.json()
-            items = payload["Items"]
-        except (KeyError, TypeError, ValueError) as exc:
-            raise SAPConcurServiceError(
-                "Invalid Concur expense reports response"
-            ) from exc
-
-        if not isinstance(items, list) or any(
-            not isinstance(item, dict) for item in items
-        ):
-            raise SAPConcurServiceError(
-                "Invalid Concur expense reports response"
-            )
-
-        return items
-
-
     async def get_user_id_by_login_id(self, owner_login_id: str) -> str:
         try:
-            print(f"Fetching user ID for owner_login_id: {owner_login_id}")
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 url = f"{self.settings.sap_concur_api_base_url}/profile/identity/v4/Users"
                 headers = {
@@ -726,7 +646,6 @@ class SAPConcurService:
                 response = await self._request_with_auth(
                     client, "GET", url, headers=headers, params=params
                 )
-                # print("Response:", response)
                 response.raise_for_status()
 
                 try:
@@ -755,7 +674,6 @@ class SAPConcurService:
         context_type: str,
         item_id: str
     ) -> dict[str, Any] | None:
-        print(f"========= get_list_items_by_id ========")
         if not report_id.strip():
             raise SAPConcurServiceError("Invalid Concur Expense report ID")
 

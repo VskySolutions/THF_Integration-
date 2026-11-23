@@ -44,9 +44,13 @@ from app.features.sap_concur_engagements_and_tasks_integration.models.integratio
     EngagementTaskIntegrationAction,
     EngagementTaskIntegrationStatus,
 )
+from app.features.sap_concur_engagements_and_tasks_integration.schemas.sap_concur_engagements_and_tasks import (
+    RetryEngagementTaskSyncRequest,
+)
 from app.features.sap_concur_engagements_and_tasks_integration.services import (
     engagement_task_mapping_service,
     integration_log_service,
+    retry_engagement_task_sync_service,
 )
 from app.features.sap_concur_engagements_and_tasks_integration.services.maconomy_services import (
     MaconomyService,
@@ -392,3 +396,20 @@ async def sync_engagements_and_tasks(
 
     # --- Step 8: the Concur response is returned verbatim. ---
     return result
+
+
+@router.post("/retry-engagement-sync", response_model=dict[str, Any])
+async def retry_engagement_sync(
+    session: DatabaseSession,
+    request: RetryEngagementTaskSyncRequest,
+) -> dict[str, Any]:
+    """Retry-resume a single Maconomy engagement into SAP Concur."""
+    engagement_no = request.engagement_no.strip()
+    if not engagement_no:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="engagement_no is required",
+        )
+    return await retry_engagement_task_sync_service.retry_engagement_task_sync(
+        session, engagement_no=engagement_no
+    )

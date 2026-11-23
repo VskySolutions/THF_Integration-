@@ -15,12 +15,9 @@ from app.features.integration_services import (
 )
 from app.features.sap_concur_integration.services.sap_concur_service import SAPConcurService
 from app.features.sap_concur_integration.schemas.sap_concur import (
-    ExpenseReportEmailRequest,
     RetryExpenseReportRequest,
 )
 from app.features.sap_concur_integration.mappers import (
-    map_expense_report_to_summary,
-    map_expense_to_summary,
     map_owner_to_maconomy_employee,
 )
 from app.features.sap_concur_integration.services import (
@@ -48,23 +45,6 @@ DatabaseSession = Annotated[AsyncSession, Depends(get_db)]
 
 
 @router.post(
-    "/get-employee-from-maconomy",
-    response_model=list[dict[str, Any]],
-)
-async def get_employee(
-) -> list[dict[str, Any]]:
-    try:
-        expense_reports = await MaconomyService().get_all_expense_sheets_from_maconomy() #get_all_employees_from_maconomy()
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to fetch expense reports from SAP Concur: {str(exc)}",
-        ) from exc
-
-    return expense_reports
-
-
-@router.post(
     "/sync-sap-concur-expense-reports-with-maconomy",
     response_model=list[dict[str, Any]],
     dependencies=[
@@ -80,7 +60,6 @@ async def sync_todays_created_sap_concur_expense_reports_with_maconomy(
 ) -> list[dict[str, Any]]:
 
     results: list[dict[str, Any]] = []
-    print("======== get_yesterday_and_todays_new_expense_reports_from_sap_concur ========")
     try:
         new_expense_reports = (
             await SAPConcurService().get_yesterday_and_todays_new_expense_reports_from_sap_concur()
@@ -88,7 +67,6 @@ async def sync_todays_created_sap_concur_expense_reports_with_maconomy(
             # Guard: no new expense reports found — log and return early
         if not new_expense_reports:
             no_reports_message = "No new expense reports found in SAP Concur for the current sync window"
-            print(no_reports_message)
             await _save_integration_log(
                 session,
                 report_id="N/A",
@@ -132,10 +110,8 @@ async def sync_todays_created_sap_concur_expense_reports_with_maconomy(
         owner = str(report.get("OwnerLoginID") or "").strip()
         if owner and owner not in owner_emails:
             owner_emails.append(owner)
-    print("Owner emails for scoped employee fetch:", owner_emails)
 
     try:
-        print("Retrieving employees for report owners")
         employees = await MaconomyService().get_employees_by_emails_from_maconomy(owner_emails)
     except Exception as exc:
         detail = f"Failed to fetch Maconomy employees: {str(exc)}"
@@ -166,13 +142,11 @@ async def sync_todays_created_sap_concur_expense_reports_with_maconomy(
         if (report_id := report.get("ID"))
     ]
     try:
-        print("Retrieving synced expense sheets for report IDs")
         maconomy_expense_sheets = (
             await MaconomyService().get_expense_sheets_by_report_ids(concur_report_ids)
             if concur_report_ids
             else []
         )
-        # print("maconomy_expense_sheets:",maconomy_expense_sheets)
     except Exception as exc:
         detail = f"Failed to fetch Maconomy expense sheets: {str(exc)}"
         try:
@@ -194,15 +168,12 @@ async def sync_todays_created_sap_concur_expense_reports_with_maconomy(
             detail=detail,
         ) from exc
 
-    print("Requested report IDs sent to Maconomy restriction")
-
     # Build a set of sap_report_id values already synced in Maconomy (normalized)
     synced_report_ids = {
         str(sheet["sap_report_id"]).strip()
         for sheet in maconomy_expense_sheets
         if sheet.get("sap_report_id")
     }
-    print("Extracted synced report IDs from Maconomy:", sorted(synced_report_ids))
     unexpected_synced_ids = sorted(synced_report_ids - set(concur_report_ids))
     if unexpected_synced_ids:
         print(
@@ -211,9 +182,7 @@ async def sync_todays_created_sap_concur_expense_reports_with_maconomy(
             unexpected_synced_ids,
         )
 
-    # print("new_expense_reports:", new_expense_reports)
     for report in new_expense_reports:
-        print("For Loop")
         expense_report_id = report.get("ID")
         expense_report_login_id = report.get("OwnerLoginID")
         if not expense_report_id:
@@ -270,7 +239,6 @@ async def sync_todays_created_sap_concur_expense_reports_with_maconomy(
 
         # Employee matching — performed only for reports not yet synced
         matched_employee = map_owner_to_maconomy_employee(expense_report_login_id, employees)
-        # print("matched_employee:", matched_employee)
 
         if matched_employee is None:
             skip_message = (
@@ -304,7 +272,6 @@ async def sync_todays_created_sap_concur_expense_reports_with_maconomy(
         employee_number = matched_employee["employeenumber"]
 
         try:
-            print("create_maconomy_expense_sheets")
             result = await create_maconomy_expense_sheet(
                 report_id=expense_report_id,
                 login_id=expense_report_login_id,
@@ -344,83 +311,6 @@ async def sync_todays_created_sap_concur_expense_reports_with_maconomy(
             })
 
     return results
-
-
-@router.post(
-    "/get-expense-reports-by-email",
-    response_model=list[dict[str, Any]],
-)
-async def get_expense_reports_by_email(
-    request: ExpenseReportEmailRequest,
-) -> list[dict[str, Any]]:
-    """
-    Retrieve mapped SAP Concur expense report summaries and expense summaries for a given Email ID.
-    
-    Flow: Email ID -> Expense Report IDs -> SAP Concur User ID -> Mapped Report + Expense Summaries
-    """
-    email_id = request.email_id
-    detailed_reports: list[dict[str, Any]] = []
-
-    # Step 1: Get expense report IDs using Email ID
-    try:
-        expense_reports = await SAPConcurService().get_expense_reports_by_email_id_from_sap_concur(email_id)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to fetch expense reports from SAP Concur: {str(exc)}",
-        ) from exc
-
-    if not expense_reports:
-        return detailed_reports
-
-    # Step 2: Get SAP Concur User ID using Email ID
-    try:
-        user_id = await SAPConcurService().get_user_id_by_login_id(owner_login_id=email_id)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to fetch SAP Concur User ID: {str(exc)}",
-        ) from exc
-
-    # Step 3: Get detailed report and expenses for each Report ID
-    for report in expense_reports:
-        report_id = report.get("ID")
-        if not report_id:
-            continue
-
-        try:
-            report_detail = await SAPConcurService().get_report_by_id(
-                report_id=report_id,
-                user_id=user_id,
-                context_type="TRAVELER",
-            )
-            if report_detail is None:
-                continue
-        except Exception as exc:
-            print(f"Failed to fetch report {report_id}: {str(exc)}")
-            continue
-
-        # Step 4: Get expenses for this report
-        try:
-            expenses = await SAPConcurService().get_expenses_by_report_id(
-                report_id=report_id,
-                user_id=user_id,
-                context_type="TRAVELER",
-            )
-        except Exception as exc:
-            print(f"Failed to fetch expenses for report {report_id}: {str(exc)}")
-            expenses = []
-
-        # Step 5: Map report and expenses to summaries
-        report_summary = map_expense_report_to_summary(report_detail)
-        expense_summaries = [map_expense_to_summary(exp) for exp in expenses]
-
-        detailed_reports.append({
-            "report": report_summary,
-            "expenses": expense_summaries,
-        })
-
-    return detailed_reports
 
 
 async def create_maconomy_expense_sheet(
@@ -483,8 +373,6 @@ async def _run_create_maconomy_expense_sheet(
     employee_email: str | None = None,
     employee_number: str | None = None,
 ) -> dict[str, Any]:
-    print("======= create_maconomy_expense_sheet ==========")
-
     try:
         user_id = await SAPConcurService().get_user_id_by_login_id(owner_login_id=login_id)
         report_detail = await SAPConcurService().get_report_by_id(report_id, user_id, context_type="TRAVELER")
@@ -530,8 +418,6 @@ async def _run_create_maconomy_expense_sheet(
     # NameError if the creation branch shape changes.
     expense_sheet_number = ""
     maconomy_expense_sheet_result: dict[str, Any] = {}
-
-    print("======== Maconomy service initiated =========")
 
     if is_new_expensesheet:
         try:
@@ -646,7 +532,6 @@ async def _run_create_maconomy_expense_sheet(
         for entry in line_results.get("succeeded", []):
             expense_id = str(entry.get("expense_id", ""))
             line_number = str(entry.get("line_number", ""))
-            print("expense_id:", expense_id, "line_number:", line_number)
             if expense_id and line_number:
                 expense_line_metadata[expense_id] = line_number
 

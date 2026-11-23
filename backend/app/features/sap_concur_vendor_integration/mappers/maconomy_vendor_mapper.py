@@ -1,5 +1,7 @@
 from typing import Any
 
+DEFAULT_COUNTRY_NAME = "united_states_of_america"
+
 
 def build_vendorcard_instance_payload() -> dict[str, Any]:
     return {
@@ -35,6 +37,7 @@ def build_vendorcard_instance_payload() -> dict[str, Any]:
 
 def map_concur_vendor_to_maconomy_vendor_card(
     sap_vendor: dict[str, Any],
+    country_names: dict[str, str],
 ) -> dict[str, Any]:
     vendor_code = str(sap_vendor.get("VendorCode") or "").strip()
     vendor_name = str(sap_vendor.get("VendorName") or "").strip()
@@ -49,6 +52,14 @@ def map_concur_vendor_to_maconomy_vendor_card(
     vat_number = str(sap_vendor.get("TaxID") or "").strip()
     account_number = str(sap_vendor.get("AccountNumber") or "").strip()
 
+    sap_state = str(sap_vendor.get("State") or "").strip()
+    country = country_names.get(sap_state.casefold()) if sap_state else None
+    country = (
+        country
+        or country_names.get(DEFAULT_COUNTRY_NAME.casefold())
+        or DEFAULT_COUNTRY_NAME
+    )
+    print("sap_state:", sap_state, "country:", country, "country_names:", country_names)
     data: dict[str, Any] = {
         "name1": vendor_name,
         "vendornumber": vendor_code,
@@ -56,7 +67,7 @@ def map_concur_vendor_to_maconomy_vendor_card(
         "name3": str(sap_vendor.get("Address2") or "").strip(),
         "postaldistrict": str(sap_vendor.get("City") or "").strip(),
         "zipcode": str(sap_vendor.get("PostalCode") or "").strip(),
-        "country": "united_states_of_america",
+        "country": country,
         "currency": "USD",
         "attention": attention,
         "electronicmailaddress": str(

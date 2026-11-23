@@ -3,11 +3,9 @@ from app.features.sap_concur_integration.mappers.employee_mapper import (
 )
 from app.features.sap_concur_integration.mappers.expense_mapper import (
     map_concur_expense_to_maconomy_expense,
-    map_expense_to_summary,
 )
 from app.features.sap_concur_integration.mappers.expense_report_mapper import (
     map_concur_expense_report_to_maconomy_expensesheet,
-    map_expense_report_to_summary,
 )
 from app.features.sap_concur_integration.mappers.task_code_mapper import (
     build_job_tasklist_map,
@@ -21,8 +19,6 @@ __all__ = [
     "build_task_code_map",
     "map_concur_expense_to_maconomy_expense",
     "map_concur_expense_report_to_maconomy_expensesheet",
-    "map_expense_to_summary",
-    "map_expense_report_to_summary",
     "map_owner_to_maconomy_employee",
     "normalize",
     "resolve_task_code",
