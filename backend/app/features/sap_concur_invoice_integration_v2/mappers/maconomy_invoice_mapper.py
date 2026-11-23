@@ -57,16 +57,15 @@ def map_concur_invoice_to_maconomy_invoice_card(
         )
 
     invoice_date = _normalize_date(invoice_date_raw, "InvoiceDate")
-    if posting_date:
-        _normalize_date(posting_date, "PostingDate")
 
     data = {
         "vendornumber": vendor_code,
-        "entrydate": invoice_date,
         "invoicedate": invoice_date,
         "invoicenumber": invoice_number,
         "entrytext": invoice_name,
         "currency": "USD",
+        # "automaticvoucher": False,
+        # "transactionnumber": concur_invoice_id,
         "remark5": concur_invoice_id,
         "amountcurrency": 0,
         "vatcurrency": 0,
@@ -77,6 +76,8 @@ def map_concur_invoice_to_maconomy_invoice_card(
         "allocationresponsible": "",
         "amountexclvatcurrency": 0,
     }
+    if posting_date:
+        data["entrydate"] = _normalize_date(posting_date, "PostingDate")
     if payment_due_date:
         data["duedate"] = _normalize_date(payment_due_date, "PaymentDueDate")
 

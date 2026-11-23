@@ -3,6 +3,16 @@
 from decimal import Decimal, DecimalException
 from typing import Any
 
+
+_SPECIFICATION4_BY_CUSTOM1 = {
+    "1": "TLH",
+    "2": "TPA",
+    "4": "PCB",
+    "5": "LKL",
+    "6": "DDC",
+}
+
+
 def build_vendor_invoice_table_init_payload() -> dict[str, Any]:
     return {"row": "end"}
 
@@ -74,6 +84,7 @@ def build_vendor_invoice_allocation_instance_payload() -> dict[str, Any]:
                     "approvalhierarchyenabledheadervar",
                     "approvalhierarchyenabledlinesvar",
                     "area",
+                    # "automaticvoucher",
                     "bankaccount",
                     "bankregistrationnumber",
                     "basecurrencyvar",
@@ -253,6 +264,7 @@ def map_concur_invoice_line_to_allocation_row(
     engagement = line_value(line_item, "Custom10", "Engagement")
     task = line_value(line_item, "Custom11", "Task")
     department = line_value(line_item, "Department", "Custom2")
+    custom1 = line_value(line_item, "Custom1")
     unit_price_raw = line_value(line_item, "UnitPrice", "Unit Price")
     quantity_raw = line_value(line_item, "Quantity")
 
@@ -295,6 +307,7 @@ def map_concur_invoice_line_to_allocation_row(
             "financevatcode": "",
             "locationname": "",
             "entityname": department,
+            "specification4name": _SPECIFICATION4_BY_CUSTOM1.get(custom1, "-"),
         },
         "offset": 0,
         "limit": 100,
