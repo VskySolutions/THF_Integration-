@@ -203,11 +203,11 @@ class SAPConcurInvoiceService:
             "Content-Type": "application/x-www-form-urlencoded",
         }
         page_one_params: dict[str, Any] = {
-            "createDateAfter": self._DIGEST_CREATE_DATE_AFTER,
+            # "createDateAfter": self._DIGEST_CREATE_DATE_AFTER,
             # # "VendorInvoiceNumber": "1223546",
-            # "approvalStatus": "A_APPR",
-            # "lastModifiedDateAfter": yesterday.isoformat(),
-            # "lastModifiedDateBefore": tomorrow.isoformat(),
+            "approvalStatus": "A_APPR",
+            "lastModifiedDateAfter": yesterday.isoformat(),
+            "lastModifiedDateBefore": tomorrow.isoformat(),
         }
 
         all_items: list[dict[str, Any]] = []
