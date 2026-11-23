@@ -30,6 +30,9 @@ from app.features.paycor_integration.models import (
     PaycorTimesheetIntegrationLog,
 )
 from app.features.paycor_payroll_integration.models import PaycorPayrollIntegrationLog
+from app.features.sap_concur_employee_integration.models.employee_sync_tracking import (
+    EmployeeSyncLog,
+)
 from app.features.sap_concur_engagements_and_tasks_integration.models.integration_log import (
     SAPConcurEngagementTaskIntegrationLog,
 )
@@ -356,8 +359,8 @@ async def retry_paycor_employee(
     current_user: AuthenticatedUser,
     csrf_token: Annotated[str, Form(min_length=1)],
     retry_action: Annotated[str, Form(min_length=1)],
-    paycor_employee_number: Annotated[str, Form(min_length=1, max_length=100)],
     session: Annotated[AsyncSession, Depends(get_db)],
+    paycor_employee_number: Annotated[str | None, Form(max_length=100)] = None,
 ) -> RedirectResponse:
     """Manually retry a Paycor employee create or update synchronization."""
     if not valid_csrf_token(request, csrf_token):
@@ -386,8 +389,84 @@ async def retry_paycor_employee(
         request.url_for("integration_logs", integration_id=integration.id),
         status_code=status.HTTP_303_SEE_OTHER,
     )
+    settings = get_settings()
+
+    if retry_action == "sync_concur":
+        sync_path = (
+            f"{settings.api_v1_prefix.rstrip('/')}/sap-concur-employees/sync-cycle"
+        )
+        activity_data = {
+            "retry_action": retry_action,
+            "integration_id": str(integration.id),
+        }
+        try:
+            async with httpx.AsyncClient(
+                base_url=settings.scheduler_api_url,
+                headers={
+                    "X-API-KEY": settings.scheduler_api_key.get_secret_value(),
+                    "X-Request-ID": str(request.state.request_id),
+                    "Accept": "*/*",
+                },
+                timeout=httpx.Timeout(settings.scheduler_request_timeout_seconds),
+            ) as client:
+                response = await client.post(sync_path)
+        except httpx.RequestError:
+            await log_activity(
+                session,
+                action="manual_retry",
+                user=current_user.username,
+                service=integration.identifier_unique_name,
+                data=activity_data,
+                status="FAILED",
+            )
+            _set_flash(
+                request,
+                "The SAP Concur employee synchronization API could not be reached. Please try again.",
+                "danger",
+            )
+            return redirect
+
+        payload_value = _json_response_value(response)
+        payload = payload_value if isinstance(payload_value, dict) else {}
+        if not response.is_success:
+            await log_activity(
+                session,
+                action="manual_retry",
+                user=current_user.username,
+                service=integration.identifier_unique_name,
+                data=activity_data,
+                status="FAILED",
+            )
+            _set_flash(
+                request,
+                _internal_api_error(payload, response.status_code),
+                "danger",
+            )
+            return redirect
+
+        await log_activity(
+            session,
+            action="manual_retry",
+            user=current_user.username,
+            service=integration.identifier_unique_name,
+            data=activity_data,
+            status="SUCCESS",
+        )
+        updated_cnt = payload.get("updated", 0)
+        skipped_cnt = payload.get("skipped", 0)
+        failed_cnt = payload.get("failed", 0)
+        _set_flash(
+            request,
+            (
+                f"Maconomy to SAP Concur employee sync completed successfully "
+                f"(Updated: {updated_cnt}, Skipped: {skipped_cnt}, Failed: {failed_cnt})."
+            ),
+            "success",
+        )
+        return redirect
+
     normalized_employee_number = (
-        paycor_employee_number.strip()
+        paycor_employee_number.strip() if paycor_employee_number else ""
     )
     if not normalized_employee_number:
         _set_flash(
@@ -406,7 +485,6 @@ async def retry_paycor_employee(
         _set_flash(request, "Select a valid Paycor retry action.", "danger")
         return redirect
 
-    settings = get_settings()
     encoded_employee_number = quote(
         normalized_employee_number,
         safe="",
@@ -1262,6 +1340,14 @@ async def integration_logs(
         print("*"*50)
         print(total_logs)
         print("*"*50)
+
+        update_log_result = await session.execute(
+            select(EmployeeSyncLog)
+            .order_by(EmployeeSyncLog.created_at.desc())
+            .limit(1000)
+        )
+        update_logs = list(update_log_result.scalars().all())
+
         return templates.TemplateResponse(
             request=request,
             name="paycor_dashboard.html",
@@ -1270,6 +1356,7 @@ async def integration_logs(
                 "csrf_token": ensure_csrf_token(request),
                 "integration": integration,
                 "activity_logs": activity_logs,
+                "update_logs": update_logs,
                 "metrics": {
                     "total_activity": total_logs,
                     "success_rate": (
