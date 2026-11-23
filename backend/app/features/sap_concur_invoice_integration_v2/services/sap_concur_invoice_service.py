@@ -205,7 +205,7 @@ class SAPConcurInvoiceService:
         page_one_params: dict[str, Any] = {
             # "createDateAfter": self._DIGEST_CREATE_DATE_AFTER,
             # # "VendorInvoiceNumber": "1223546",
-            "approvalStatus": "A_APPR",
+            "approvalStatus": "R_APPR",
             "lastModifiedDateAfter": yesterday.isoformat(),
             "lastModifiedDateBefore": tomorrow.isoformat(),
         }
