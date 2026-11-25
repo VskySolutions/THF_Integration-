@@ -848,30 +848,6 @@ class PaycorTimesheetService:
                 normalized_code
             ] = earning_code
 
-            description = " ".join(
-                str(
-                    earning.get("description")
-                    or ""
-                ).split()
-            ).casefold()
-
-            if description == "straight time":
-                existing_st_code = (
-                    earning_codes.get("ST")
-                )
-
-                if (
-                    existing_st_code is not None
-                    and existing_st_code
-                    != earning_code
-                ):
-                    raise PaycorTimesheetServiceError(
-                        "Multiple Paycor earnings match "
-                        "Straight Time"
-                    )
-
-                earning_codes["ST"] = earning_code
-
         if not earning_codes:
             raise PaycorTimesheetServiceError(
                 "Paycor returned no usable earnings"

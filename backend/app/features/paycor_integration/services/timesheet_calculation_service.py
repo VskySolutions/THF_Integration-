@@ -14,6 +14,8 @@ PAID_LEAVE_EARNING_CODES = {
     "LVFML",
     "LVPL",
     "3PS",
+    "BRV",
+    "JURY",
     "OC",
 }
 
@@ -134,7 +136,7 @@ def calculate_weekly_earnings(
             worked_hours,
             WEEKLY_REGULAR_THRESHOLD,
         ),
-        "ST": straight_time_hours,
+        "ST-TIME": straight_time_hours,
         "OT": overtime_hours,
     }
 
@@ -189,7 +191,11 @@ def calculate_weekly_earnings(
         return [
             entry
             for entry in calculated_entries
-            if entry["earningCode"] in {"ST", "OT", "PTO"}
+            if entry["earningCode"] in {
+                "REG",
+                "ST-TIME",
+                "OT",
+            }
         ]
 
     return calculated_entries

@@ -7,14 +7,17 @@ class TimesheetTaskNotMappedError(ValueError):
     """Raised when a Maconomy task is missing."""
 
 
-LEAVE_TASK_TO_PAYCOR_EARNING_CODE = {
-    "3200": "LVEXC",
-    "3201": "LVFML",
-    "3202": "HOL",
-    "3203": "LVOOO",
-    "3204": "LVPL",
-    "3205": "PTO",
-    "3206": "3PS",
+TASK_TO_PAYCOR_EARNING_CODE = {
+    "23002": "PTO",
+    "23003": "LVEXC",
+    "23004": "LVFML",
+    "23005": "HOL",
+    "23006": "LVOOO",
+    "23007": "LVPL",
+    "23008": "3ps",
+    "23009": "BRV",
+    "23010": "Jury",
+    "24508": "OC",
 }
 
 
@@ -38,7 +41,7 @@ def resolve_paycor_earning_code(
     """
     Resolve a Maconomy task to a Paycor earning code.
 
-    Known leave tasks use their respective leave earning
+    Known tasks use their respective Paycor earning
     codes. All other valid tasks temporarily use REG.
     """
 
@@ -51,14 +54,14 @@ def resolve_paycor_earning_code(
             "Maconomy task name is missing"
         )
 
-    leave_earning_code = (
-        LEAVE_TASK_TO_PAYCOR_EARNING_CODE.get(
+    mapped_earning_code = (
+        TASK_TO_PAYCOR_EARNING_CODE.get(
             normalized_task_name
         )
     )
 
-    if leave_earning_code is not None:
-        return leave_earning_code
+    if mapped_earning_code is not None:
+        return mapped_earning_code
 
     # Temporary fallback until the client provides an
     # accurate task-to-earning mapping.
