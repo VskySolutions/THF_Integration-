@@ -333,18 +333,44 @@ class CCHClientService:
         try:
             payload = response.json()
         except ValueError:
-            return None
+            text = (response.text or "").strip()
+            return text[:1000] or None
         if not isinstance(payload, dict):
-            return None
-        for key in ("messages", "message", "detail", "errors"):
+            text = str(payload).strip()
+            return text[:1000] or None
+
+        parts: list[str] = []
+
+        # Field-level validation errors, e.g. {"ClientName": ["..."]}
+        errors = payload.get("errors")
+        if isinstance(errors, dict):
+            for field, field_messages in errors.items():
+                if isinstance(field_messages, list):
+                    joined = "; ".join(
+                        str(item) for item in field_messages if item is not None
+                    )
+                else:
+                    joined = str(field_messages) if field_messages is not None else ""
+                joined = joined.strip()
+                parts.append(f"{field}: {joined}" if joined else str(field))
+        elif isinstance(errors, list):
+            parts.extend(str(item).strip() for item in errors if item is not None)
+        elif errors is not None and str(errors).strip():
+            parts.append(str(errors).strip())
+
+        # One summary line (first non-empty of these keys).
+        for key in ("messages", "message", "detail", "title"):
             value = payload.get(key)
             if isinstance(value, list):
-                message = "; ".join(str(item) for item in value if item is not None)
+                summary = "; ".join(str(item) for item in value if item is not None)
             elif value is not None:
-                message = str(value)
+                summary = str(value)
             else:
                 continue
-            normalized = message.strip()
-            if normalized:
-                return normalized[:1000]
-        return None
+            summary = summary.strip()
+            if summary and summary not in parts:
+                parts.append(summary)
+                break
+
+        message = " | ".join(part for part in parts if part).strip()
+        return message[:1000] or None
