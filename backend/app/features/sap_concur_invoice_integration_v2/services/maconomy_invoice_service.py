@@ -722,7 +722,6 @@ class MaconomyInvoiceService:
         headers = self._container_headers(reconnect_token)
         headers["Maconomy-Concurrency-Control"] = concurrency_token
         response = await client.post(url, headers=headers, json=payload)
-        print(f"POST {url} response: {response.status_code} {response.text}")
         response.raise_for_status()
         return response
 
