@@ -16,6 +16,7 @@ from app.features.integration_services import (
 from app.features.sap_concur_invoice_integration_v2.constants import (
     IntegrationAction,
     IntegrationStatus,
+    InvoiceActionStatus,
     ProcessingStage,
 )
 from app.features.sap_concur_invoice_integration_v2.schemas.sap_concur_invoices import (
@@ -95,10 +96,12 @@ async def _log_invoice(
     lines: list[dict[str, Any]],
     *,
     action: IntegrationAction = IntegrationAction.CREATE,
-) -> tuple[IntegrationStatus, str]:
+) -> tuple[IntegrationStatus, ProcessingStage, str]:
     invoice_id = invoice["invoice_id"]
     mapping_id = None
     failed_lines = [line for line in lines if line["status"] == "FAILED"]
+    submission = invoice["submission"]
+    approval = invoice["approval"]
 
     if invoice["status"] == "FAILED":
         invoice_status = IntegrationStatus.FAILED
@@ -121,6 +124,8 @@ async def _log_invoice(
                 sap_concur_invoice_id=invoice_id,
                 maconomy_invoice_number=invoice["maconomy_invoice_number"],
                 allocation_lines_status=allocation_status,
+                is_submitted=InvoiceActionStatus(submission["status"]),
+                is_approved=InvoiceActionStatus(approval["status"]),
             )
         except Exception:
             await session.rollback()
@@ -132,9 +137,18 @@ async def _log_invoice(
         if failed_lines:
             invoice_status = IntegrationStatus.PARTIALLY_SUCCESS
             stage = ProcessingStage.LINE_CREATION
+        elif submission["status"] == InvoiceActionStatus.FAILED:
+            invoice_status = IntegrationStatus.PARTIALLY_SUCCESS
+            stage = ProcessingStage.SUBMISSION
+            message = f"{message}. Submission failed: {submission['message']}"
+        elif approval["status"] == InvoiceActionStatus.FAILED:
+            invoice_status = IntegrationStatus.PARTIALLY_SUCCESS
+            stage = ProcessingStage.APPROVAL
+            message = f"{message}. Invoice submitted. Approval failed: {approval['message']}"
         else:
             invoice_status = IntegrationStatus.SUCCESS
             stage = ProcessingStage.COMPLETED
+            message = f"{message}. Invoice submitted and approved for posting."
 
     await _save_log(
         session,
@@ -146,6 +160,8 @@ async def _log_invoice(
         details={
             "invoice": invoice,
             "lines": lines,
+            "submission": submission,
+            "approval": approval,
             "validation_failures": [
                 {
                     "line_index": line["line_index"],
@@ -158,7 +174,7 @@ async def _log_invoice(
         },
         action=action,
     )
-    return invoice_status, message
+    return invoice_status, stage, message
 
 
 async def _fetch_entries() -> list[dict[str, Any]]:
@@ -239,13 +255,23 @@ async def sync_sap_concur_invoices(session: DatabaseSession) -> dict[str, Any]:
 
     invoices: list[dict[str, Any]] = []
     lines: list[dict[str, Any]] = []
+    invoice_stages: set[ProcessingStage] = set()
     for entry, (invoice, invoice_lines) in zip(pending, results, strict=True):
-        await _log_invoice(session, entry, invoice, invoice_lines)
+        _, invoice_stage, _ = await _log_invoice(session, entry, invoice, invoice_lines)
+        invoice_stages.add(invoice_stage)
         invoices.append(invoice)
         lines.extend(invoice_lines)
 
     created_invoices = sum(invoice["status"] == "SUCCESS" for invoice in invoices)
     created_lines = sum(line["status"] == "SUCCESS" for line in lines)
+    submitted_invoices = sum(
+        invoice["submission"]["status"] == InvoiceActionStatus.SUCCESS
+        for invoice in invoices
+    )
+    approved_invoices = sum(
+        invoice["approval"]["status"] == InvoiceActionStatus.SUCCESS
+        for invoice in invoices
+    )
     invoice_create = bool(invoices) and created_invoices == len(invoices)
     lines_created = invoice_create and created_lines == len(lines)
     response = {
@@ -264,23 +290,34 @@ async def sync_sap_concur_invoices(session: DatabaseSession) -> dict[str, Any]:
             else "No SAP Concur invoices found in the current sync window"
         )
     else:
-        if lines_created:
+        stage = next(
+            (stage for stage in ProcessingStage if stage in invoice_stages),
+            ProcessingStage.COMPLETED,
+        )
+        if stage == ProcessingStage.COMPLETED:
             run_status = IntegrationStatus.SUCCESS
-            stage = ProcessingStage.COMPLETED
         elif created_invoices:
             run_status = IntegrationStatus.PARTIALLY_SUCCESS
-            stage = (
-                ProcessingStage.LINE_CREATION if invoice_create else ProcessingStage.INVOICE_CREATION
-            )
         else:
             run_status = IntegrationStatus.FAILED
-            stage = ProcessingStage.INVOICE_CREATION
         message = (
             f"Created {created_invoices}/{len(invoices)} invoices and "
-            f"{created_lines}/{len(lines)} allocation rows"
+            f"{created_lines}/{len(lines)} allocation rows. "
+            f"Submitted {submitted_invoices}/{len(invoices)} and "
+            f"approved {approved_invoices}/{len(invoices)} invoices."
         )
 
-    await _save_log(session, status=run_status, stage=stage, message=message, details=response)
+    await _save_log(
+        session,
+        status=run_status,
+        stage=stage,
+        message=message,
+        details={
+            **response,
+            "submitted_invoices": submitted_invoices,
+            "approved_invoices": approved_invoices,
+        },
+    )
     return response
 
 
@@ -293,7 +330,7 @@ async def retry_invoice_sync(
     session: DatabaseSession,
     request: RetryInvoiceSyncRequest,
 ) -> dict[str, Any]:
-    """Retry creation of one SAP Concur invoice and its lines in Maconomy."""
+    """Retry processing one SAP Concur invoice that is absent from Maconomy."""
     invoice_id = request.invoice_id.strip()
     if not invoice_id:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "invoice_id is required")
@@ -355,7 +392,7 @@ async def retry_invoice_sync(
         )
         raise HTTPException(status_code, message) from exc
 
-    outcome, message = await _log_invoice(session, entry, invoice, lines, action=action)
+    outcome, _, message = await _log_invoice(session, entry, invoice, lines, action=action)
     return {
         "invoice_id": invoice_id,
         "status": outcome,

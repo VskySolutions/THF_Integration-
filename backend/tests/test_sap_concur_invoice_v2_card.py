@@ -38,6 +38,8 @@ def create_invoice(monkeypatch):
             "instances": {"meta": {"containerInstanceId": str(uuid.uuid4())}},
             "init": {},
             "card": {"journalnumber": "J-1", "linenumber": 1},
+            "action;name=submitforapproval": {},
+            "action;name=approveforposting": {},
         }
         return httpx.Response(
             200,

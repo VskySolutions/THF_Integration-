@@ -14,12 +14,19 @@ class IntegrationStatus(str, Enum):
     PARTIALLY_SUCCESS = "PARTIALLY_SUCCESS"
 
 
+class InvoiceActionStatus(str, Enum):
+    SKIPPED = "SKIPPED"
+    FAILED = "FAILED"
+    SUCCESS = "SUCCESS"
+
+
 class ProcessingStage(str, Enum):
     INVOICE_FETCH = "INVOICE_FETCH"
     INVOICE_CREATION = "INVOICE_CREATION"
     LINE_CREATION = "LINE_CREATION"
     SUBMISSION = "SUBMISSION"
+    APPROVAL = "APPROVAL"
     COMPLETED = "COMPLETED"
 
 
-__all__ = ["IntegrationAction", "IntegrationStatus", "ProcessingStage"]
+__all__ = ["IntegrationAction", "IntegrationStatus", "InvoiceActionStatus", "ProcessingStage"]

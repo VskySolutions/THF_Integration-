@@ -195,6 +195,24 @@
                                     <dd class="col-sm-6">{{ details.get('invoices', []) | length }}</dd>
                                     <dt class="col-sm-6">Allocation lines processed</dt>
                                     <dd class="col-sm-6">{{ details.get('lines', []) | length }}</dd>
+                                    {% if 'submitted_invoices' in details %}
+                                    <dt class="col-sm-6">Invoices submitted</dt>
+                                    <dd class="col-sm-6">{{ details.submitted_invoices }}</dd>
+                                    <dt class="col-sm-6">Invoices approved</dt>
+                                    <dd class="col-sm-6">{{ details.approved_invoices }}</dd>
+                                    {% endif %}
+                                </dl>
+                                {% endif %}
+                                {% if not is_batch and 'submission' in details and 'approval' in details %}
+                                <dl class="row g-1 mb-0">
+                                    {% for key, label in [('submission', 'Submission'), ('approval', 'Approval')] %}
+                                    {% set outcome = details[key] %}
+                                    <dt class="col-sm-4">{{ label }}</dt>
+                                    <dd class="col-sm-8 text-break">
+                                        <span class="badge text-bg-{{ status_styles.get(outcome.status, 'secondary') }}">{{ status_labels.get(outcome.status, outcome.status) }}</span>
+                                        {{ outcome.message }}
+                                    </dd>
+                                    {% endfor %}
                                 </dl>
                                 {% endif %}
                                 {% if not is_batch and details.get('lines') %}

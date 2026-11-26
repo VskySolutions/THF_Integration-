@@ -46,7 +46,7 @@ class SAPConcurInvoiceIntegrationLogV2(Base):
         nullable=True,
         comment=(
             "Processing stages are INVOICE_FETCH, INVOICE_CREATION, "
-            "LINE_CREATION, SUBMISSION, and COMPLETED."
+            "LINE_CREATION, SUBMISSION, APPROVAL, and COMPLETED."
         ),
     )
     details: Mapped[dict | None] = mapped_column(JSONB, nullable=True)

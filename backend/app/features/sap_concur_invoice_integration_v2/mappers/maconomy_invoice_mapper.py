@@ -1,6 +1,7 @@
 """Map Concur invoice data to a Maconomy vendor invoice card."""
 
 from datetime import datetime
+from math import isfinite
 from typing import Any
 
 
@@ -57,6 +58,14 @@ def map_concur_invoice_to_maconomy_invoice_card(
         )
 
     invoice_date = _normalize_date(invoice_date_raw, "InvoiceDate")
+    invoice_amount = invoice.get("InvoiceAmount")
+    amount_text = "" if invoice_amount is None else str(invoice_amount).strip()
+    try:
+        amount_currency = float(amount_text) if amount_text else 0
+    except ValueError as exc:
+        raise ValueError(f"Unparseable InvoiceAmount: {amount_text!r}") from exc
+    if not isfinite(amount_currency):
+        raise ValueError("InvoiceAmount must be finite")
 
     data = {
         "vendornumber": vendor_code,
@@ -67,7 +76,7 @@ def map_concur_invoice_to_maconomy_invoice_card(
         # "automaticvoucher": False,
         # "transactionnumber": concur_invoice_id,
         "remark5": concur_invoice_id,
-        "amountcurrency": 0,
+        "amountcurrency": amount_currency,
         "vatcurrency": 0,
         "financevatcode": "",
         "purchaseordernumber": "",

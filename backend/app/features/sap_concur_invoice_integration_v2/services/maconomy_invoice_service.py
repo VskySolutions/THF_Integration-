@@ -1,4 +1,4 @@
-"""Create invoice cards and allocation rows on one Maconomy instance per invoice."""
+"""Create, submit, and approve invoices on one Maconomy instance per invoice."""
 
 import base64
 import uuid
@@ -9,6 +9,7 @@ from urllib.parse import quote
 import httpx
 
 from app.core.config import Settings, get_settings
+from app.features.sap_concur_invoice_integration_v2.constants import InvoiceActionStatus
 from app.features.sap_concur_invoice_integration_v2.mappers.maconomy_invoice_mapper import (
     map_concur_invoice_to_maconomy_invoice_card,
 )
@@ -42,6 +43,19 @@ class AllocationLineValidationError(ValueError):
     def __init__(self, message: str, reason: str) -> None:
         super().__init__(message)
         self.reason = reason
+
+
+def _action_failure(exc: MaconomyInvoiceServiceError | httpx.HTTPError) -> str:
+    if isinstance(exc, httpx.HTTPStatusError):
+        if exc.response.status_code >= 500:
+            return (
+                f"Maconomy returned HTTP {exc.response.status_code}. "
+                "Verify the invoice in Maconomy."
+            )
+        return f"Maconomy returned HTTP {exc.response.status_code}."
+    if isinstance(exc, httpx.RequestError):
+        return "The request outcome is unknown. Verify the invoice in Maconomy."
+    return str(exc)
 
 
 def _response_object(response: httpx.Response, operation: str) -> dict[str, Any]:
@@ -93,7 +107,7 @@ def _card_line_number(result: dict[str, Any]) -> int | None:
 
 
 class MaconomyInvoiceService:
-    """Read Maconomy references and create invoice cards and allocations."""
+    """Read Maconomy references and process invoice cards and allocations."""
 
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or get_settings()
@@ -567,7 +581,19 @@ class MaconomyInvoiceService:
                     "journalnumber missing from the Maconomy invoice card response"
                 )
         except (ValueError, MaconomyInvoiceServiceError, httpx.HTTPError) as exc:
-            return {"invoice_id": invoice_id, "status": "FAILED", "message": str(exc)}, []
+            return {
+                "invoice_id": invoice_id,
+                "status": "FAILED",
+                "message": str(exc),
+                "submission": {
+                    "status": InvoiceActionStatus.SKIPPED.value,
+                    "message": "Invoice creation failed.",
+                },
+                "approval": {
+                    "status": InvoiceActionStatus.SKIPPED.value,
+                    "message": "Invoice creation failed.",
+                },
+            }, []
 
         invoice_number = _card_line_number(card)
         result = {
@@ -582,18 +608,89 @@ class MaconomyInvoiceService:
                 "Missing or invalid linenumber in the Maconomy invoice card response"
             )
 
-        if not line_items:
-            return result, []
-        lines = await self._create_allocation_lines(
-            client,
-            reconnect_token,
-            instance_url,
-            created,
-            invoice_id,
-            line_items,
-            entity_names,
-        )
+        lines = []
+        last_write = created
+        if line_items:
+            lines, last_write = await self._create_allocation_lines(
+                client,
+                reconnect_token,
+                instance_url,
+                created,
+                invoice_id,
+                line_items,
+                entity_names,
+            )
+        if any(line["status"] == "FAILED" for line in lines):
+            result.update(
+                submission={
+                    "status": InvoiceActionStatus.SKIPPED.value,
+                    "message": "One or more allocation lines failed.",
+                },
+                approval={
+                    "status": InvoiceActionStatus.SKIPPED.value,
+                    "message": "One or more allocation lines failed.",
+                },
+            )
+        else:
+            result.update(
+                await self._submit_and_approve(
+                    client, reconnect_token, card_url, last_write
+                )
+            )
         return result, lines
+
+    async def _submit_and_approve(
+        self,
+        client: httpx.AsyncClient,
+        reconnect_token: str,
+        card_url: str,
+        last_write: httpx.Response,
+    ) -> dict[str, dict[str, str]]:
+        action_url = f"{card_url}/0/action;name="
+        payload = {"offset": 0, "limit": 100}
+        try:
+            submitted = await self._post_pane(
+                client,
+                reconnect_token,
+                self._get_concurrency_token(last_write),
+                f"{action_url}submitforapproval",
+                payload,
+            )
+        except (MaconomyInvoiceServiceError, httpx.HTTPError) as exc:
+            return {
+                "submission": {
+                    "status": InvoiceActionStatus.FAILED.value,
+                    "message": _action_failure(exc),
+                },
+                "approval": {
+                    "status": InvoiceActionStatus.SKIPPED.value,
+                    "message": "Invoice submission failed.",
+                },
+            }
+
+        submission = {
+            "status": InvoiceActionStatus.SUCCESS.value,
+            "message": "Invoice submitted for approval.",
+        }
+        try:
+            await self._post_pane(
+                client,
+                reconnect_token,
+                self._get_concurrency_token(submitted),
+                f"{action_url}approveforposting",
+                payload,
+            )
+        except (MaconomyInvoiceServiceError, httpx.HTTPError) as exc:
+            approval = {
+                "status": InvoiceActionStatus.FAILED.value,
+                "message": _action_failure(exc),
+            }
+        else:
+            approval = {
+                "status": InvoiceActionStatus.SUCCESS.value,
+                "message": "Invoice approved for posting.",
+            }
+        return {"submission": submission, "approval": approval}
 
     async def _open_invoice_instance(
         self, client: httpx.AsyncClient, reconnect_token: str
@@ -625,6 +722,7 @@ class MaconomyInvoiceService:
         headers = self._container_headers(reconnect_token)
         headers["Maconomy-Concurrency-Control"] = concurrency_token
         response = await client.post(url, headers=headers, json=payload)
+        print(f"POST {url} response: {response.status_code} {response.text}")
         response.raise_for_status()
         return response
 
@@ -637,10 +735,11 @@ class MaconomyInvoiceService:
         invoice_id: str,
         line_items: list[dict[str, Any]],
         entity_names: set[str],
-    ) -> list[dict[str, Any]]:
+    ) -> tuple[list[dict[str, Any]], httpx.Response]:
         table_url = f"{instance_url}/data/panes/table"
         blocked_reason = None
         concurrency_token = ""
+        last_write = card_response
         try:
             initialized = await self._post_pane(
                 client,
@@ -669,6 +768,7 @@ class MaconomyInvoiceService:
                 response = await self._post_pane(
                     client, reconnect_token, concurrency_token, table_url, payload
                 )
+                last_write = response
                 if index + 1 < len(line_items):
                     try:
                         concurrency_token = self._get_concurrency_token(response)
@@ -700,7 +800,7 @@ class MaconomyInvoiceService:
                         "result": result,
                     }
                 )
-        return lines
+        return lines, last_write
 
     async def _validate_line(
         self,
