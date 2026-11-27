@@ -68,7 +68,6 @@ class MaconomyService:
                     "Authorization": f"Basic {encoded}",
                 },
             )
-            print(f"Maconomy auth response: {response.text}")
             response.raise_for_status()
         except httpx.HTTPError as exc:
             raise MaconomyServiceError(
@@ -76,13 +75,11 @@ class MaconomyService:
             ) from exc
 
         token = response.headers.get("Maconomy-Reconnect", "").strip()
-        print(f"Maconomy reconnect token: {token}")
         if response.status_code != 204 or not token:
             raise MaconomyServiceError("Invalid Maconomy authentication response")
         self._reconnect_token = token
 
     def _container_headers(self) -> dict[str, str]:
-        print(f"Maconomy reconnect token: {self._reconnect_token}")
         if self._reconnect_token is None:
             raise MaconomyServiceError("Maconomy has not been authenticated")
         return {
@@ -165,7 +162,6 @@ class MaconomyService:
                 headers=self._container_headers(),
                 json=payload,
             )
-            print(f"Maconomy jobs/filter response: {response.text}")
             response.raise_for_status()
         except httpx.HTTPError as exc:
             raise MaconomyServiceError(
@@ -202,7 +198,6 @@ class MaconomyService:
                 headers=self._container_headers(),
                 json=payload,
             )
-            print(f"Maconomy jobs/filter response: {response.text}")
             response.raise_for_status()
         except httpx.HTTPError as exc:
             raise MaconomyServiceError(
@@ -247,7 +242,6 @@ class MaconomyService:
                 headers=self._container_headers(),
                 json=payload,
             )
-            print(f"Maconomy api_tasks/filter response: {response.text}")
             response.raise_for_status()
         except httpx.HTTPError as exc:
             raise MaconomyServiceError(

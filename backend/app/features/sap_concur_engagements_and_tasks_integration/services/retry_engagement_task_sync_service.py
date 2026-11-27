@@ -69,10 +69,8 @@ async def _safe_retry_log(
             action=EngagementTaskIntegrationAction.RETRY_CREATE,
             message=message,
         )
-    except Exception as exc:
-        print(
-            f"[engagement-task-retry-log] failed to persist integration log: {exc}"
-        )
+    except Exception:
+        pass
 
 
 async def _safe_create_mapping(
@@ -93,11 +91,7 @@ async def _safe_create_mapping(
             maconomy_tasknumber=maconomy_tasknumber,
         )
         return mapping.id
-    except Exception as exc:
-        print(
-            f"[engagement-task-retry-log] failed to persist mapping for "
-            f"{maconomy_jobnumber}/{maconomy_tasknumber!r}: {exc}"
-        )
+    except Exception:
         return None
 
 

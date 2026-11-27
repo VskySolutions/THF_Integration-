@@ -107,9 +107,9 @@ async def _safe_create_log(
             action=EngagementTaskIntegrationAction.CREATE,
             message=message,
         )
-    except Exception as exc:
+    except Exception:
         # Safe logging (invoice/expense pattern): never mask the outcome.
-        print(f"[engagement-task-log] failed to persist integration log: {exc}")
+        pass
 
 
 async def _safe_create_mapping(
@@ -126,11 +126,7 @@ async def _safe_create_mapping(
             maconomy_tasknumber=maconomy_tasknumber,
         )
         return mapping.id
-    except Exception as exc:
-        print(
-            f"[engagement-task-log] failed to persist mapping for "
-            f"{maconomy_jobnumber}/{maconomy_tasknumber!r}: {exc}"
-        )
+    except Exception:
         return None
 
 
