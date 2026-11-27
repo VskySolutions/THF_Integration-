@@ -110,7 +110,6 @@ class MaconomyService:
             headers=self._container_headers(),
             json=payload,
         )
-        print("=== Retrieve Instance ===")
         response.raise_for_status()
         try:
             instance_id = response.json()["meta"]["containerInstanceId"]
@@ -134,7 +133,6 @@ class MaconomyService:
         headers = self._container_headers()
         headers["Maconomy-Concurrency-Control"] = concurrency_token
         response = await self.client.post(url, headers=headers, json={})
-        print("=== Initialize Vendor Card ===")
         response.raise_for_status()
         try:
             initialized_data = response.json()["data"]
@@ -161,7 +159,6 @@ class MaconomyService:
         )
         headers = self._container_headers()
         headers["Maconomy-Concurrency-Control"] = concurrency_token
-        print("=== Submit Vendor Card ===")
         response = await self.client.post(url, headers=headers, json=payload)
         if response.is_error:
             response_text = (

@@ -59,7 +59,6 @@ def map_concur_vendor_to_maconomy_vendor_card(
         or country_names.get(DEFAULT_COUNTRY_NAME.casefold())
         or DEFAULT_COUNTRY_NAME
     )
-    print("sap_state:", sap_state, "country:", country, "country_names:", country_names)
     data: dict[str, Any] = {
         "name1": vendor_name,
         "vendornumber": vendor_code,

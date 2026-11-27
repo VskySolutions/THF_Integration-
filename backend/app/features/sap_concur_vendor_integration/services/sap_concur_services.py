@@ -107,9 +107,6 @@ class SAPConcurVendorService:
             token, expires_in = await self._get_token_from_refresh_token(client)
             self._cached_access_token = token
             self._cached_token_expires_at = time.time() + expires_in
-            print(
-                f"Concur access token cached; expires in {expires_in:.0f}s"
-            )
             return token
 
     def _invalidate_access_token(self, failed_token: str | None = None) -> None:
@@ -137,10 +134,6 @@ class SAPConcurVendorService:
             httpx.codes.UNAUTHORIZED,
             httpx.codes.FORBIDDEN,
         ):
-            print(
-                f"Concur token rejected ({response.status_code}); "
-                "refreshing token and retrying once"
-            )
             self._invalidate_access_token(failed_token=token)
             token = await self._get_valid_access_token(client)
             request_headers["Authorization"] = f"Bearer {token}"

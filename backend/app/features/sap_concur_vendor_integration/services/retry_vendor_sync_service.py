@@ -56,8 +56,8 @@ async def _safe_retry_log(
             action=VendorIntegrationAction.RETRY_CREATE,
             message=message,
         )
-    except Exception as exc:
-        print(f"[vendor-retry-log] failed to persist integration log: {exc}")
+    except Exception:
+        pass
 
 
 async def _upsert_mapping(
@@ -87,11 +87,7 @@ async def _upsert_mapping(
             mapping.maconomy_vendor_code = maconomy_vendor_code
             await session.commit()
         return mapping.id
-    except Exception as exc:
-        print(
-            f"[vendor-retry-log] failed to persist mapping for "
-            f"{sap_concur_vendor_code}: {exc}"
-        )
+    except Exception:
         return None
 
 

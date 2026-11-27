@@ -67,8 +67,8 @@ async def _safe_create_log(
             action=VendorIntegrationAction.CREATE,
             message=message,
         )
-    except Exception as exc:
-        print(f"[vendor-log] failed to persist integration log: {exc}")
+    except Exception:
+        pass
 
 
 async def _safe_create_mapping(
@@ -84,11 +84,7 @@ async def _safe_create_mapping(
             maconomy_vendor_code=maconomy_vendor_code,
         )
         return mapping.id
-    except Exception as exc:
-        print(
-            f"[vendor-log] failed to persist mapping for "
-            f"{sap_concur_vendor_code}: {exc}"
-        )
+    except Exception:
         return None
 
 
@@ -166,7 +162,6 @@ async def sync_vendors_sap_maconomy(session: DatabaseSession) -> dict[str, Any]:
             if str(vendor.get("VendorCode") or "").strip()
             not in existing_codes
         ]
-        # print("New Vendors:", new_vendors)
         # return new_vendors
 
         for sap_vendor in concur_vendors:
